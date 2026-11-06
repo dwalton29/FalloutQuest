@@ -455,10 +455,13 @@ int main(int argc,char** argv) {
   animated.runtime.speaking=true;++gStereoFrame;Q230UpdateActor(animated);
   assert(animated.pose.local.front().translation[0]==77);
   animated.runtime.packagePoseIdle=0;animated.runtime.speaking=false;++gStereoFrame;Q230UpdateActor(animated);
-  assert(animated.pose.local.front().translation[0]!=77);
+  assert(animated.pose.local.front().translation[0]==77); // Original clamped terminal pose remains valid.
+  animated.runtime.speed=1;++gStereoFrame;Q230UpdateActor(animated);
+  assert(animated.responseIdle==0&&animated.pose.local.front().translation[0]!=77);
+  animated.runtime.speed=0;
   {
     animated.responseIdle=0;animated.responseClips[901]=held;
-    auto& posture=animated.responseClips[901];posture.accumulationRoot=posture.tracks.front().bone;
+    const auto& posture=animated.responseClips[901];assert(!fo3anim::ControlsAccumulationRoot(posture)&&fo3npc::RetainsResponsePose(posture));
     assert(fo3npc::SelectResponseAnimation(animated,901,10));
     assert(!fo3npc::SelectResponseAnimation(animated,901,11)&&animated.responseStarted==10);
     assert(!fo3npc::SelectResponseAnimation(animated,0,12)&&animated.responseIdle==901);

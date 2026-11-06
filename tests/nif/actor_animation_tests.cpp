@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
     Skeleton real;
     assert(DecodeSkeleton(bytes, real));
     assert(real.bones.size() == 66);
+    std::vector<Clip> originals;
     for (int i = 2; i < argc; ++i) {
       auto original = Read(argv[i]);
       Clip originalClip;
@@ -124,8 +125,10 @@ int main(int argc, char **argv) {
       assert(originalClip.compressedTracks > 0);
       Pose sampled;
       BindClip(real, originalClip, sampled);
-      for (int bone : sampled.trackBones)
-        assert(bone >= 0);
+      for(size_t n=0;n<sampled.trackBones.size();++n)
+        // Authored prop tracks (e.g. the Pip-Boy gift) are separate scene
+        // objects, not missing humanoid bones. The skeleton sampler skips them.
+        assert(sampled.trackBones[n]>=0||originalClip.tracks[n].bone.rfind("##",0)==0);
       for (int frame = 0; frame < 360; ++frame)
         assert(Sample(real, originalClip, frame / 72.0, sampled));
       const int head = FindBone(real, "Bip01 Head");
@@ -150,6 +153,13 @@ int main(int argc, char **argv) {
       std::cout << argv[i] << ": tracks=" << originalClip.tracks.size()
                 << " compressed=" << originalClip.compressedTracks
                 << " sampled=360 frames\n";
+      originals.push_back(std::move(originalClip));
+    }
+    for(const auto& outgoing:originals)for(const auto& incoming:originals){
+      Pose reused,fresh;
+      assert(Sample(real,outgoing,1,reused)&&Sample(real,incoming,2,reused)&&Sample(real,incoming,2,fresh));
+      for(size_t bone=0;bone<real.bones.size();++bone)for(size_t j=0;j<16;++j)
+        assert(Near(reused.global[bone][j],fresh.global[bone][j]));
     }
   }
   std::cout << "Actor animation tests passed\n";

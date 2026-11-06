@@ -622,7 +622,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   if(actor.runtime.speed>.01f&&!actor.runtime.packagePoseIdle)actor.responseIdle=0;
   const auto responseClip=actor.responseClips.find(actor.responseIdle);
   const double responseNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
-  const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&(actor.runtime.packagePoseIdle==actor.responseIdle||fo3anim::ControlsAccumulationRoot(responseClip->second)||responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency);
+  const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&(actor.runtime.packagePoseIdle==actor.responseIdle||fo3npc::RetainsResponsePose(responseClip->second)||responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency);
   const bool furniturePose=!responsePose&&slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
   if(responsePose){
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST

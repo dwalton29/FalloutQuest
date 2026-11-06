@@ -16,7 +16,7 @@ It does not teleport actors or rewrite their original placements.
 
 Repeated responses requesting the same IDLE retain its playback start time.
 A response without an animation preserves an existing package pose or a
-full-body response that authors the accumulation root. Full-body poses retain
+response with authored clamped playback or accumulation-root motion. These poses retain
 their authored playback/terminal posture while stationary; movement releases a
 response pose, and a different available IDLE replaces it. Missing clips cannot
 clear a working posture. Existing sound-key and lip playback remain separate.
@@ -69,3 +69,13 @@ mapping. Existing birth/intercom, furniture, actor skinning, world event and
 quest regressions remain required. There is no connected headset: actual birthday
 blocking/collision and visible deformation must still be checked in headset.
 Range targets, the photo sequence, G.O.A.T. and Escape remain later work.
+
+The original CrouchTalkA KF and humanoid skeleton were also decoded locally.
+CrouchTalkA is clamped and does not animate the accumulation root: retaining
+root-owning clips alone is insufficient. Its terminal crouch is therefore kept
+by its authored playback mode until replacement or locomotion. Every pair of the original idle, kneeling, birthday Dad cheer/talk and Pip-Boy
+gift clips was sampled against a freshly bound pose. The corrected binding
+matches exactly; simulating the former size-only cache produced a maximum
+matrix error of 89.2875. Optional original-asset animation tests cover these
+cross-clip transitions and distinguish separate authored prop tracks from
+humanoid bones. Original clips remain outside the repository.
