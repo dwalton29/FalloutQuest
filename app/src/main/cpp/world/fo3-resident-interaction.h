@@ -10,9 +10,9 @@ namespace fo3scene {
 struct ResidentInteractionActivity {
     bool ready=false,dialogue=false,barter=false,pipboy=false,message=false;
     bool lockpick=false,lockpickLatch=false,loot=false,weaponHandling=false;
-    bool shoulderTransfer=false;
+    bool shoulderTransfer=false,dialogueResult=false;
     bool Idle() const noexcept {
-        return ready&&!dialogue&&!barter&&!pipboy&&!message&&!lockpick&&
+        return ready&&(!dialogue||dialogueResult)&&!barter&&!pipboy&&!message&&!lockpick&&
             !lockpickLatch&&!loot&&!weaponHandling&&!shoulderTransfer;
     }
 };

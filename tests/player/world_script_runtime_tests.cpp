@@ -208,7 +208,12 @@ int main(int argc,char** argv){try{
  Check(fo3worldscript::Event(80,"OnActivate",fo3player::PlayerRef),"queue container default action");Check(p.ScriptLock(80,100),"lock container before delivery");
  fo3worldscript::Actions();Check(!p.CanLootContainer(80),"default container delivery rechecks lock");
  // Exercise the production speech adapter with token-owned audio completion.
- ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;
+ fo3script::Action look;look.kind=fo3script::ActionKind::Look;look.reference=40;look.form=fo3player::PlayerRef;
+ Check(p.QueueScriptAction(look),"queue look before actor arrival");fo3worldscript::Actions();
+ ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;fo3worldscript::Register();
+ Check(gQ230NpcActors.back().runtime.scriptLookTarget==fo3player::PlayerRef,"delayed actor arrival retains original look target");
+ look.form=0;Check(p.QueueScriptAction(look),"stop retained look");fo3worldscript::Actions();
+ Check(!gQ230NpcActors.back().runtime.scriptLookTarget&&!fo3worldscript::lookTargets.count(40),"stop look removes retained target");
  fo3script::Action idle;idle.kind=fo3script::ActionKind::PackageIdle;idle.reference=40;idle.form=701;idle.flags=4;
  Check(p.QueueScriptAction(idle),"queue authored package idle");fo3worldscript::Actions();Check(gQ230NpcActors.back().responseIdle==701,"package idle reaches resident animation adapter");
  fo3worldscript::SpeechTick(); // Initialize the independent session generation.

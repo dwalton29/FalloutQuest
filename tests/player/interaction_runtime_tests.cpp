@@ -97,6 +97,8 @@ void FlushFo3PlayerState() { ++flushes; }
 #define Q6H_LOGW(...) ((void)0)
 bool dialogueFocus=false,pipFocus=false;uint32_t talked=0;
 bool Fo3DialogueFocus(){return dialogueFocus;}
+bool dialogueResultOwner=false;
+bool Fo3DialogueResultOwnsAdmission(){return dialogueResultOwner;}
 bool Fo3PipboyFocus(){return pipFocus;}
 struct ActorTarget {
   struct {uint32_t refFormId=0;std::string fullName;} source;
@@ -510,6 +512,10 @@ int main() {
     gObjects.back().q220LooseObject=false;gObjects.back().baseRecordType="FURN";
     Check(Fo3ResidentInteractionHazard(1009)==Hazard::Furniture,"live furniture visual independently rejects");
     auto flagReject=[&](bool& flag){flag=true;Check(!CaptureFo3ResidentInteractionActivity().Idle()&&flag,"modal/physical focus rejects without mutation");flag=false;};
+    dialogueFocus=dialogueResultOwner=true;
+    Check(CaptureFo3ResidentInteractionActivity().Idle(),"finished dialogue can admit only its owned world result");
+    barterFocus=true;Check(!CaptureFo3ResidentInteractionActivity().Idle(),"finished result does not waive another menu");barterFocus=false;
+    dialogueFocus=dialogueResultOwner=false;
     flagReject(dialogueFocus);flagReject(pipFocus);flagReject(barterFocus);
     flagReject(lockpickFocus);flagReject(lockpickLatch);
     flagReject(gScriptMessagePanel.visible);flagReject(gPlayerSession->saveBlocked);

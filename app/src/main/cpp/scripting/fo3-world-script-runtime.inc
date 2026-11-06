@@ -15,6 +15,7 @@ struct Animation {
 };
 static std::unordered_map<uint32_t,Animation> animations;
 static std::unordered_set<uint32_t> loaded;
+static std::unordered_map<uint32_t,uint32_t> lookTargets;
 static fo3script::ImageStack modifiers;
 static double seconds=0;
 static fo3dialogue::Session speech;
@@ -153,7 +154,7 @@ void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -177,6 +178,7 @@ void Register(){
     for(const auto& actor:gQ230NpcActors)if(!actor.runtime.offScene)present.insert(actor.source.refFormId);
     for(auto i=animations.begin();i!=animations.end();)if(!present.count(i->first))i=animations.erase(i);else ++i;
     for(auto i=loaded.begin();i!=loaded.end();)if(!present.count(*i))i=loaded.erase(i);else ++i;
+    for(auto& actor:gQ230NpcActors){const auto target=lookTargets.find(actor.source.refFormId);if(target!=lookTargets.end())actor.runtime.scriptLookTarget=target->second;}
     player.SetScriptAnimationRegistry(std::move(registry));
 }
 void Events(){
@@ -222,6 +224,7 @@ void Actions(){
         }else if(action.kind==fo3script::ActionKind::AutoSave){
             FlushFo3PlayerState();
         }else if(action.kind==fo3script::ActionKind::Look){
+            if(action.form)lookTargets[action.reference]=action.form;else lookTargets.erase(action.reference);
             if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
         }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){

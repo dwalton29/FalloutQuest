@@ -57,11 +57,13 @@ bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float
 bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp){
   return gPlayerSession&&gFo3ScenePublication.Accepts(stamp,gPlayerSession->player.Snapshot().referenceStateRevision);
 }
+extern fo3dialogue::Session gDialogue;
 bool deferAllowed=false;int deferredStatus=0;uint64_t deferredSerial=0;
 std::unique_ptr<fo3player::ScriptTransactionPlan> deferredResult;
 bool CanDeferFo3DialogueResult(){return deferAllowed&&!deferredResult;}
 uint64_t DeferFo3DialogueResult(std::unique_ptr<fo3player::ScriptTransactionPlan> plan,std::string&){
   if(!CanDeferFo3DialogueResult())return 0;
+  assert(gDialogue.phase==fo3dialogue::Phase::Results);
   deferredResult=std::move(plan);deferredStatus=0;return ++deferredSerial;
 }
 int Fo3DialogueResultStatus(uint64_t ticket){return ticket==deferredSerial?deferredStatus:-1;}
@@ -333,7 +335,7 @@ static void OriginalBirthdayRelease(const fo3player::Catalog& original){
     std::string error;auto plan=p.PrepareDialogueInfoTransaction(final->topic,final->id,fo3player::DialogueScriptPhase::Both,error,dad);
     assert(plan&&plan->HasReferenceChanges()&&!PreviewFo3DialogueReferences(p,*plan,error));
     fo3dialogue::Context ctx;ctx.player=&p;assert(fo3dialogue::ReferenceContext(p,dad,ctx.speaker));assert(fo3dialogue::ReferenceContext(p,fo3player::PlayerRef,ctx.target));
-    fo3dialogue::Session voice;deferAllowed=true;ConfigureFo3DialogueSession(voice);
+    gDialogue={};auto& voice=gDialogue;deferAllowed=true;ConfigureFo3DialogueSession(voice);
     assert(voice.StartSelectedTopic(final->topic,final->id,ctx,p));const auto token=voice.audioToken;
     assert(voice.AudioDone(token,true,ctx,p)&&voice.phase==fo3dialogue::Phase::Results&&deferredResult);
     assert(p.PlayerControlDisabled(0)&&p.Snapshot().pipboy.quests.at(q).stage==10&&!voice.infoCompleted);

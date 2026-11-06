@@ -6,6 +6,9 @@ fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() no
     activity.ready=gSceneReady&&!gSceneLoad.active&&!IsFo3LoadingVisible()&&
         gExteriorWorldspaceQ1890==0&&gPlayerSession&&!gPlayerSession->saveBlocked;
     activity.dialogue=Fo3DialogueFocus();activity.barter=Fo3BarterFocus();
+    // Only this finished INFO's owned publication can suspend its dialogue
+    // exclusion. Input remains locked and every other interaction gate applies.
+    activity.dialogueResult=activity.dialogue&&Fo3DialogueResultOwnsAdmission();
     activity.pipboy=Fo3PipboyFocus();activity.message=Fo3ScriptMessageFocus();
     activity.lockpick=Fo3LockpickFocus()||Fo3TerminalFocus();activity.lockpickLatch=Fo3LockpickInputBlocked();
     activity.loot=GetFo3LootPanel().reference!=0;

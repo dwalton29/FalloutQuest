@@ -58,13 +58,13 @@ static bool Q240CrowdStepAllowed(const Q230ActorVisual& actor,
     const float before=Q240PlanarDistance(here,at),after=Q240PlanarDistance(point,at);
     // Actors from an old overlapping save can separate, but only one actor
     // gets first right-of-way when their starting roots are identical.
-    if(before<fo3npc::MovementPolicy::CrowdRadius){
+    if(before<fo3npc::MovementPolicy::CrowdBodyClearance){
       if(after>before+.001f&&(before>1.f||actor.source.refFormId<other.source.refFormId))continue;
       return false;
     }
     const float dx=point[0]-here[0],dy=point[1]-here[1],length=dx*dx+dy*dy;
     const float t=length>0?std::clamp(((at[0]-here[0])*dx+(at[1]-here[1])*dy)/length,0.f,1.f):0;
-    if(Q240PlanarDistance({here[0]+dx*t,here[1]+dy*t,here[2]},at)<fo3npc::MovementPolicy::CrowdRadius)return false;
+    if(Q240PlanarDistance({here[0]+dx*t,here[1]+dy*t,here[2]},at)<fo3npc::MovementPolicy::CrowdBodyClearance)return false;
   }
   return true;
 }

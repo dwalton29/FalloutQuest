@@ -39,6 +39,10 @@ int main() {
         assert(!ResidentInteractionAdmission::Prepare(1,affected,activity,query));
         assert(activity.*member);activity.*member=false;
     }
+    activity.dialogue=true;activity.dialogueResult=true;
+    assert(ResidentInteractionAdmission::Check(affected,activity,query)==Result::Ready);
+    activity.barter=true;assert(ResidentInteractionAdmission::Check(affected,activity,query)==Result::Busy);activity.barter=false;
+    activity.dialogue=activity.dialogueResult=false;
     activity.ready=false;assert(ResidentInteractionAdmission::Check(affected,activity,query)==Result::Busy);activity.ready=true;
     for(Hazard unsupported:{Hazard::UnknownReference,Hazard::Actor,Hazard::LooseObject,Hazard::HeldObject,
             Hazard::CollectedObject,Hazard::SwingDoor,Hazard::Furniture}) {

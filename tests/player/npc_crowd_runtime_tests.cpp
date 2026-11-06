@@ -28,6 +28,15 @@ static void CongestionRoutes(){
   assert(Q240ActorPath(actor,*Graph(),{1010,2010,20},{1900,2900,20},path)); // Sole passage remains usable.
 }
 int main(){
+  {
+    auto mover=Actor(6);mover.stateRestored=true;mover.runtime.position=Q240ScenePosition({0,0,20});
+    auto neighbor=mover;neighbor.source.refFormId=43;neighbor.runtime.position=Q240ScenePosition({50,0,20});
+    std::vector<Q230ActorVisual> crowd{mover,neighbor};
+    assert(Q240CrowdStepAllowed(mover,{1,0,20},crowd)); // Close staging is not physical overlap.
+    crowd[1].runtime.position=Q240ScenePosition({30,0,20});
+    assert(!Q240CrowdStepAllowed(mover,{1,0,20},crowd));
+  }
+
   CongestionRoutes();
   auto actor=Actor(12);actor.stateRestored=true;actor.runtime.activity=fo3npc::Activity::Package;
   auto catalog=gPlayerSession->player.Definitions();catalog.pipboy.packages[50].type=12;

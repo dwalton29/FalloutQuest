@@ -22,7 +22,7 @@ enum class Procedure { None, Executing, Waiting, Completed, Blocked, InvalidTarg
 // Standalone steering policy, not recovered Bethesda engine constants.
 struct MovementPolicy {
   static constexpr float TurnSpeed=3.f,Acceleration=4.f,Braking=3.f;
-  static constexpr float StandingTurn=2.1f,CrowdRadius=70.f,CrowdHeight=90.f;
+  static constexpr float StandingTurn=2.1f,CrowdRadius=70.f,CrowdHeight=90.f,CrowdBodyClearance=35.f;
 };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
 struct RuntimeState {

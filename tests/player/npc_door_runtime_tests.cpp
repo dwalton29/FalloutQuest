@@ -73,6 +73,8 @@ int main(int argc,char** argv){
   Q230ActorVisual accompanied;accompanied.source.refFormId=60;accompanied.source.baseFormId=61;accompanied.runtime.position=Q240ScenePosition({1100,2010,20});packageTargets.push_back(accompanied);a.runtime.yaw=-1.5707963f;wallBlocked=true;
   for(int i=0;i<40;++i)Q240UpdateNpcPackage(a,i*.1);assert(a.runtime.packageRetryAfter.count(50)&&a.aiPathGame.empty());
   wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,6);assert(a.aiPackage==50&&!a.aiPathGame.empty()); // Accompany uses the same obstruction backoff and recovery.
+  a=Prepare();auto& open=gQ2400InteriorDoors[20];open.targetOpen=true;open.progress=1;open.q2401NifAnimation=true;open.q2401Moving=false;open.collisionSceneSerial=gQ2400DoorSceneSerial;
+  assert(Q230DoorSettledOpen(20));--open.collisionSceneSerial;assert(!Q230DoorSettledOpen(20));open.collisionSceneSerial=gQ2400DoorSceneSerial;open.q2401Moving=true;assert(!Q230DoorSettledOpen(20));
   if(argc>1)OriginalDoors(argv[1]);
   std::cout<<"NPC local door animation wait, collision, keys, script rejection and XTEL isolation passed\n";
 }

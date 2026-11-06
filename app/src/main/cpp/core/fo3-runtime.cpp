@@ -3840,6 +3840,7 @@ using Fo3ResidentWorkflow=fo3scene::ResidentWorkflow<fo3player::ScriptTransactio
 Fo3ResidentWorkflow gFo3ResidentWorkflow;
 uint64_t gFo3DialogueResultTicket=0,gFo3DialogueCompletedTicket=0;
 int gFo3DialogueCompletedStatus=-1;
+bool gFo3DialogueResultAdmission=false;
 uint64_t gFo3ResidentGameplayTicket=0; // Explicit gameplay request; Ready is not implicit commit.
 bool gFo3ResidentWorkflowCleanup=false;
 bool gFo3ResidentTeardownActive=false;
@@ -15419,12 +15420,18 @@ void Q6HClear(GLbitfield mask) {
 
 #define FO3_NPC_CHAT_RUNTIME 1
 bool CanDeferFo3DialogueResult(){
-    return gPlayerSession&&gSceneReady&&!gSceneLoad.active&&!gPlayerSession->saveBlocked&&
-        !gFo3ResidentWorkflow.Active()&&!Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active;
+    auto activity=CaptureFo3ResidentInteractionActivity();activity.dialogue=false;
+    return activity.Idle()&& gPlayerSession&&gSceneReady&&!gSceneLoad.active&&!gPlayerSession->saveBlocked&&
+        !gFo3ResidentWorkflow.Active()&&!Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active&&
+        !gFo3ResidentVisualPlan&&!gFo3ResidentInteractionAdmission&&!gFo3ResidentReferencePublicationPlan&&
+        !Fo3ResidentLegacyStreamActive()&&gFo3VisualPublication.Revision()&&
+        Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp());
 }
 uint64_t DeferFo3DialogueResult(std::unique_ptr<fo3player::ScriptTransactionPlan> plan,std::string& error){
     if(!CanDeferFo3DialogueResult()){error="dialogue world publication busy";return 0;}
+    gFo3DialogueResultAdmission=true;
     const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+    gFo3DialogueResultAdmission=false;
     if(!ticket){error="dialogue world preparation unavailable";return 0;}
     gFo3DialogueResultTicket=gFo3ResidentGameplayTicket=ticket;return ticket;
 }
@@ -15433,6 +15440,10 @@ int Fo3DialogueResultStatus(uint64_t ticket){
     return ticket&&ticket==gFo3DialogueResultTicket?0:-1;
 }
 #include "dialogue/fo3-dialogue-runtime.inc"
+bool Fo3DialogueResultOwnsAdmission(){
+    return gDialogue.phase==fo3dialogue::Phase::Results&&
+      (gFo3DialogueResultAdmission||(gFo3DialogueResultTicket&&gDialogue.resultTicket==gFo3DialogueResultTicket));
+}
 #undef FO3_NPC_CHAT_RUNTIME
 #include "npc/fo3-npc-chat-runtime.inc"
 #include "world/fo3-resident-interaction-runtime.inc"

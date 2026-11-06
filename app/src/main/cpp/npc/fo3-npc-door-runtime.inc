@@ -1,10 +1,16 @@
 // Called only while advancing a resident NAVM path. Door animation/collision
 // remains owned by the existing local-door runtime, never the player XTEL queue.
+static bool Q230DoorMoving(const Q2400InteriorDoorState&);
+static bool Q230DoorSettledOpen(uint32_t reference){
+  const auto state=gQ2400InteriorDoors.find(reference);
+  return state!=gQ2400InteriorDoors.end()&&state->second.collisionSceneSerial==gQ2400DoorSceneSerial&&state->second.targetOpen&&!Q230DoorMoving(state->second);
+}
 #ifndef FO3_NPC_DOOR_HOST_TEST
 static bool Q230QueryPathDoor(float ox,float oy,float oz,float dx,float dy,float dz,Fo3DoorAimQ1700* aim) {
   *aim={};const GpuObject* hit=nullptr;float nearest=3.f;
   for(const auto& object:gObjects){
     if(object.baseRecordType!="DOOR"||(!object.teleport.valid&&(!object.q2400SwingDoor||gExteriorWorldspaceQ1890)))continue;
+    if(Q230DoorSettledOpen(object.refFormId))continue;
     float distance=0;if(RayAabbQ7(ox,oy,oz,dx,dy,dz,object,distance)&&distance<nearest){nearest=distance;hit=&object;}
   }
   if(!hit)return false;

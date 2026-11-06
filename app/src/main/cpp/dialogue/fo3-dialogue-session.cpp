@@ -79,8 +79,10 @@ bool Session::Execute(const fo3pipdata::Info& i,fo3player::DialogueScriptPhase p
     if(publishReferences&&publishReferences(p,*plan,error))return true;
     if(phase==fo3player::DialogueScriptPhase::End&&deferEndResult&&endResultStatus){
       if(readyForEndResult&&!readyForEndResult()){this->phase=Phase::Results;return false;}
+      this->phase=Phase::Results;
       resultTicket=deferEndResult(std::move(plan),error);
-      if(resultTicket){this->phase=Phase::Results;return false;}
+      if(resultTicket)return false;
+      this->phase=Phase::Speaking;
     }
     error="world mutation requires resident coordinator";return false;
   }

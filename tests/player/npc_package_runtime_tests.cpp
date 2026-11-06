@@ -729,7 +729,8 @@ int main(int argc,char** argv) {
     auto other=walker;other.source.refFormId=99;other.stateRestored=true;
     other.runtime.position=Q240ScenePosition({1200,2200,20});
     walker.runtime.position=Q240ScenePosition({1100,2200,20});
-    assert(!Q240CrowdStepAllowed(walker,{1150,2200,20},std::vector<Q230ActorVisual>{other}));
+    assert(Q240CrowdStepAllowed(walker,{1150,2200,20},std::vector<Q230ActorVisual>{other}));
+    assert(!Q240CrowdStepAllowed(walker,{1175,2200,20},std::vector<Q230ActorVisual>{other}));
     assert(Q240CrowdStepAllowed(walker,{1100,2250,20},std::vector<Q230ActorVisual>{other}));
     other.runtime.position=walker.runtime.position;
     assert(Q240CrowdStepAllowed(walker,{1105,2200,20},std::vector<Q230ActorVisual>{other}));
