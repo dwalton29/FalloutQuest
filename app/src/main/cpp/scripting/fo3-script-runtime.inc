@@ -807,6 +807,16 @@ bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
   fo3script::Action action;action.kind=fo3script::ActionKind::DefaultActivate;action.reference=reference;
   return QueueScriptAction(std::move(action));
 }
+bool Player::QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon){
+  const auto ref=catalog_->references.find(reference),source=catalog_->references.find(attacker);
+  const auto item=catalog_->items.find(weapon);bool disabled=true;std::string error;
+  if(ref==catalog_->references.end()||!ref->second.valid||catalog_->actorPlacements.count(reference)||
+     (attacker!=PlayerRef&&(source==catalog_->references.end()||!catalog_->actorPlacements.count(attacker)))||
+     item==catalog_->items.end()||!item->second.weapon.valid||!ReferenceDisabled(reference,disabled,error)||disabled)return false;
+  if(!HasReferenceEvent(reference,"OnHit")&&!HasReferenceEvent(reference,"OnHitWith"))return true;
+  fo3script::Action action;action.kind=fo3script::ActionKind::WeaponHit;action.reference=reference;action.form=weapon;action.flags=attacker;
+  return QueueScriptAction(std::move(action));
+}
 bool Player::QueueScriptAction(fo3script::Action action){
   if(pendingScriptActions_.size()>=64)return false;
   if(action.kind==fo3script::ActionKind::ImageModifier&&(!catalog_->imageModifiers.count(action.form)||!catalog_->imageModifiers.at(action.form).valid))return false;

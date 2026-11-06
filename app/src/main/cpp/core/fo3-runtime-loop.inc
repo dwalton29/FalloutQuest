@@ -1966,7 +1966,7 @@ private:
                     }
                     if(!Fo3ResidentFrameBlocked()){
                         fo3worldscript::Actions();
-                        fo3worldscript::Animate();
+                        if(!Fo3ResidentFrameBlocked())fo3worldscript::Animate();
                     }
                     // Fast scene timers must not write the entire save every frame.
                     // Explicit interaction/manual saves still flush immediately.

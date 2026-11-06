@@ -1,5 +1,6 @@
 #include "fo3-dialogue-conditions.h"
 #include "fo3-dialogue-results.h"
+#include "fo3-dialogue-selection.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -72,7 +73,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 5:case 65:case 522: {auto lock=p.GetLock(who.reference);
     if(!lock.known||lock.leveled){error="lock state unavailable";return false;}
     value=c.function==5?float(lock.locked):c.function==65?float(lock.level):float(lock.broken);return true;}
-  case 1: {ActorContext other;if(c.a==ctx.speaker.reference)other=ctx.speaker;else if(c.a==ctx.target.reference)other=ctx.target;else {error="distance reference unavailable";return false;}
+  case 1: {ActorContext other;if(c.a==ctx.speaker.reference)other=ctx.speaker;else if(c.a==ctx.target.reference)other=ctx.target;else if(!ReferenceContext(p,c.a,other)){error="distance reference unavailable";return false;}
     value=std::sqrt((who.x-other.x)*(who.x-other.x)+(who.y-other.y)*(who.y-other.y)+(who.z-other.z)*(who.z-other.z));return true;}
   case 14:
     if(p.ActorValue(who.reference,c.a,value))return true;

@@ -159,6 +159,10 @@ int main(int argc,char** argv){try{
  c.references[82].valid=true;c.references[82].cell=1;c.pipboy.formNames["hiddenspeaker"]=82;
  auto deferred=line;deferred.id=831;deferred.topic=830;deferred.end.source="HiddenSpeaker.Enable\nRewardKarma 3";c.pipboy.topics[830].push_back(deferred);
  c.pipboy.packages[852]=c.pipboy.packages[850];c.pipboy.packages[852].dialogueTopic=830;
+ c.references[10].valid=true;c.pipboy.formNames["testweapon"]=901;c.items[901].formId=901;c.items[901].weapon.valid=true;c.items[902]=c.items[901];c.items[902].formId=902;
+ script.variables[3]="hitactor";script.source.insert(script.source.find('\n')+1,"short hitactor\n");script.source+="\nBegin OnHit player\nset opened to opened + 1\nset hitActor to IsActionRef player\nEnd\nBegin OnHitWith TestWeapon\nif opened == 1\nRewardKarma 2\nendif\nEnd";c.eventPrograms[200]=fo3script::ParseEvents(script);
+ c.references[83].base=813;c.references[83].valid=true;c.pipboy.targets[83].cell=1;c.eventBaseScripts[813]=814;
+ c.pipboy.scripts[814].source="Begin OnHit\nRewardKarma 5\nEnd\nBegin OnHitWith\nUnsupportedHitOperation\nEnd";c.eventPrograms[814]=fo3script::ParseEvents(c.pipboy.scripts[814]);
  auto asset=std::make_shared<fo3dooranim::Asset>();fo3anim::Bone root;root.name="root";asset->hierarchy.bones.push_back(root);fo3anim::Bone leaf;leaf.name="leaf";leaf.parent=0;asset->hierarchy.bones.push_back(leaf);
  Check(fo3anim::FinalizeSkeleton(asset->hierarchy),"hierarchy");asset->blockBones={0,1};
  fo3anim::Clip clip;clip.name="Advance";clip.stop=2;clip.cycle=2;clip.textKeys={{.1f,"sound: OriginalSound"},{1.5f,"OriginalSound"}};
@@ -207,6 +211,14 @@ int main(int argc,char** argv){try{
  p.EndContainerInteraction();Check(!p.CanLootContainer(80),"production loot delegation is transient");
  Check(fo3worldscript::Event(80,"OnActivate",fo3player::PlayerRef),"queue container default action");Check(p.ScriptLock(80,100),"lock container before delivery");
  fo3worldscript::Actions();Check(!p.CanLootContainer(80),"default container delivery rechecks lock");
+ const auto impactKarma=p.Snapshot().karma;
+ {std::string error;auto plan=p.PrepareWeaponHitTransaction(10,fo3player::PlayerRef,901,error);if(!plan)throw std::runtime_error("hit preflight: "+error); }
+ Check(!p.QueueWeaponHit(82,fo3player::PlayerRef,901)&&!p.QueueWeaponHit(40,fo3player::PlayerRef,901)&&!p.QueueWeaponHit(10,fo3player::PlayerRef,999),"disabled objects, actor damage and invalid weapons are not object-hit events");
+ Check(p.QueueWeaponHit(10,fo3player::PlayerRef,901),"queue physical weapon impact");worldBusy=true;fo3worldscript::Actions();fo3worldscript::Hits();worldBusy=false;
+ Check(p.Snapshot().karma==impactKarma+2&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(10)<<32)|3)==1,"OnHit runs before weapon-filtered OnHitWith; the action reference stays the attacker even while weapon handling is busy");
+ fo3worldscript::Hits();Check(p.Snapshot().karma==impactKarma+2,"impact is consumed once");
+ Check(p.QueueWeaponHit(10,fo3player::PlayerRef,902),"queue different weapon");fo3worldscript::Actions();fo3worldscript::Hits();Check(p.Snapshot().karma==impactKarma+2,"weapon filter does not use attacker identity");
+ Check(p.QueueWeaponHit(83,fo3player::PlayerRef,901),"queue unsupported hit script");fo3worldscript::Actions();fo3worldscript::Hits();Check(p.Snapshot().karma==impactKarma+2,"unsupported OnHitWith rolls back preceding OnHit in the same impact");
  // Exercise the production speech adapter with token-owned audio completion.
  fo3script::Action look;look.kind=fo3script::ActionKind::Look;look.reference=40;look.form=fo3player::PlayerRef;
  Check(p.QueueScriptAction(look),"queue look before actor arrival");fo3worldscript::Actions();

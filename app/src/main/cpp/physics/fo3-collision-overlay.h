@@ -11,6 +11,10 @@
 // Render-thread world removal; reapplied when a rolling snapshot publishes.
 void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs);
 bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[16],bool enabled);
+struct Fo3WorldSurfaceHit {uint32_t reference=0;float distance=0;};
+// Normalized scene-space ray. Zero reference still blocks (e.g. terrain).
+bool TraceFo3WorldSurface(float ox,float oy,float oz,float dx,float dy,float dz,
+                         float distance,uint32_t ignoreReference,uint32_t ignoreTarget,Fo3WorldSurfaceHit* out);
 bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
                               float distance,uint32_t targetRef);
 

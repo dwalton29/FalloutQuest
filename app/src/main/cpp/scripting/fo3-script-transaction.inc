@@ -124,6 +124,18 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareReferenceEventTransaction(
     return candidate.RunSourceEventDirect(script,event,reference,activator,e,filterForm);
   },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
+std::unique_ptr<ScriptTransactionPlan> Player::PrepareWeaponHitTransaction(uint32_t reference,uint32_t attacker,uint32_t weapon,
+    std::string& error,ScriptProgramCapture capture)const{
+  const auto ref=catalog_->references.find(reference);const auto item=catalog_->items.find(weapon);bool disabled=true;
+  if(ref==catalog_->references.end()||!ref->second.valid||catalog_->actorPlacements.count(reference)||
+     (attacker!=PlayerRef&&!catalog_->actorPlacements.count(attacker))||item==catalog_->items.end()||!item->second.weapon.valid||
+     !ReferenceDisabled(reference,disabled,error)||disabled||(!HasReferenceEvent(reference,"OnHit")&&!HasReferenceEvent(reference,"OnHitWith"))){error="weapon-hit event unavailable";return {};}
+  const auto script=catalog_->eventBaseScripts.at(ref->second.base);
+  return PrepareScriptTransaction([=](Player& candidate,std::string& e){
+    return candidate.RunSourceEventDirect(script,"OnHit",reference,attacker,e)&&
+           candidate.RunSourceEventDirect(script,"OnHitWith",reference,attacker,e,weapon);
+  },error,capture==ScriptProgramCapture::EnteredPrograms);
+}
 bool Player::PackageEventNeeded(uint32_t reference,uint32_t package,bool completed) const {
   const auto old=state_.actorPackageEvents.find(reference);
   if(old!=state_.actorPackageEvents.end()&&old->second.first==package&&(!completed||old->second.second))return false;

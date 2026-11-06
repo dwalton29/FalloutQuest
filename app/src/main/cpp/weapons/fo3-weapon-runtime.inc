@@ -208,13 +208,20 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
       if(fo3weapon::Surface({origin.x,origin.y,origin.z},{direction.x,direction.y,direction.z},triangle[0],triangle[1],triangle[2],nearest)){target=0x14;region=0;}
     }
   }
-  if(target&&!HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,target)){
+  Fo3WorldSurfaceHit surface;
+  const bool worldHit=TraceFo3WorldSurface(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,attacker,target,&surface);
+  if(target&&(!worldHit||surface.distance>=nearest)){
     if(p.ApplyAttack(attacker,base,target,damage)){
       if(attacker==0x14&&target!=0x14){const double eventTime=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==target){actor.playerDetection.Hit(p.Definitions().sneakSettings,eventTime,{origin.x,origin.y,origin.z});actor.runtime.lastThreat=actor.playerDetection.lastKnown;actor.runtime.nextThink=0;break;}}
       if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");if(target!=0x14)Q230ActorHitReaction(target,region);Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
     return true;
   }
-  return HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,limit,0);
+  if(worldHit){
+    if(surface.reference&&!p.Definitions().actorPlacements.count(surface.reference))
+      p.QueueWeaponHit(surface.reference,attacker,base);
+    return true;
+  }
+  return false;
 }
 void EmitShot(uint64_t instance,uint32_t attacker,uint32_t base,const fo3weapon::Definition&d,V muzzle,V forward,V right,V up,float shotDamage){
   const auto& defs=gPlayerSession->player.Definitions().weapons;

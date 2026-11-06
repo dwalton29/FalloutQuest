@@ -2438,6 +2438,42 @@ bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& re
     InvalidateDerivedCollisionCachesQ17();gHkManifoldValidQ800=false;Q225RebuildDynamicGrid();return true;
 }
 
+bool TraceFo3WorldSurface(float ox,float oy,float oz,float dx,float dy,float dz,
+                         float distance,uint32_t ignoreReference,uint32_t ignoreTarget,Fo3WorldSurfaceHit* out){
+    if(!out)return false;*out={};
+    if(!gPlayerCollisionReady||gWorldTriangles.empty()||!std::isfinite(distance)||distance<=0)return false;
+    for(float value:{ox,oy,oz,dx,dy,dz,ox+dx*distance,oz+dz*distance})if(!std::isfinite(value)||std::fabs(value)>10000000.f)return false;
+    if(dx*dx+dy*dy+dz*dz<1e-12f)return false;
+    if(gQ225DynamicStamp.size()!=gWorldTriangles.size())Q225RebuildDynamicGrid();
+    if(++gQ225DynamicSerial==0){std::fill(gQ225DynamicStamp.begin(),gQ225DynamicStamp.end(),0);gQ225DynamicSerial=1;}
+    const fo3interaction::Point origin{ox,oy,oz},direction{dx,dy,dz};
+    float nearest=distance;bool found=false;
+    auto consider=[&](uint32_t index){
+      if(index>=gWorldTriangles.size()||gQ225DynamicStamp[index]==gQ225DynamicSerial)return;
+      gQ225DynamicStamp[index]=gQ225DynamicSerial;const auto& tri=gWorldTriangles[index];
+      const auto source=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+      const uint32_t ref=source==gSurfaceSourcesQ722.end()?0:source->second.refFormId;
+      if(ref&&(ref==ignoreReference||ref==ignoreTarget))return;
+      float hit=nearest;
+      if(!fo3interaction::Surface(origin,direction,{tri.a.x,tri.a.y,tri.a.z},{tri.b.x,tri.b.y,tri.b.z},{tri.c.x,tri.c.y,tri.c.z},hit))return;
+      if(!found||hit<nearest||(hit==nearest&&ref<out->reference)){found=true;nearest=hit;*out={ref,hit};}
+    };
+    for(auto index:gInteractionLargeTriangles)consider(index);
+    // Walk only ray-crossed XZ buckets, rather than a range-sized rectangle.
+    int x=Q225CellCoord(ox),z=Q225CellCoord(oz);
+    const int stepX=dx>0?1:dx<0?-1:0,stepZ=dz>0?1:dz<0?-1:0;
+    const float infinity=std::numeric_limits<float>::infinity();
+    float nextX=stepX?((x+(stepX>0))*Q225_DYNAMIC_GRID_CELL-ox)/dx:infinity;
+    float nextZ=stepZ?((z+(stepZ>0))*Q225_DYNAMIC_GRID_CELL-oz)/dz:infinity;
+    const float deltaX=stepX?Q225_DYNAMIC_GRID_CELL/std::fabs(dx):infinity,deltaZ=stepZ?Q225_DYNAMIC_GRID_CELL/std::fabs(dz):infinity;
+    for(;;){
+      const auto cell=gQ225DynamicGrid.find(Q225CellKey(x,z));if(cell!=gQ225DynamicGrid.end())for(auto index:cell->second)consider(index);
+      if(std::min(nextX,nextZ)>nearest||(!stepX&&!stepZ))break;
+      if(nextX<=nextZ){x+=stepX;nextX+=deltaX;}else{z+=stepZ;nextZ+=deltaZ;}
+    }
+    return found;
+}
+
 bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
                               float distance,uint32_t targetRef) {
     if (distance<=0.01f || !gPlayerCollisionReady || gWorldTriangles.empty()) return false;

@@ -235,10 +235,40 @@ static void FallingAndLandingQ263(){
 #include "interior_stair_tests.inc"
 #include "walkway_tests.inc"
 
+static void WeaponSurfaceQueries(){
+    gWorldTriangles.clear();gSurfaceSourcesQ722.clear();gPlayerCollisionReady=true;
+    auto plane=[&](float z,uint32_t ref){CollisionTriangle t;assert(BuildTriangle({-4,-4,z},{4,-4,z},{0,4,z},t));t.surfaceKeyQ714=100+gWorldTriangles.size();gSurfaceSourcesQ722[t.surfaceKeyQ714].refFormId=ref;gWorldTriangles.push_back(t);};
+    plane(5,20);plane(3,10);Q225RebuildDynamicGrid();Fo3WorldSurfaceHit hit;
+    assert(TraceFo3WorldSurface(0,0,0,0,0,1,10,0,0,&hit)&&hit.reference==10&&std::fabs(hit.distance-3)<1e-5);
+    assert(TraceFo3WorldSurface(0,0,0,0,0,1,10,10,0,&hit)&&hit.reference==20&&std::fabs(hit.distance-5)<1e-5);
+    assert(!TraceFo3WorldSurface(0,0,0,0,0,1,10,10,20,&hit));
+    assert(TraceFo3WorldSurface(0,0,6,0,0,-1,10,0,0,&hit)&&hit.reference==20&&std::fabs(hit.distance-1)<1e-5);
+    assert(!TraceFo3WorldSurface(3.9f,3.9f,0,0,0,1,10,0,0,&hit)); // Within bounds, outside actual surface.
+    plane(2,0);Q225RebuildDynamicGrid();assert(TraceFo3WorldSurface(0,0,0,0,0,1,10,0,0,&hit)&&hit.reference==0&&hit.distance==2);
+    gWorldTriangles.clear();gSurfaceSourcesQ722.clear();plane(3,30);Q225RebuildDynamicGrid();
+    const float d=std::sqrt(.5f);assert(TraceFo3WorldSurface(0,-2,0,d,0,d,10,0,0,&hit)&&hit.reference==30);
+    assert(!TraceFo3WorldSurface(NAN,0,0,0,0,1,10,0,0,&hit));
+    assert(!TraceFo3WorldSurface(0,0,0,0,0,0,10,0,0,&hit));
+    gPlayerCollisionReady=false;assert(!TraceFo3WorldSurface(0,0,0,0,0,1,10,0,0,&hit));
+    gWorldTriangles.clear();gSurfaceSourcesQ722.clear();Q225RebuildDynamicGrid();
+    std::cout<<"Nearest authored weapon surfaces, blocking, reference identity and grid traversal passed\n";
+}
+static void OriginalWeaponTarget(const char* path){
+    std::ifstream f(path,std::ios::binary);assets["target.nif"]={std::istreambuf_iterator<char>(f),{}};
+    std::vector<Fo3NifCollisionShapeQ6F> shapes;assert(LoadFo3NifCollisionShapesComplete("target.nif",shapes)&&!shapes.empty());
+    auto target=placement(44,"target.nif","ACTI");publish(prepare({target},false,1));assert(!gWorldTriangles.empty());
+    const auto tri=gWorldTriangles.front();const Vec3 centre{(tri.a.x+tri.b.x+tri.c.x)/3,(tri.a.y+tri.b.y+tri.c.y)/3,(tri.a.z+tri.b.z+tri.c.z)/3};
+    Fo3WorldSurfaceHit hit;assert(TraceFo3WorldSurface(centre.x+tri.normal.x,centre.y+tri.normal.y,centre.z+tri.normal.z,-tri.normal.x,-tri.normal.y,-tri.normal.z,2,0,0,&hit)&&hit.reference==44);
+    Fo3DoorCollisionPose moved;moved.transform[12]=4;assert(SetFo3ScriptCollisionPose(44,moved));
+    assert(TraceFo3WorldSurface(centre.x+4+tri.normal.x,centre.y+tri.normal.y,centre.z+tri.normal.z,-tri.normal.x,-tri.normal.y,-tri.normal.z,2,0,0,&hit)&&hit.reference==44);
+    std::cout<<"Original range target BHK hit identity and animated collision pose passed\n";
+}
 int main(int argc,char**argv) {
+    if(argc==3&&std::string(argv[1])=="--weapon-target"){OriginalWeaponTarget(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--walkway-scene"){OriginalPlacedWalkways(argv[2],argv[3]);return 0;}
     if(argc==3&&std::string(argv[1])=="--walkways"){OriginalMegatonWalkways(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--stairs"){OriginalInteriorStairs(argv[2],argv[3]);return 0;}
+    WeaponSurfaceQueries();
     IndexedActorGroundParityQ226();
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";
     assets[nonMegaton]=packedNif();assets[megaton]=packedNif();assets[item]=packedNif();assets[trigger]=packedNif(12);

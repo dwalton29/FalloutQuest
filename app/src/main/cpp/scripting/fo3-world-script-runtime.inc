@@ -20,7 +20,7 @@ static fo3script::ImageStack modifiers;
 static double seconds=0;
 static fo3dialogue::Session speech;
 static fo3dialogue::Panel scriptSubtitle;
-static std::vector<fo3script::Action> speechPending;
+static std::vector<fo3script::Action> speechPending,hitPending;
 static uint32_t speechReference=0,speechIdentity=0,speechListenerIdentity=0,speechPackageOwner=0;
 static uint32_t speechTopic=0,speechTarget=0,speechToken=0,speechSerial=0,speechPackage=0;
 static std::pair<uint32_t,uint32_t> pendingPackageDone{};
@@ -154,7 +154,7 @@ void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -181,6 +181,25 @@ void Register(){
     for(auto& actor:gQ230NpcActors){const auto target=lookTargets.find(actor.source.refFormId);if(target!=lookTargets.end())actor.runtime.scriptLookTarget=target->second;}
     player.SetScriptAnimationRegistry(std::move(registry));
 }
+void Hits(){
+    if(!gPlayerSession||Fo3ResidentFrameBlocked())return;
+    auto& player=gPlayerSession->player;
+    while(!hitPending.empty()){
+        const auto hit=hitPending.front();bool disabled=true;std::string error;
+        if(!player.ReferenceDisabled(hit.reference,disabled,error)||disabled){hitPending.erase(hitPending.begin());continue;}
+        auto plan=player.PrepareWeaponHitTransaction(hit.reference,hit.flags,hit.form,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+        if(!plan){Q6H_LOGW("SCRIPT WEAPON HIT REJECTED ref=%08X weapon=%08X reason=%s",hit.reference,hit.form,error.c_str());hitPending.erase(hitPending.begin());continue;}
+        bool committed=!plan->HasReferenceChanges()?player.CommitScriptTransaction(*plan):PublishFo3DialogueReferences(player,*plan,error);
+        if(!committed&&plan->HasReferenceChanges()){
+            if(!CanDeferFo3DialogueResult())return;
+            const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+            if(!ticket)return;
+            gFo3ResidentGameplayTicket=ticket;hitPending.erase(hitPending.begin());return;
+        }
+        if(!committed)return;
+        hitPending.erase(hitPending.begin());
+    }
+}
 void Events(){
     if(!gPlayerSession||Fo3ResidentFrameBlocked())return;
     auto& player=gPlayerSession->player;
@@ -206,6 +225,7 @@ void TriggerTick(){
     }
 }
 void Actions(){
+    Hits();if(Fo3ResidentFrameBlocked())return;
     auto& player=gPlayerSession->player;fo3script::Action action;
     SetFo3PlayerScale(std::clamp(player.PlayerTrackingScale(),.1f,10.f));
     const auto& move=player.Snapshot().playerMove;
@@ -227,6 +247,10 @@ void Actions(){
             if(action.form)lookTargets[action.reference]=action.form;else lookTargets.erase(action.reference);
             if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
         }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
+        }else if(action.kind==fo3script::ActionKind::WeaponHit){
+            if(hitPending.size()<256)hitPending.push_back(action);
+            else Q6H_LOGW("SCRIPT WEAPON HIT QUEUE FULL ref=%08X",action.reference);
+            Hits();if(Fo3ResidentFrameBlocked())return;
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
             if(!DeliverFo3ScriptDefaultActivation(action.reference))
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);

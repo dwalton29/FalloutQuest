@@ -487,9 +487,30 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   talk("cg02dadref",{"cg02dadtopic1","cg02dadchoice1"});
   assert(p.Snapshot().pipboy.quests.at(birthday).stages.count(44)&&p.ItemCount(d.formNames.at("cg02weapbbgun"))==1&&p.ItemCount(d.formNames.at("ammobb"))>=50);
   assert(!p.PlayerControlDisabled(2)&&!p.GetLock(d.formNames.at("cg02targetrangedoornew")).locked);
+  const auto& range=d.targets.at(d.formNames.at("cg02dadtargetrangeinsidemarker"));
+  auto arrived=p.Snapshot().actors.at(dad);arrived.position={range.x,range.y,range.z};arrived.cell=range.cell;arrived.world=range.world;
+  arrived.package=d.formNames.at("cg02dadwaitinsidetargetrange");Check(p.UpdateActor(dad,arrived),"original range arrival fixture");
+  p.SetScriptPlayerLocation(range.x,range.y,range.z,range.cell,range.world);
+  talk("cg02dadref",{});
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==50);
+  const auto target=d.formNames.at("cg02target1"),bb=d.formNames.at("cg02weapbbgun"),roach=d.formNames.at("cg02radroachref");
+  (*registry)[target]={{"Forward",2.5,false}};p.SetScriptAnimationRegistry(registry);
+  const auto count=fo3dialogue::VariableKey(d,"CG02.targetCount");
+  for(unsigned n=0;n<3;++n){
+    auto hit=p.PrepareWeaponHitTransaction(target,fo3player::PlayerRef,bb,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(hit),error);
+    std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,hit->ExecutedScripts(),report,cancel,error),error);
+    assert(p.Snapshot().pipboy.dialogueVariables.count(count)==0||p.Snapshot().pipboy.dialogueVariables.at(count)==float(n));
+    Check(p.CommitScriptTransaction(*hit),error);assert(p.Snapshot().pipboy.dialogueVariables.at(count)==float(n+1));
+  }
+  bool hidden=true;Check(p.ReferenceDisabled(roach,hidden,error),error);assert(!hidden&&p.Snapshot().pipboy.quests.at(birthday).stage==55);
+  {auto ctx=context(dad);fo3dialogue::Session warning;configure(warning);Check(warning.StartTopic(d.formNames.at("cg02dadspeech"),ctx,p),"original radroach warning");finish(warning,ctx);}
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==60&&p.ActorHealth(roach)>0);
+  Check(p.ApplyAttack(fo3player::PlayerRef,bb,roach,10000),"original radroach death event");
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==70&&p.ActorHealth(roach)==0);
   const auto save="/tmp/fq-original-identity-"+std::to_string(getpid());Check(p.Save(save,error),error);
   fo3player::Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.PlayerFemale()==female&&restored.PlayerName()==(female?"Catherine":"James"));
+  assert(restored.Snapshot().pipboy.quests.at(birthday).stage==70&&restored.ActorHealth(roach)==0&&restored.Snapshot().pipboy.dialogueVariables.at(count)==3);
   assert(restored.Snapshot().pipboy.quests.at(birthday).stages.count(34)&&restored.ItemCount(d.formNames.at("bookskillmelee"))==1&&restored.ItemCount(d.formNames.at("kidhatprewarcapkid"))==1);
 }
 int main(int argc,char** argv){
@@ -532,5 +553,5 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);
-  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift, party presents, intercom conversation and BB gun, both sex branches, package topic, calendar/crime state and saves passed\n";
+  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift, party presents, intercom, BB gun, three target hits and radroach death, both sex branches, package topic, calendar/crime state and saves passed\n";
 }
