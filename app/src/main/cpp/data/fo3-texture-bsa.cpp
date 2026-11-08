@@ -489,6 +489,13 @@ bool TryArchive(const char* archivePath, const std::string& texturePath,
 
 } // namespace
 
+bool HasFalloutTexture(const std::string& texturePath) {
+    for (const auto& archivePath : fo3assets::TextureArchivePaths())
+        if (fo3assets::GetBsaArchive(archivePath)->Contains(texturePath, fo3assets::BsaPathKind::Texture))
+            return true;
+    return false;
+}
+
 bool LoadFalloutTextureRgba(const std::string& texturePath, Fo3RgbaTexture& outTexture) {
     outTexture = {};
     if (texturePath.empty()) return false;

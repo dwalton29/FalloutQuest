@@ -627,7 +627,7 @@ public:
   bool QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon);
   std::unique_ptr<ScriptTransactionPlan> PrepareWeaponHitTransaction(uint32_t reference,uint32_t attacker,uint32_t weapon,
       std::string& error,ScriptProgramCapture capture=ScriptProgramCapture::None) const;
-  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false,bool forceSubtitle=false,uint32_t package=0);
+  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false,bool forceSubtitle=false,uint32_t package=0,bool noTargetLook=false);
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;

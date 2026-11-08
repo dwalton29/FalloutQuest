@@ -177,6 +177,13 @@ struct BsaArchive::Impl {
 BsaArchive::BsaArchive(std::string path) : impl_(new Impl(std::move(path))) {}
 BsaArchive::~BsaArchive() = default;
 
+bool BsaArchive::Contains(const std::string& request, BsaPathKind kind) {
+    if (request.empty() || !impl_->EnsureIndex()) return false;
+    std::string resolved;
+    const auto* entry = impl_->Find(request, kind, resolved);
+    return entry && entry->storedBytes != 0u;
+}
+
 bool BsaArchive::Read(const std::string& request, std::vector<uint8_t>& out,
                       BsaFileInfo* info, BsaPathKind kind, size_t maxBytes) {
     out.clear();

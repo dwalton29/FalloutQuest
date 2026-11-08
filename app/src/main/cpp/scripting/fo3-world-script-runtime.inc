@@ -15,7 +15,8 @@ struct Animation {
 };
 static std::unordered_map<uint32_t,Animation> animations;
 static std::unordered_set<uint32_t> loaded;
-static std::unordered_map<uint32_t,uint32_t> lookTargets;
+struct LookTarget { uint32_t reference=0; bool rotateBody=false; };
+static std::unordered_map<uint32_t,LookTarget> lookTargets;
 static fo3script::ImageStack modifiers;
 static double seconds=0;
 struct SpeechLane {
@@ -24,9 +25,18 @@ struct SpeechLane {
     uint32_t package=0,packageOwner=0;
     std::pair<uint32_t,uint32_t> pendingPackageDone{};
     double began=0;
-    bool subtitle=false;
+    bool subtitle=false,noTargetLook=false;
 };
 static std::array<SpeechLane,2> speechLanes;
+uint32_t SpeechLookTarget(uint32_t actor){
+    for(const auto& lane:speechLanes)
+        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&lane.reference==actor&&lane.reference==lane.identity)
+            return lane.target==actor?0:lane.target;
+    for(const auto& lane:speechLanes)
+        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noTargetLook&&lane.target==actor&&lane.target==lane.listener&&lane.reference!=actor)
+            return lane.reference;
+    return 0;
+}
 static fo3dialogue::Panel scriptSubtitle;
 static std::vector<fo3script::Action> speechPending,hitPending;
 static uint32_t speechSerial=0;
@@ -66,7 +76,7 @@ static void SpeechStop(SpeechLane& lane,unsigned index){
     if(lane.dialogue.Active()&&(index||!gDialogue.Active()))fo3audio::StopDialogueLane(index);
     lane.dialogue.End("scripted speech stopped");
     lane.reference=lane.identity=lane.target=lane.listener=lane.topic=lane.token=0;
-    lane.package=lane.packageOwner=0;lane.subtitle=false;
+    lane.package=lane.packageOwner=0;lane.subtitle=lane.noTargetLook=false;
 }
 
 static uint64_t runtimeGeneration=~uint64_t{0};
@@ -190,6 +200,7 @@ static void StartSpeech(SpeechLane& lane,unsigned index,const fo3script::Action&
     lane.reference=action.reference;lane.identity=speech.actor;lane.target=action.flags;
     lane.listener=admission.target.reference;lane.topic=action.form;
     lane.package=action.package;lane.packageOwner=action.reference;lane.subtitle=action.forceSubtitle;
+    lane.noTargetLook=action.noTargetLook;
     player.SetScriptActorTalking(lane.reference,true);
     player.SetScriptActorTalking(lane.identity,true);
     fo3audio::DialogueGain(.7f);
@@ -264,7 +275,7 @@ void Register(){
         player.SetScriptActorFurniture(actor.source.refFormId,ref,marker,sitting);
     }
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -288,7 +299,12 @@ void Register(){
     for(const auto& actor:gQ230NpcActors)if(!actor.runtime.offScene)present.insert(actor.source.refFormId);
     for(auto i=animations.begin();i!=animations.end();)if(!present.count(i->first))i=animations.erase(i);else ++i;
     for(auto i=loaded.begin();i!=loaded.end();)if(!present.count(*i))i=loaded.erase(i);else ++i;
-    for(auto& actor:gQ230NpcActors){const auto target=lookTargets.find(actor.source.refFormId);if(target!=lookTargets.end())actor.runtime.scriptLookTarget=target->second;}
+    for(auto& actor:gQ230NpcActors){
+        const auto target=lookTargets.find(actor.source.refFormId);
+        if(target==lookTargets.end())continue;
+        actor.runtime.scriptLookTarget=target->second.reference;
+        actor.runtime.scriptLookRotateBody=target->second.rotateBody;
+    }
     player.SetScriptAnimationRegistry(std::move(registry));
 }
 void Hits(){
@@ -355,8 +371,12 @@ void Actions(){
         }else if(action.kind==fo3script::ActionKind::AutoSave){
             FlushFo3PlayerState();
         }else if(action.kind==fo3script::ActionKind::Look){
-            if(action.form)lookTargets[action.reference]=action.form;else lookTargets.erase(action.reference);
-            if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
+            const LookTarget target{action.form,action.form!=0&&action.flags!=0};
+            if(action.form)lookTargets[action.reference]=target;else lookTargets.erase(action.reference);
+            if(auto* actor=DialogueActor(action.reference)){
+                actor->runtime.scriptLookTarget=target.reference;
+                actor->runtime.scriptLookRotateBody=target.rotateBody;
+            }
         }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
         }else if(action.kind==fo3script::ActionKind::WeaponHit){
             if(hitPending.size()<256)hitPending.push_back(action);

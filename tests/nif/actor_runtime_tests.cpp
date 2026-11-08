@@ -318,9 +318,14 @@ int main(int argc,char** argv) {
     faceSource.raceHeadModels.resize(8);
     faceSource.raceHeadModels[6]="Characters\\Head\\EyeLeftHuman.NIF";
     faceSource.raceHeadModels[3]="Characters\\Head\\TeethLowerHuman.NIF";
-    assert(fo3appearance::BoneLocalFacePart(faceSource,"characters/head/eyelefthuman.nif"));
-    assert(fo3appearance::BoneLocalFacePart(faceSource,"characters/head/teethlowerhuman.nif"));
-    assert(!fo3appearance::BoneLocalFacePart(faceSource,"characters/hair/hairbase.nif"));
+    assert(fo3appearance::BoneLocalFacePart(faceSource,"characters/head/eyelefthuman.nif","Bip01 Head"));
+    assert(fo3appearance::BoneLocalFacePart(faceSource,"characters/head/teethlowerhuman.nif","Bip01 Head"));
+    assert(!fo3appearance::BoneLocalFacePart(faceSource,"characters/head/teethlowerhuman.nif",""));
+    assert(!fo3appearance::BoneLocalFacePart(faceSource,"characters/hair/hairbase.nif","Bip01 Head"));
+    assert(fo3appearance::HairMaterial(0x82040101)&&!fo3appearance::HairMaterial(0x82000403));
+    assert(fo3appearance::HairTintMultiplier(0,0)==1.f);
+    assert(fo3appearance::HairTintMultiplier(255,1)==2.f);
+    assert(fo3appearance::HairTintMultiplier(54,1)>fo3appearance::HairTintMultiplier(51,1));
     assert(!fo3appearance::HeadBindTransform({}, fo3anim::Identity(), attachment));
     Fo3NpcActorQ230 source;
     Fo3NpcVisualItemQ230 hat;

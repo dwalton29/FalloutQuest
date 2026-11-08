@@ -39,6 +39,7 @@ struct RuntimeState {
   std::array<float,3> lastRoamDestination{};
   bool hasLastRoamDestination=false;
   uint32_t scriptLookTarget=0,scriptSpeechToken=0;
+  bool scriptLookRotateBody=false;
   uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
   // One active XTEL approach. No player scene transition is ever queued.
   uint32_t xtelDoor=0,xtelCell=0;
@@ -102,19 +103,20 @@ struct RuntimeState {
   void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;furniture.Clear();dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
   void BeginDialogue(){if(dialogue||!CanTalk())return;suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
   void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
-  void Face(float desired,float dt,bool scriptedLook=false){
+  void Face(float desired,float dt,bool scriptedLook=false,bool rotateBody=false){
     const bool tracking=dialogue||scriptedLook;
-    if(speed>.01f){
+    if(speed>.01f||(!dialogue&&scriptedLook&&!rotateBody)){
       const float look=tracking?std::clamp(Angle(desired-yaw),-DialoguePolicy::HeadLimit,DialoguePolicy::HeadLimit):0;
       headYaw+=std::clamp(look-headYaw,-DialoguePolicy::HeadSpeed*dt,DialoguePolicy::HeadSpeed*dt);
-      return; // Navigation owns body facing and gait while moving.
+      return; // Navigation owns the body during locomotion or head-only tracking.
     }
-    const float error=Angle((tracking?desired:returnYaw)-yaw);
-    const bool turn=!furniture.Active()&&(tracking?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f);
+    const bool bodyTracks=dialogue||(scriptedLook&&rotateBody);
+    const float error=Angle((bodyTracks?desired:returnYaw)-yaw);
+    const bool turn=!furniture.Active()&&(bodyTracks?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f);
     if(turn)yaw=Angle(yaw+std::clamp(error,-DialoguePolicy::BodySpeed*dt,DialoguePolicy::BodySpeed*dt));
     const float look=tracking?std::clamp(Angle(desired-yaw),-DialoguePolicy::HeadLimit,DialoguePolicy::HeadLimit):0;
     headYaw+=std::clamp(look-headYaw,-DialoguePolicy::HeadSpeed*dt,DialoguePolicy::HeadSpeed*dt);
-    animation=tracking&&turn?(error>0?Animation::TurnLeft:Animation::TurnRight):dialogue?(speaking?Animation::Speaking:Animation::Conversation):Animation::Idle;
+    animation=bodyTracks&&turn?(error>0?Animation::TurnLeft:Animation::TurnRight):dialogue?(speaking?Animation::Speaking:Animation::Conversation):Animation::Idle;
   }
 };
 inline bool Interrupted(bool loading,bool resident,bool alive,bool combat,float distance){return loading||!resident||!alive||combat||!std::isfinite(distance)||distance>DialoguePolicy::LeaveRange;}

@@ -22,6 +22,7 @@ bool Fo3PlayerNameFocus();
 bool Fo3SpecialBookFocus();
 void ShutdownFo3Movie();
 namespace fo3worldscript {
+uint32_t SpeechLookTarget(uint32_t actor);
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
 bool Event(uint32_t reference,const char* event,uint32_t activator,bool persist);
@@ -12409,10 +12410,14 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     };
 
     auto q233ApplyMorph=[&](CpuObject& part,
-                            const Fo3FaceGenMorphQ233& morph){
+                            const Fo3FaceGenMorphQ233& morph,
+                            const fo3face::Tri* tri=nullptr){
         const size_t vertexCount=part.positionsGame.size();
-        if(vertexCount!=morph.vertexCount ||
-           morph.deltaXYZ.size()!=vertexCount*3u) return false;
+        // EGM includes the TRI's absolute modifier vertices after its
+        // rendered vertices. Only the base range belongs in the NIF.
+        const size_t modifierVertices=tri&&tri->vertices==vertexCount?tri->modifierVertices:0;
+        if(morph.vertexCount!=vertexCount+modifierVertices&&morph.vertexCount!=vertexCount)return false;
+        if(morph.deltaXYZ.size()!=size_t(morph.vertexCount)*3u)return false;
         const float* m=part.mesh.geometryDeltaToModel;
         for(size_t i=0u;i<vertexCount;++i){
             const float dx=morph.deltaXYZ[i*3u+0u];
@@ -12434,7 +12439,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         if(part.mesh.skinned)return false;
         const std::string bone=part.mesh.attachmentBone.empty()?"Bip01 Head":part.mesh.attachmentBone;
         const bool head=fo3appearance::SameModel(bone,"Bip01 Head");
-        const bool boneLocal=!head||fo3appearance::BoneLocalFacePart(*npc,part.placement.modelPath);
+        const bool boneLocal=!head||fo3appearance::BoneLocalFacePart(*npc,part.placement.modelPath,part.mesh.attachmentBone);
         fo3anim::Matrix transform;
         if(!fo3appearance::AttachmentBindTransform(visual.skeleton,
                 Q230PlacementMatrix(part.placement),bone,transform,boneLocal))return false;
@@ -12449,13 +12454,6 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         for(Vec3& b:part.bitangentsGame) b=Normalize(apply(b,true));
         return true;
     };
-
-    const float q234HairR=
-        static_cast<float>(npc->hairColor[0])/255.0f;
-    const float q234HairG=
-        static_cast<float>(npc->hairColor[1])/255.0f;
-    const float q234HairB=
-        static_cast<float>(npc->hairColor[2])/255.0f;
 
     for(const std::string& path:models){
         Fo3WorldPlacement placement;
@@ -12488,6 +12486,18 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
                 path,q234FaceSym,q234FaceAsym,morph);
         if(haveMorph) ++faceGenEgmAssets;
 
+        std::shared_ptr<fo3face::Tri> tri;
+        const auto dot=path.rfind('.');
+        if(dot!=std::string::npos&&fo3appearance::HeadPart(*npc,path)&&
+           LoadFalloutMeshFile(path.substr(0,dot)+".tri",bytes)){
+            auto decoded=std::make_shared<fo3face::Tri>();
+            std::string error;
+            if(fo3face::DecodeTri(bytes,*decoded,error,haveMorph?&morph.deltaXYZ:nullptr)){
+                tri=std::move(decoded);
+                visual.facialAssets.emplace(path,tri);
+            }else Q6H_LOGW("NPC TRI INVALID actor=%08X path=%s reason=%s",source.refFormId,path.c_str(),error.c_str());
+        }
+
         for(CpuObject& part:parts){
             if(!fo3appearance::PipboySleeveShape(part.mesh.shapeName,q236EquippedMask&fo3appearance::PipboySlot))
                 continue;
@@ -12498,11 +12508,8 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
             const bool haveHairMorph = hair && LoadFo3FaceGenMorphQ233(
                 fo3appearance::HairMorphModel(path,part.mesh.shapeName),
                 q234FaceSym,q234FaceAsym,hairMorph);
-            if(haveHairMorph && q233ApplyMorph(part,hairMorph)){
-                ++faceGenMorphedShapes;
-                faceGenMorphedVertices+=part.positionsGame.size();
-            }
-            if(!haveHairMorph && haveMorph && q233ApplyMorph(part,morph)){
+            if((haveHairMorph&&q233ApplyMorph(part,hairMorph))||
+               (haveMorph&&q233ApplyMorph(part,morph,tri.get()))){
                 ++faceGenMorphedShapes;
                 faceGenMorphedVertices+=part.positionsGame.size();
             }
@@ -12579,6 +12586,10 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
                 part.q2016ShapeIndex==0u &&
                 !npc->raceHeadTextures.empty() &&
                 !npc->raceHeadTextures[0].empty();
+            if(q235PrimaryHeadShape&&!part.mesh.normalTexturePath.empty()){
+                auto normal=fo3appearance::FaceNormalMap(npc->raceHeadTextures[0]);
+                if(HasFalloutTexture(normal))part.mesh.normalTexturePath=std::move(normal);
+            }
             if(q235PrimaryHeadShape && !q234FaceTex.empty()){
                 const std::string& q235BaseHeadTexture=
                     npc->raceHeadTextures[0];
@@ -12605,15 +12616,16 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
                 }
             }
 
-            if(isHairTintModel(path)){
+            if(isHairTintModel(path)&&fo3appearance::HairMaterial(part.mesh.shaderFlags1)){
                 const size_t vertexCount=part.positionsGame.size();
                 if(part.mesh.vertexColors.size()!=vertexCount*4u){
                     part.mesh.vertexColors.assign(vertexCount*4u,1.0f);
                 }
                 for(size_t i=0u;i<vertexCount;++i){
-                    part.mesh.vertexColors[i*4u+0u]*=q234HairR;
-                    part.mesh.vertexColors[i*4u+1u]*=q234HairG;
-                    part.mesh.vertexColors[i*4u+2u]*=q234HairB;
+                    const float mask=part.mesh.vertexColors[i*4u+1u];
+                    for(size_t channel=0;channel<3;++channel)
+                        part.mesh.vertexColors[i*4u+channel]=
+                            fo3appearance::HairTintMultiplier(npc->hairColor[channel],mask);
                 }
                 ++hairTintShapes;
             }

@@ -117,12 +117,13 @@ inline Weights Sample(const Lip& lip,double seconds) {
   return out;
 }
 struct Tri {
-  uint32_t vertices=0,differentialCount=0,sparseCount=0;
+  uint32_t vertices=0,modifierVertices=0,differentialCount=0,sparseCount=0;
   std::unordered_map<std::string,std::vector<std::array<float,3>>> morphs;
 };
 // FRTRI003 differential targets. Statistical EGM FaceGen stays in the bind
 // mesh; these differential offsets are added to it, never replace its shape.
-inline bool DecodeTri(const std::vector<uint8_t>& b,Tri& out,std::string& error) {
+inline bool DecodeTri(const std::vector<uint8_t>& b,Tri& out,std::string& error,
+                      const std::vector<float>* identity=nullptr) {
   out={};error.clear();auto fail=[&](const char* s){error=s;return false;};
   if(b.size()<64||b.size()>32*1024*1024||std::memcmp(b.data(),"FRTRI003",8))return fail("TRI header");
   const auto nv=U32(b.data()+8),nf=U32(b.data()+12),nq=U32(b.data()+16),uv=U32(b.data()+28),flags=U32(b.data()+32);
@@ -131,7 +132,9 @@ inline bool DecodeTri(const std::vector<uint8_t>& b,Tri& out,std::string& error)
   if((size_t(nm)+mods)*nv>64*1024*1024/sizeof(std::array<float,3>))return fail("TRI decoded morph budget");
   size_t at=64+(size_t(nv)+extra)*12+size_t(nf)*12+size_t(uv)*8+size_t(nf)*12;
   if(at>b.size())return fail("TRI geometry truncated");
-  Tri decoded;decoded.vertices=nv;decoded.differentialCount=nm;decoded.sparseCount=mods;
+  Tri decoded;decoded.vertices=nv;decoded.modifierVertices=extra;
+  decoded.differentialCount=nm;decoded.sparseCount=mods;
+  const bool fitted=identity&&identity->size()==(size_t(nv)+extra)*3;
   std::vector<std::array<float,3>> base(nv),absolute(extra);
   size_t geometry=64;
   for(auto* points:{&base,&absolute})for(auto& point:*points)for(auto& c:point) {
@@ -161,7 +164,10 @@ inline bool DecodeTri(const std::vector<uint8_t>& b,Tri& out,std::string& error)
     for(uint32_t i=0;i<count;++i){const auto vertex=U32(b.data()+at);at+=4;
       if(vertex>=nv||seen[vertex])return fail("TRI modifier index");
       seen[vertex]=true;
-      for(size_t axis=0;axis<3;++axis)delta[vertex][axis]=absolute[used+i][axis]-base[vertex][axis];
+      for(size_t axis=0;axis<3;++axis){
+        delta[vertex][axis]=absolute[used+i][axis]-base[vertex][axis];
+        if(fitted)delta[vertex][axis]+=(*identity)[(size_t(nv)+used+i)*3+axis]-(*identity)[size_t(vertex)*3+axis];
+      }
     }
     used+=count;
   }

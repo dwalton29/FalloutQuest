@@ -175,7 +175,7 @@ int main(int argc,char** argv){try{
  fo3anim::PropertyTrack alpha;alpha.bone="leaf";alpha.kind=fo3anim::PropertyKind::Alpha;alpha.values.dimensions=1;alpha.values.interpolation=1;alpha.values.keys={{0,{0,0,0,0},{},{}},{2,{1,0,0,0},{},{}}};clip.properties.push_back(alpha);asset->clips.push_back(clip);
  clip.textKeys.clear();clip.name="Idle";clip.cycle=0;clip.stop=1;clip.tracks[0].translation.keys={{0,{4,0,0,0},{},{}}};asset->clips.push_back(clip);
  c.references[41].base=411;c.references[41].valid=true;c.actorPlacements[41].base=411;c.pipboy.targets[41].base=411;c.pipboy.targets[41].cell=1;c.weapons.actors[411].health=20;
- c.pipboy.dialogueActors[411].voice=0;
+ c.pipboy.dialogueActors[411].voice=0;c.pipboy.formNames["listener"]=41;
  fo3pipdata::Info first;first.id=911;first.topic=910;first.quest=600;first.type=1;first.links={920};first.nextSpeaker=0;first.responses.push_back({700,0,"Call"});
  fo3pipdata::Condition caller;caller.function=72;caller.a=411;caller.value=1;first.conditions.push_back(caller);c.pipboy.topics[910].push_back(first);
  auto reply=first;reply.id=921;reply.topic=920;reply.flags=1;reply.links.clear();reply.conditions.front().a=400;reply.end.source="RewardKarma 2";c.pipboy.topics[920].push_back(reply);
@@ -226,7 +226,12 @@ int main(int argc,char** argv){try{
  Check(p.QueueWeaponHit(10,fo3player::PlayerRef,902),"queue different weapon");fo3worldscript::Actions();fo3worldscript::Hits();Check(p.Snapshot().karma==impactKarma+2,"weapon filter does not use attacker identity");
  Check(p.QueueWeaponHit(83,fo3player::PlayerRef,901),"queue unsupported hit script");fo3worldscript::Actions();fo3worldscript::Hits();Check(p.Snapshot().karma==impactKarma+2,"unsupported OnHitWith rolls back preceding OnHit in the same impact");
  // Exercise the production speech adapter with token-owned audio completion.
+ fo3pipdata::ResultScript lookScript;lookScript.source="Speaker.Look player\nSpeaker.Look player 1\nSpeaker.StopLook";
+ std::vector<fo3dialogue::Command> lookCommands;std::string lookError;
+ Check(fo3dialogue::CompileResult(p.Definitions().pipboy,lookScript,lookCommands,lookError)&&lookCommands.size()==3&&
+       lookCommands[0].value==0&&lookCommands[1].value==1&&lookCommands[2].index==0,"original Look defaults to head tracking and accepts explicit body rotation");
  fo3script::Action look;look.kind=fo3script::ActionKind::Look;look.reference=40;look.form=fo3player::PlayerRef;
+ look.flags=1;
  Check(p.QueueScriptAction(look),"queue look before actor arrival");fo3worldscript::Actions();
  ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;fo3worldscript::Register();
  auto seats=std::make_shared<fo3furniture::Scene>();fo3furniture::Slot seat;seat.reference=888;seat.marker.reference=11;seats->slots.push_back(seat);
@@ -239,9 +244,9 @@ int main(int argc,char** argv){try{
  }
  gQ230NpcActors.back().runtime.offScene=true;fo3worldscript::Register();Check(!p.ScriptFurniture(40,observedRef,observedMarker,observedState),"off-scene seat observations expire");
  gQ230NpcActors.back().runtime.offScene=false;seated.Clear();fo3worldscript::Register();Check(p.ScriptFurniture(40,observedRef,observedMarker,observedState)&&!observedState,"resident standing observation replaces seat");
- Check(gQ230NpcActors.back().runtime.scriptLookTarget==fo3player::PlayerRef,"delayed actor arrival retains original look target");
+ Check(gQ230NpcActors.back().runtime.scriptLookTarget==fo3player::PlayerRef&&gQ230NpcActors.back().runtime.scriptLookRotateBody,"delayed actor arrival retains target and body rotation");
  look.form=0;Check(p.QueueScriptAction(look),"stop retained look");fo3worldscript::Actions();
- Check(!gQ230NpcActors.back().runtime.scriptLookTarget&&!fo3worldscript::lookTargets.count(40),"stop look removes retained target");
+ Check(!gQ230NpcActors.back().runtime.scriptLookTarget&&!gQ230NpcActors.back().runtime.scriptLookRotateBody&&!fo3worldscript::lookTargets.count(40),"stop look removes target and body rotation");
  fo3script::Action idle;idle.kind=fo3script::ActionKind::PackageIdle;idle.reference=40;idle.form=701;idle.flags=4;
  Check(p.QueueScriptAction(idle),"queue authored package idle");fo3worldscript::Actions();Check(gQ230NpcActors.back().responseIdle==701,"package idle reaches resident animation adapter");
  fo3worldscript::SpeechTick(); // Initialize the independent session generation.
@@ -313,6 +318,17 @@ int main(int argc,char** argv){try{
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;
  fo3worldscript::SpeechTick();
  Check(!p.AnyScriptActorTalking(),"independent EOFs release both speech owners");
+ for(bool noTargetLook:{false,true}){
+   fo3pipdata::ResultScript speech;
+   speech.source=noTargetLook?"Speaker.SayTo Listener VoiceTopic 0 1":"Speaker.SayTo Listener VoiceTopic";
+   std::string error;
+   Check(p.ExecuteDialogueResult(speech,error),"authored SayTo look flag");
+   fo3worldscript::Actions();fo3worldscript::SpeechTick();
+   Check(fo3worldscript::SpeechLookTarget(40)==41&&fo3worldscript::SpeechLookTarget(41)==(noTargetLook?0u:40u),
+         "scripted speech head-tracks the partner and honors listener opt-out");
+   fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+   Check(!fo3worldscript::SpeechLookTarget(40)&&!fo3worldscript::SpeechLookTarget(41),"speech gaze expires with audio");
+ }
  auto& fighter=gQ230NpcActors.back();fighter.runtime.BeginCombat(fo3player::PlayerRef);fighter.runtime.pendingAttack=true;
  Check(p.SetActorHostile(40,fo3player::PlayerRef),"canonical combat fixture");
  fo3pipdata::ResultScript stop,unsupported;stop.source="speaker.StopCombat";unsupported.source="UnsupportedStopStep";std::string stopError;

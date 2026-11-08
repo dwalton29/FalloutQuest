@@ -23,5 +23,6 @@ struct Fo3RgbaCubeTexture {
     std::string format;
 };
 
+bool HasFalloutTexture(const std::string& texturePath);
 bool LoadFalloutTextureRgba(const std::string& texturePath, Fo3RgbaTexture& outTexture);
 bool LoadFalloutCubeTextureRgba(const std::string& texturePath, Fo3RgbaCubeTexture& outTexture);

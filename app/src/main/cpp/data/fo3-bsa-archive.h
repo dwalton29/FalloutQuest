@@ -28,6 +28,7 @@ public:
     BsaArchive(const BsaArchive&) = delete;
     BsaArchive& operator=(const BsaArchive&) = delete;
 
+    bool Contains(const std::string& requestedPath, BsaPathKind kind);
     bool Read(const std::string& requestedPath, std::vector<uint8_t>& bytes,
               BsaFileInfo* info = nullptr,
               BsaPathKind kind = BsaPathKind::Exact,

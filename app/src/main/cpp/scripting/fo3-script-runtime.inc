@@ -504,10 +504,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::FactionMembership:ok=SetActorFactionRank(c.form,c.index,int(c.value),c.variable!=0);break;
     case C::SetEssential:ok=SetEssential(c.form,c.value!=0);break;
     case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
-    case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;ok=QueueScriptAction(std::move(action));}break;}
+    case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;action.flags=c.value!=0;ok=QueueScriptAction(std::move(action));}break;}
     case C::ScriptPackage:ok=ScriptPackage(c.form,c.index,c.value!=0);break;
     case C::StartConversation:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,true);break;
-    case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,false,c.value!=0);break;
+    case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,false,c.value!=0,0,c.noTargetLook);break;
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
@@ -1179,7 +1179,7 @@ bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
 }
 
 namespace fo3player {
-bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation,bool forceSubtitle,uint32_t package){
+bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation,bool forceSubtitle,uint32_t package,bool noTargetLook){
   if(package){
     if(conversation&&target==PlayerRef)return false; // Interactive player package direction is separate.
     const auto definition=catalog_->pipboy.packages.find(package);
@@ -1207,6 +1207,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   if(!selected)return !unsupported;
   fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;action.forceSubtitle=forceSubtitle;action.package=package;
   action.sourceActor=context.speaker.reference;action.targetActor=context.target.reference;
+  action.noTargetLook=noTargetLook;
   return QueueScriptAction(std::move(action));
 }
 }

@@ -5,7 +5,7 @@ enum class ActionKind { StopCombat, PipboyReset, RadioRefresh, PackageIdle, Kill
 struct Action {
   ActionKind kind=ActionKind::PlayGroup;
   uint32_t reference=0,form=0,flags=0,info=0,package=0;
-  bool forceSubtitle=false;
+  bool forceSubtitle=false,noTargetLook=false;
   std::string group;
   double started=0;
   uint32_t sourceActor=0,targetActor=0;

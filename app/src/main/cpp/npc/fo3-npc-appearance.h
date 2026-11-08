@@ -26,9 +26,11 @@ inline bool HeadPart(const Fo3NpcActorQ230& actor, const std::string& model) {
             (item.bipedMask & HeadEquipmentMask) && SameModel(item.modelPath, model)) return true;
     return false;
 }
-inline bool BoneLocalFacePart(const Fo3NpcActorQ230& actor, const std::string& model) {
-    // RACE slots 2..7: mouth, lower/upper teeth, tongue and eyes. Their
-    // authored root transforms express geometry in the Head bone frame.
+inline bool BoneLocalFacePart(const Fo3NpcActorQ230& actor, const std::string& model,
+                              const std::string& attachmentBone) {
+    // A Prn-bearing RACE face part is exported in the Head bone frame.
+    // Some mouth meshes omit Prn and are already oriented in actor axes.
+    if (!SameModel(attachmentBone, "Bip01 Head")) return false;
     for (size_t slot = 2; slot < actor.raceHeadModels.size() && slot < 8; ++slot)
         if (SameModel(actor.raceHeadModels[slot], model)) return true;
     return false;
@@ -54,6 +56,19 @@ inline std::string HairMorphModel(std::string model, const std::string& shape) {
 inline bool SkinMaterial(uint32_t type, uint32_t flags) {
     // Fallout 3 SHADER_SKIN / F3SF1_FaceGen, not Skyrim's tint flags.
     return type == 14u || (flags & 0x00000400u) != 0u;
+}
+inline bool HairMaterial(uint32_t flags) {
+    return (flags & 0x00040000u) != 0u;
+}
+inline float HairTintMultiplier(uint8_t color, float mask) {
+    // SP17 SM3002/SM3LL002: the green vertex channel masks the HairTint
+    // constant about neutral grey. The other channels are shader controls.
+    return 1.0f + mask * (2.0f * static_cast<float>(color) / 255.0f - 1.0f);
+}
+inline std::string FaceNormalMap(std::string diffuse) {
+    const auto dot = diffuse.find_last_of('.');
+    if (dot != std::string::npos) diffuse.insert(dot, "_n");
+    return diffuse;
 }
 inline bool AttachmentBindTransform(const fo3anim::Skeleton& skeleton,
                                     const fo3anim::Matrix& placement,

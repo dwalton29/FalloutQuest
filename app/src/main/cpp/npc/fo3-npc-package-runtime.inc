@@ -1625,6 +1625,21 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       // relocation. Only a reached route endpoint can keep this actor waiting.
       if(!actor.aiPathGame.empty()&&Q240PlanarDistance(Q240GamePosition(actor),actor.aiPathGame.back())<=8.f) {
         if(actor.runtime.procedure!=fo3npc::Procedure::Completed){
+          if(package->type==6){
+            const auto& definitions=gPlayerSession->player.Definitions().pipboy;
+            const auto heading=definitions.formNames.find("xmarkerheading");
+            const auto marker=definitions.targets.find(Q240LocationReference(actor,*package));
+            if(heading!=definitions.formNames.end()&&marker!=definitions.targets.end()&&marker->second.base==heading->second){
+              const float turn=fo3npc::Angle(marker->second.rz-state.yaw);
+              if(std::fabs(turn)>.01f){
+                state.yaw=fo3npc::Angle(state.yaw+std::clamp(turn,-fo3npc::MovementPolicy::StandingTurn*dt,fo3npc::MovementPolicy::StandingTurn*dt));
+                state.returnYaw=state.yaw;
+                state.animation=turn>0?fo3npc::Animation::TurnLeft:fo3npc::Animation::TurnRight;
+                return;
+              }
+              state.yaw=state.returnYaw=marker->second.rz;
+            }
+          }
           Q6H_LOGI("NPC PACKAGE COMPLETE actor=%08X package=%08X type=%u scheduleReevaluated=1",actor.source.refFormId,packageId,unsigned(package->type));
           if(!Q240PackageEvent(actor,packageId,true))return;
         }

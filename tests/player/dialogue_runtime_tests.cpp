@@ -73,6 +73,7 @@ uint64_t DeferFo3DialogueResult(std::unique_ptr<fo3player::ScriptTransactionPlan
 }
 int Fo3DialogueResultStatus(uint64_t ticket){return ticket==deferredSerial?deferredStatus:-1;}
 #include "dialogue/fo3-dialogue-scene-refresh.inc"
+namespace fo3worldscript {uint32_t SpeechLookTarget(uint32_t){return 0;}}
 #include "dialogue/fo3-dialogue-runtime.inc"
 #include "npc/fo3-npc-conversation.h"
 static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t,uint32_t=0);

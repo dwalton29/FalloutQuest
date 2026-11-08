@@ -313,7 +313,8 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       if(std::fabs(weights[c])<.001f)weights[c]=0;
     }
     if(actor.facialWeights!=weights){actor.facialWeights=weights;actor.lastFrame=UINT64_MAX;}
-    if(!actor.runtime.OwnsAuthoredMotion(gDialogueTime)&&actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.scriptLookTarget||actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
+    const uint32_t lookTarget=actor.runtime.scriptLookTarget?actor.runtime.scriptLookTarget:fo3worldscript::SpeechLookTarget(actor.source.refFormId);
+    if(!actor.runtime.OwnsAuthoredMotion(gDialogueTime)&&actor.runtime.activity!=fo3npc::Activity::Combat&&(lookTarget||actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];
       std::array<float,3> chatPartner{};
@@ -321,16 +322,24 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
 #ifdef FO3_NPC_CHAT_RUNTIME
       chat=Q230ChatLook(actor.source.refFormId,chatPartner);
 #endif
-      if(actor.runtime.scriptLookTarget&&!actor.runtime.dialogue){
+      bool scriptedLook=false;
+      if(lookTarget&&!actor.runtime.dialogue){
         fo3pipdata::Location target;
-        if(gPlayerSession->player.ScriptReferenceLocation(actor.runtime.scriptLookTarget,target)){
+        if(lookTarget==fo3player::PlayerRef){
+          chatPartner={gQ210Head[0],gQ210Head[1],gQ210Head[2]};chat=scriptedLook=true;
+        }else if(const auto* listener=DialogueActor(lookTarget);
+                 listener&&!listener->runtime.offScene&&listener->runtime.Alive()){
+          chatPartner=listener->runtime.position;chat=scriptedLook=true;
+        }else if(gPlayerSession->player.ScriptReferenceLocation(lookTarget,target)&&
+                 target.cell==gCurrentCellFormId&&target.world==gExteriorWorldspaceQ1890){
           chatPartner=Q240ScenePosition({target.x,target.y,0});chat=true;
+          scriptedLook=true;
         }
       }
       const float targetX=chat?chatPartner[0]:gQ210Head[0];
       const float targetZ=chat?chatPartner[2]:gQ210Head[2];
       const float desired=std::atan2(-(targetX-x),-(targetZ-z));
-      actor.runtime.Face(desired,dt,actor.runtime.scriptLookTarget!=0);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
+      actor.runtime.Face(desired,dt,scriptedLook,actor.runtime.scriptLookRotateBody);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
     }
   }
 }

@@ -408,6 +408,20 @@ int main(int argc,char** argv) {
   DailyPackageRetirement();EndIdleRetirement();
   PackageCallbacks();
   {
+    auto actor=Actor(6);
+    auto catalog=gPlayerSession->player.Definitions();
+    catalog.pipboy.formNames["xmarkerheading"]=34;
+    auto& marker=catalog.pipboy.targets.at(60);
+    marker.base=34;marker.rz=1.7f;
+    catalog.pipboy.packages.at(50).location.radius=0;
+    gPlayerSession=std::make_unique<Session>(catalog);
+    actor.runtime.position=Q240ScenePosition({marker.x,marker.y,marker.z});
+    for(int frame=0;frame<60&&actor.runtime.procedure!=fo3npc::Procedure::Completed;++frame)
+      Q240UpdateNpcPackage(actor,frame*.05);
+    assert(actor.runtime.procedure==fo3npc::Procedure::Completed);
+    assert(std::fabs(fo3npc::Angle(actor.runtime.yaw-marker.rz))<.001f&&actor.runtime.returnYaw==actor.runtime.yaw);
+  }
+  {
     auto actor=Actor(6);actor.runtime.authoredMotionUntil=4;
     const auto position=actor.runtime.position;const float yaw=actor.runtime.yaw;
     for(int frame=0;frame<39;++frame){Q240UpdateNpcPackage(actor,frame*.1);assert(actor.runtime.position==position&&actor.runtime.yaw==yaw&&actor.runtime.speed==0);}

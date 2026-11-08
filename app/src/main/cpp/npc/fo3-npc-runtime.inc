@@ -275,18 +275,6 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     if (Q230BuildNpcActor(source, visual)) {
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
       Q230CacheRagdoll(visual,ragdollAssets,savedActors);
-      // Original differential targets are decoded on the scene worker, like
-      // the existing FaceGen/animation preparation, never during a draw.
-      for(const auto& part:visual.parts) {
-        const auto& path=part.placement.modelPath;
-        if(!fo3appearance::HeadPart(source,path)||visual.facialAssets.count(path))continue;
-        const auto dot=path.rfind('.');if(dot==std::string::npos)continue;
-        std::vector<uint8_t> bytes;auto tri=std::make_shared<fo3face::Tri>();std::string error;
-        if(LoadFalloutMeshFile(path.substr(0,dot)+".tri",bytes)&&fo3face::DecodeTri(bytes,*tri,error)) {
-          Q6H_LOGI("NPC TRI actor=%08X path=%s vertices=%u morphs=%zu",source.refFormId,path.c_str(),tri->vertices,tri->morphs.size());
-          visual.facialAssets.emplace(path,std::move(tri));
-        }else Q6H_LOGI("NPC TRI MISSING actor=%08X path=%s reason=%s",source.refFormId,path.c_str(),error.c_str());
-      }
 #endif
       float nearest=INFINITY;
       for(const auto& mesh:navigation->meshes) {
@@ -449,7 +437,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     fo3anim::Matrix headAttach=fo3anim::Identity();
     if(!part.mesh.skinned&&rig.rigidBone>=0)
       fo3appearance::HeadBindTransform(actor.skeleton,Q230PlacementMatrix(part.placement),headAttach,
-        fo3appearance::BoneLocalFacePart(actor.source,part.placement.modelPath));
+        fo3appearance::BoneLocalFacePart(actor.source,part.placement.modelPath,part.mesh.attachmentBone));
     for(size_t channel=0;channel<fo3face::MorphNames.size();++channel) {
       const auto morph=facial->second->morphs.find(fo3face::MorphNames[channel]);
       if(morph==facial->second->morphs.end())continue; // No invented target aliases.

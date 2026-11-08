@@ -61,6 +61,12 @@ int main(int argc,char** argv) {
   Put(sparse,10);for(char c:std::string("BlinkLeft"))sparse.push_back(c);sparse.push_back(0);Put(sparse,1);Put(sparse,1);
   assert(fo3face::DecodeTri(sparse,tri,error)&&tri.differentialCount==0&&tri.sparseCount==1);
   assert(tri.morphs.at("BlinkLeft")[1][2]==1&&tri.morphs.at("BlinkLeft")[1][0]==0);
+  std::vector<float> identity(12);
+  identity[5]=.25f;identity[11]=.75f;
+  assert(fo3face::DecodeTri(sparse,tri,error,&identity)&&tri.vertices==3&&tri.modifierVertices==1);
+  assert(tri.morphs.at("BlinkLeft")[1][2]==1.5f);
+  identity.pop_back();
+  assert(fo3face::DecodeTri(sparse,tri,error,&identity)&&tri.morphs.at("BlinkLeft")[1][2]==1);
   bad=sparse;bad.back()=127;assert(!fo3face::DecodeTri(bad,tri,error));
   bad=sparse;bad[64]=0xff;bad[65]=0xff;bad[66]=0xff;bad[67]=0x7f;assert(!fo3face::DecodeTri(bad,tri,error));
   if(argc>1) {

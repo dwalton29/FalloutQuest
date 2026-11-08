@@ -181,6 +181,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=(verb=="look"||verb=="stoplook")?CommandType::Look:CommandType::ScriptPackage;
       cmd.value=verb=="addscriptpackage"?1:0;
       if(verb!="stoplook"&&verb!="removescriptpackage"&&(!(in>>a)||!(cmd.index=form(a)))){error="invalid reference action argument";return false;}
+      if(verb=="look"&&in>>a&&(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1))){
+        error="invalid Look rotate-body flag";return false;
+      }
       if(verb=="removescriptpackage"){if(in>>a){if(!(cmd.index=form(a))){error="invalid package removal";return false;}}else in.clear();}
       if(!cmd.form){error="invalid reference action receiver";return false;}
     }
@@ -190,9 +193,14 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     }
     else if(op=="sayto"||op=="say"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="say"||op.substr(op.find('.')+1)=="sayto"))){
       cmd.type=CommandType::SayTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));cmd.index=fo3player::PlayerRef;
-      if(op=="sayto"||(op.size()>6&&op.substr(op.size()-6)==".sayto")){if(!(in>>a)||!(cmd.index=form(a))){error="invalid SayTo target";return false;}}
+      const bool sayTo=op=="sayto"||(op.size()>6&&op.substr(op.size()-6)==".sayto");
+      if(sayTo&&(!(in>>a)||!(cmd.index=form(a)))){error="invalid SayTo target";return false;}
       if(!(in>>a)||!(cmd.variable=form(a))){error="invalid speech topic";return false;}
       if(in>>a){if(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid speech subtitle flag";return false;}}else in.clear();
+      if(sayTo&&in>>a){
+        if(a!="0"&&a!="1"){error="invalid SayTo no-target-look flag";return false;}
+        cmd.noTargetLook=a=="1";
+      }
     } else if(op=="moveto"||op=="movetomarker"||
               (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="moveto"||op.substr(op.find('.')+1)=="movetomarker"))){
       cmd.type=CommandType::MoveTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));

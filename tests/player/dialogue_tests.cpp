@@ -261,7 +261,11 @@ static void PresentationAndOverride() {
   npc.speed=1;npc.animation=fo3npc::Animation::Walk;const float walkingYaw=npc.yaw;
   npc.Face(walkingYaw+1,.1f,true);assert(npc.animation==fo3npc::Animation::Walk&&npc.yaw==walkingYaw&&npc.headYaw>0);
   npc.speed=0;npc.dialogue=false;npc.returnYaw=npc.yaw;
-  npc.Face(npc.yaw+1,.1f,true);assert(npc.yaw!=walkingYaw&&npc.animation==fo3npc::Animation::TurnLeft);
+  npc.animation=fo3npc::Animation::Idle;
+  npc.Face(npc.yaw+1,.1f,true);
+  assert(npc.yaw==walkingYaw&&npc.headYaw>0&&npc.animation==fo3npc::Animation::Idle);
+  npc.Face(npc.yaw+1,.1f,true,true);
+  assert(npc.yaw!=walkingYaw&&npc.animation==fo3npc::Animation::TurnLeft);
   npc.BeginDialogue();npc.activity=fo3npc::Activity::Combat;npc.EndDialogue();assert(npc.activity==fo3npc::Activity::Combat);
   assert(!fo3npc::Interrupted(false,true,true,false,4));
   assert(fo3npc::Interrupted(false,true,true,false,6));assert(fo3npc::Interrupted(false,true,false,false,2));
