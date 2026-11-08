@@ -7,6 +7,8 @@ struct Sound {
   std::string path;
   float gain = 1;
   bool loop = false;
+  float nearDistance=0,farDistance=0;
+  float GainAt(float distance) const;
 };
 struct Object {
   uint32_t pickup = 0, open = 0, close = 0;
@@ -28,5 +30,6 @@ struct Catalog {
   uint32_t Footstep(uint32_t material, unsigned action) const;
 };
 bool SafePath(const std::string &path);
+bool IsLoadingScreenEffect(const std::string& path);
 bool LoadCatalog(const std::string &esm, Catalog &out, std::string &error);
 } // namespace fo3audio

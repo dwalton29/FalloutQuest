@@ -321,7 +321,7 @@ static bool DecodeProperty(const std::vector<uint8_t>& bytes,const NifHeader& h,
   }
   return !keys.remaining();
 }
-static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::Clip> &out) {
+static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::Clip> &out, bool allowOptionalEffects=false) {
   using namespace fo3anim;
   out.clear();
   NifHeader h;
@@ -349,11 +349,20 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
       if (strings[0] >= h.strings.size())
         return false;
       if(strings[2]>=h.strings.size())return false;
-      if(h.strings[strings[2]]!="NiTransformController"){
+      const auto& type=h.strings[strings[2]];
+      if(type!="NiTransformController"){
         PropertyTrack property;property.bone=h.strings[strings[0]];
-        if(DecodeProperty(bytes,h,interp,controller,h.strings[strings[2]],property))
+        if(DecodeProperty(bytes,h,interp,controller,type,property))
           clip.properties.push_back(std::move(property));
-        else ++clip.ignoredControllers;
+        else {
+          // World props can still run their authored rigid motion and visibility
+          // when their mesh morphs or particle emitter tuning are unavailable.
+          const bool optional=type=="NiGeomMorpherController"||
+              type=="NiPSysEmitterLifeSpanCtlr"||type=="NiPSysEmitterSpeedCtlr";
+          if(!allowOptionalEffects||!optional||controller>=h.numBlocks||
+             BlockType(h,controller)!=type||interp>=h.numBlocks||
+             BlockType(h,interp)!="NiFloatInterpolator")++clip.ignoredControllers;
+        }
         continue;
       }
       Track track;
@@ -418,10 +427,11 @@ bool fo3anim::DecodeClip(const std::vector<uint8_t> &bytes, Clip &out) {
 }
 
 bool fo3anim::DecodeObjectAnimation(const std::vector<uint8_t> &bytes, Skeleton &out,
-                               std::vector<int> &blockBones, std::vector<Clip> &clips) {
+                               std::vector<int> &blockBones, std::vector<Clip> &clips,
+                               bool allowOptionalEffects) {
   out = {}; blockBones.clear(); clips.clear();
   Skeleton hierarchy; std::vector<int> mapping; std::vector<Clip> sequences;
-  if (!DecodeHierarchy(bytes, hierarchy, &mapping) || !DecodeClips(bytes, sequences))
+  if (!DecodeHierarchy(bytes, hierarchy, &mapping) || !DecodeClips(bytes, sequences,allowOptionalEffects))
     return false;
   for (auto &clip : sequences) {
     // UI root transforms are part of the authored canvas, not actor root motion.

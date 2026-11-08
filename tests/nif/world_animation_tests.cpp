@@ -52,6 +52,27 @@ int main(int argc,char** argv){
     }
     std::cout<<"Original generic door editor branch hidden; ruined/metro/GNR activation geometry retained\n";return 0;
   }
+  if(argc==3&&std::string(argv[1])=="--cake"){
+    const std::string root=argv[2];std::vector<uint8_t> bytes;
+    assert(LoadFalloutMeshFile(root+"/birthdaycake01fx.nif",bytes,nullptr));
+    fo3anim::Skeleton hierarchy;std::vector<int> blocks;std::vector<fo3anim::Clip> clips;
+    assert(!fo3anim::DecodeObjectAnimation(bytes,hierarchy,blocks,clips));
+    assert(fo3anim::DecodeObjectAnimation(bytes,hierarchy,blocks,clips,true)&&clips.size()==1);
+    const auto& clip=clips.front();assert(clip.name=="Forward"&&clip.cycle==2);
+    fo3anim::Pose start,end;assert(fo3anim::Sample(hierarchy,clip,0,start));
+    assert(fo3anim::Sample(hierarchy,clip,(clip.stop-clip.start)/clip.frequency,end));
+    assert(start.global!=end.global);
+    const auto visible=std::find_if(clip.properties.begin(),clip.properties.end(),[](const auto& track){
+      return track.kind==fo3anim::PropertyKind::Visibility&&track.values.keys.size()>1;
+    });
+    assert(visible!=clip.properties.end());
+    std::vector<Fo3StaticNifMesh> meshes;
+    assert(LoadFo3StaticNifMeshes(root+"/birthdaycake01fx.nif",meshes,false,false,true)&&meshes.size()>1);
+    assert(LoadFalloutMeshFile(root+"/specialidle_cutcake.kf",bytes,nullptr));
+    fo3anim::Clip cutting;assert(fo3anim::DecodeClip(bytes,cutting)&&!cutting.tracks.empty()&&cutting.stop>cutting.start);
+    std::cout<<"Original cake rigid transforms and visibility, plus Andy's cutting KF, decode and sample\n";
+    return 0;
+  }
   if(argc==3&&std::string(argv[1])=="--vault"){
     const std::string root=argv[2];
     std::vector<uint8_t> bytes;

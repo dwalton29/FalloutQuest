@@ -106,6 +106,14 @@ int main(int argc, char **argv) {
               c.sounds.at(100).loop &&
               std::abs(c.sounds.at(100).gain - .316227f) < .0001f,
           "original filename loop and attenuation");
+    const auto& effect=c.sounds.at(100);
+    check(effect.nearDistance==100&&effect.farDistance==1100&&
+          std::abs(effect.GainAt(600)-effect.gain*.5f)<.0001f&&effect.GainAt(1100)==0,
+          "authored near and far distances attenuate local effects");
+    check(fo3audio::IsLoadingScreenEffect("sound/fx/ui/loadscreen/microfiche/cue.wav")&&
+          fo3audio::IsLoadingScreenEffect("Sound\\FX\\UI\\LoadScreen\\Initial\\cue.wav")&&
+          !fo3audio::IsLoadingScreenEffect("sound/fx/qst/qst_fadetowhite.wav"),
+          "loading effect path is distinct from quest audio");
     check(c.MusicForCell(400) == "music/explore/" &&
               c.AmbientForCell(400) == 100,
           "exterior music and authored acoustic loop");

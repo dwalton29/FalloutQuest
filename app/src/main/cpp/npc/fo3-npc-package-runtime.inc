@@ -451,11 +451,12 @@ static bool Q240MarkerIdleEligible(const Q230ActorVisual& actor,uint32_t idle) {
 static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,const std::array<float,3>& anchor,float radius) {
   const auto& f=actor.runtime.furniture;if(!f.scene)return SIZE_MAX;
   const auto& d=gPlayerSession->player.Definitions().pipboy;const auto* def=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
+  const bool child=def&&d.childRaces.count(def->race);
   std::vector<size_t> choices;
   for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];
     if(slot.reference==actor.runtime.sandboxBlockedTarget&&actor.aiLastUpdate<actor.runtime.sandboxBlockedUntil)continue;
     if(slot.sleep||(slot.idleMarker?(p.typeFlags&8u)||(p.flags&0x01000000u):(p.typeFlags&16u)))continue;
-    if(!slot.idleMarker&&(!slot.program||(def&&(d.childRaces.count(def->race)||(slot.marker.reference==17&&def->female)))))continue;
+    if(!slot.idleMarker&&((child?!slot.childProgram:!slot.program)||(def&&slot.marker.reference==17&&def->female)))continue;
     if(Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>radius)continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
     const auto owner=f.Pool()->owners.find(uint64_t(slot.reference)<<32);
@@ -1507,9 +1508,9 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   uint32_t packageId=0;std::array<float,3> anchor{};float radius=0;
   auto& state=actor.runtime;
   // A Must Complete travel package with an authored end idle owns its final
-  // action before OnChange. Retire it only after a valid clip really elapsed;
-  // missing clips never manufacture completion. Restored completion state
-  // replays the presentation action, without repeating its result script.
+  // action before OnChange. Wait for the clip to finish, or release the wait
+  // if its asset is unavailable. Restored completion state replays the
+  // presentation action without repeating its result script.
   const auto& definitions=gPlayerSession->player.Definitions().pipboy;
   const auto active=definitions.packages.find(actor.aiPackage);
   const auto delivered=gPlayerSession->player.Snapshot().actorPackageEvents.find(actor.source.refFormId);
@@ -1539,7 +1540,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     state.nextPackageEvaluation=0;state.procedure=fo3npc::Procedure::InvalidTarget;package=nullptr;
   }
   if(actor.runtime.furniture.Active()&&(actor.runtime.furniture.interrupted||!package||packageId!=actor.runtime.furniture.package)){
-    if(Q240AdvanceFurniture(actor,package,packageId,dt,now))return;
+    if(Q240AdvanceFurniture(actor,nullptr,0,dt,now))return;
   }
   if(!package) {
     if(!Q240PackageEvent(actor,0,false))return;

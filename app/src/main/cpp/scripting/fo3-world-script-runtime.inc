@@ -385,6 +385,17 @@ void Actions(){
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
             if(!DeliverFo3ScriptDefaultActivation(action.reference,action.flags))
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
+        }else if(action.kind==fo3script::ActionKind::SoundAt){
+            const auto source=SpeechContext(action.reference,fo3player::PlayerRef);
+            const auto& emitter=source.speaker;const auto& listener=source.target;
+            bool disabled=false;std::string error;
+            if(action.reference!=fo3player::PlayerRef&&
+               (!player.ReferenceDisabled(action.reference,disabled,error)||disabled))continue;
+            if(!emitter.cell||emitter.world!=listener.world||(!emitter.world&&emitter.cell!=listener.cell))continue;
+            const float dx=emitter.x-listener.x,dy=emitter.y-listener.y,dz=emitter.z-listener.z;
+            const float horizontal=std::hypot(dx,dy),yaw=gQ210Head[3];
+            const float pan=horizontal>0?(dx*std::cos(yaw)+dy*std::sin(yaw))/horizontal:0;
+            fo3audio::SoundAt(action.form,std::hypot(horizontal,dz),pan);
         }else if(action.kind==fo3script::ActionKind::ImageModifier){
             const auto i=player.Definitions().imageModifiers.find(action.form);
             if(i!=player.Definitions().imageModifiers.end()){modifiers.Apply(action.form,i->second,seconds);}

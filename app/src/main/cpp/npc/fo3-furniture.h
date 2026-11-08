@@ -108,11 +108,11 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       auto program=loadProgram(programs,enter,loop,exit);
       std::shared_ptr<const Program> child;
       if(eat&&includeChildren){
-        // ChildChairSit and ChildChairGetUp use the original marker types
-        // 12, 13 and 14 in their GetFurnitureMarkerID conditions.
+        // Select the KF by the raw NIF approach side. The IDLE condition's
+        // furniture marker ID is not the raw side code for child chairs.
         const char* begin=nullptr;const char* end=nullptr;
-        if(m.reference==12){begin="chairchildleftenter";end="chairchildleftexit";}
-        if(m.reference==13){begin="chairchildrightenter";end="chairchildrightexit";}
+        if(m.reference==11){begin="chairchildleftenter";end="chairchildleftexit";}
+        if(m.reference==12){begin="chairchildrightenter";end="chairchildrightexit";}
         if(m.reference==14){begin="chairchildforwardenter";end="chairchildforwardexit";}
         child=loadProgram(childPrograms,begin,"dynamicidlechairchildsit",end);
       }

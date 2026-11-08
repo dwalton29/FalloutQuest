@@ -47,7 +47,8 @@ static void OriginalVaultArrivals(const char* path){
     actor.runtime.yaw=-placement.rz;actor.stateRestored=true;return actor;
   };
   auto start=[&](uint16_t stage){
-    catalog.initial.pipboy.quests[quest].stage=stage;catalog.initial.pipboy.quests[quest].running=true;
+    auto& progress=catalog.initial.pipboy.quests[quest];
+    progress.stage=stage;progress.running=true;progress.stages={stage};
     catalog.initial.referenceEnabled[dad]=true;
     gPlayerSession=std::make_unique<Session>(catalog);gPlayerSession->player.RegisterOriginalActors();
   };
@@ -68,6 +69,28 @@ static void OriginalVaultArrivals(const char* path){
   packageTargets[0].aiLastUpdate=-1;
   for(unsigned tick=0;tick<2400&&!reached(packageTargets[0],speech);++tick)Q240UpdateNpcPackage(packageTargets[0],tick*.05);
   assert(reached(packageTargets[0],speech));
+  start(15);
+  auto& cakePlayer=gPlayerSession->player;
+  cakePlayer.SetScriptPlayerLocation(playerStart.x,playerStart.y,playerStart.z,playerStart.cell,0);
+  const auto andy=form("cg02andyref"),cut=form("cg02andycutcake"),cake=form("cg02cakeref");
+  auto registry=std::make_shared<fo3script::AnimationRegistry>();(*registry)[cake]={{"Forward",1,false}};
+  cakePlayer.SetScriptAnimationRegistry(registry);
+  packageTargets={place(andy,andy)};
+  auto& cutter=packageTargets.front();const auto originalRoot=cutter.runtime.position;
+  bool animated=false,cutting=false;
+  for(unsigned tick=0;tick<2400&&cakePlayer.Snapshot().pipboy.quests.at(quest).stage==15;++tick){
+    const double now=tick*.05;cakePlayer.SetScriptRuntimeClock(now,.05);Q240UpdateNpcPackage(cutter,now);
+    fo3script::Action action;
+    while(cakePlayer.PollScriptAction(action)){
+      if(action.kind==fo3script::ActionKind::PlayGroup&&action.reference==cake){assert(action.group=="forward");animated=true;}
+      if(action.kind==fo3script::ActionKind::PackageIdle&&action.reference==andy){
+        assert(cutter.aiPackage==cut&&action.form==form("cutcake"));cutting=true;
+        cutter.runtime.packageEndIdle=action.form;cutter.runtime.packageEndIdleUntil=now+.5;
+      }
+    }
+  }
+  assert(animated&&cutting&&cutter.runtime.position!=originalRoot&&cakePlayer.Snapshot().pipboy.quests.at(quest).stage==16);
+  std::cout<<"Original Andy path, cake PlayGroup and cut idle completion advance the party\n";
   start(80);
   const auto dadPhoto=form("cg02dadwaitforpicture"),jonasPhoto=form("cg02jonaswaitforpicture");
   const auto jonasStart=defs.packages.at(form("cg02jonaswaitinsidetargetrange")).location.value;

@@ -35,12 +35,11 @@ void Open(uint32_t base);
 void Close(uint32_t base);
 void Scroll();
 void SoundEvent(uint32_t soundForm);
+void SoundAt(uint32_t soundForm,float distance,float pan);
 void PreloadSound(uint32_t soundForm);
 void PreloadSound(const std::string& editorId);
 void MenuLoop(const std::string& editorId); // Dedicated UI loop, empty stops.
 void NamedSound(const std::string &editorId);
-void LoadingSound(const std::string& editorId);
-void StopLoadingSound();
 // Returns the original action index on a contact; -1 on frames without a step.
 int AdvancePlayerFootsteps(float distance,float dt,bool enabled,bool sneaking=false);
 void Footstep(uint32_t material,unsigned action);

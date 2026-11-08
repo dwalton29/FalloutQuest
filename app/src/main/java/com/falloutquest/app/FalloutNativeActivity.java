@@ -18,7 +18,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private HandlerThread thread;
     private Handler audio;
     private boolean resumed, focused, destroyed;
-    private MediaPlayer menuLoop, loadingEffect;
+    private MediaPlayer menuLoop;
     private final List<MediaPlayer> effects = new ArrayList<>();
     private final List<String> tracks = new ArrayList<>();
     private int track;
@@ -149,25 +149,30 @@ public final class FalloutNativeActivity extends NativeActivity {
     private boolean movieMuteWorld=false, moviePauseMusic=false;
     private float masterVolume=1, musicVolume=.3f, effectsVolume=1, voiceVolume=1, musicMultiplier=1;
     private final java.util.Map<MediaPlayer,Float> baseGains=new java.util.WeakHashMap<>();
+    private final java.util.Map<MediaPlayer,Float> effectPans=new java.util.WeakHashMap<>();
     private float scaled(MediaPlayer player,float gain) {
         if(player!=music&&movieMuteWorld)return 0;
         float channel=player==music?musicVolume:(dialoguePlayer(player)||player==broadcasts[0].player||player==broadcasts[1].player)?voiceVolume:effectsVolume;
         return Math.max(0,Math.min(1,gain*masterVolume*channel));
     }
     private void volume(MediaPlayer player,float gain) {
-        baseGains.put(player,gain);float v=scaled(player,gain);player.setVolume(v,v);
+        baseGains.put(player,gain);applyVolume(player,gain);
+    }
+    private void applyVolume(MediaPlayer player,float gain) {
+        float v=scaled(player,gain),pan=effectPans.getOrDefault(player,0f);
+        player.setVolume(v*(1-Math.max(0,pan)),v*(1+Math.min(0,pan)));
     }
     public void audioMovie(boolean muteWorld, boolean pauseMusic) {
         audio.post(() -> {
             movieMuteWorld=muteWorld;moviePauseMusic=pauseMusic;
-            for(java.util.Map.Entry<MediaPlayer,Float> e:baseGains.entrySet())try{float v=scaled(e.getKey(),e.getValue());e.getKey().setVolume(v,v);}catch(IllegalStateException ignored){}
+            for(java.util.Map.Entry<MediaPlayer,Float> e:baseGains.entrySet())try{applyVolume(e.getKey(),e.getValue());}catch(IllegalStateException ignored){}
             if(music!=null)try{if(pauseMusic&&music.isPlaying())music.pause();else if(!pauseMusic&&enabled())music.start();}catch(IllegalStateException ignored){}
             if(!pauseMusic)refresh();
         });
     }
     public void audioVolumes(float master,float music,float effects,float voice) {
         audio.post(() -> {masterVolume=master;musicVolume=music;effectsVolume=effects;voiceVolume=voice;
-            for(java.util.Map.Entry<MediaPlayer,Float> e:baseGains.entrySet())try{float v=scaled(e.getKey(),e.getValue());e.getKey().setVolume(v,v);}catch(IllegalStateException ignored){}
+            for(java.util.Map.Entry<MediaPlayer,Float> e:baseGains.entrySet())try{applyVolume(e.getKey(),e.getValue());}catch(IllegalStateException ignored){}
         });
     }
 
@@ -222,34 +227,14 @@ public final class FalloutNativeActivity extends NativeActivity {
             refresh();
         });
     }
-    public void audioEffect(String path, float gain) {
+    public void audioEffect(String path, float gain, float pan) {
         audio.post(() -> {
             if (!enabled() || path.isEmpty()) return;
             if (effects.size() >= 6) { MediaPlayer old = effects.remove(0); old.release(); }
-            MediaPlayer player = new MediaPlayer(); effects.add(player);
+            MediaPlayer player = new MediaPlayer(); effects.add(player);effectPans.put(player,pan);
             prepare(player, path, gain, false, () -> { effects.remove(player); player.release(); },
                     () -> effects.contains(player));
         });
-    }
-    private native boolean audioLoadingCurrent(long generation);
-    public void audioLoadingEffect(String path, float gain, long generation) {
-        audio.post(() -> {
-            if (!path.isEmpty() && !audioLoadingCurrent(generation)) return;
-            releaseLoadingEffect();
-            if (!enabled() || path.isEmpty()) return;
-            MediaPlayer player = new MediaPlayer(); loadingEffect = player;
-            prepare(player, path, gain, false, this::releaseLoadingEffect,
-                    () -> loadingEffect == player && audioLoadingCurrent(generation));
-            watchLoadingEffect(player, generation);
-        });
-    }
-    private void watchLoadingEffect(MediaPlayer player, long generation) {
-        if (loadingEffect != player) return;
-        if (!audioLoadingCurrent(generation)) releaseLoadingEffect();
-        else audio.postDelayed(() -> watchLoadingEffect(player, generation), 25);
-    }
-    private void releaseLoadingEffect() {
-        if (loadingEffect != null) { loadingEffect.release(); loadingEffect = null; }
     }
     public void audioMenuLoop(String path, float gain) {
         audio.post(() -> {
@@ -299,7 +284,6 @@ public final class FalloutNativeActivity extends NativeActivity {
                     if (p == music) { tracks.clear(); releaseMusic(); }
                     else if (p == ambience) { ambientPath = ""; releaseAmbience(); }
                     else if (p == menuLoop) { menuLoop = null; p.release(); }
-                    else if (p == loadingEffect) releaseLoadingEffect();
                     else if (!failBroadcast(p)) { effects.remove(p); p.release(); }
                 }
                 return true;
@@ -311,7 +295,6 @@ public final class FalloutNativeActivity extends NativeActivity {
                 if (player == music) { tracks.clear(); releaseMusic(); }
                 else if (player == ambience) { ambientPath = ""; releaseAmbience(); }
                 else if (player == menuLoop) { menuLoop = null; player.release(); }
-                else if (player == loadingEffect) releaseLoadingEffect();
                 else if (!failBroadcast(player)) { effects.remove(player); player.release(); }
             }
         }
@@ -319,7 +302,6 @@ public final class FalloutNativeActivity extends NativeActivity {
     private void releaseMusic() { if (music != null) { music.release(); music = null; } }
     private void releaseAmbience() { if (ambience != null) { ambience.release(); ambience = null; } }
     private void stopAll() {
-        releaseLoadingEffect();
         if (menuLoop != null) { menuLoop.release(); menuLoop = null; }
         for(DialogueVoice voice:voices)releaseDialogue(voice,true);
         releaseMusic(); releaseAmbience();

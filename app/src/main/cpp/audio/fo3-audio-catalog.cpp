@@ -3,6 +3,7 @@
 #include "data/fo3-esm-reader.h"
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <memory>
 namespace fo3audio {
 bool SafePath(const std::string &path) {
@@ -44,6 +45,19 @@ uint32_t Catalog::AmbientForCell(uint32_t id) const {
     return 0;
   auto s = spaces.find(c->second.space);
   return s == spaces.end() ? 0 : s->second;
+}
+bool IsLoadingScreenEffect(const std::string& path) {
+  constexpr char prefix[]="sound/fx/ui/loadscreen/";
+  if(path.size()<sizeof(prefix)-1)return false;
+  for(size_t i=0;i<sizeof(prefix)-1;++i){
+    const char c=path[i]=='\\'?'/':char(std::tolower(static_cast<unsigned char>(path[i])));
+    if(c!=prefix[i])return false;
+  }
+  return true;
+}
+float Sound::GainAt(float distance) const {
+  if(distance<=nearDistance||farDistance<=nearDistance)return gain;
+  return gain*std::clamp((farDistance-distance)/(farDistance-nearDistance),0.f,1.f);
 }
 bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   struct CloseFile {
@@ -130,6 +144,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           if (t == "FNAM" && (type == "SOUN" || type == "MUSC"))
             filename = fo3esm::ZString(p, len);
           if (type == "SOUN" && (t == "SNDX" || t == "SNDD") && len >= 12) {
+            sound.nearDistance=5.f*p[0];
+            sound.farDistance=100.f*p[1];
             sound.loop = (fo3esm::ReadU32(p + 4) & 16) != 0;
             int16_t attenuation = static_cast<int16_t>(fo3esm::ReadU16(p + 8));
             sound.gain =

@@ -805,15 +805,21 @@ void Q230PlayPackageIdle(Q230ActorVisual& actor,uint32_t idle,uint32_t packageFl
   actor.responseIdle=idle;actor.responseLastTime=-1;actor.runtime.packagePoseIdle=idle;
   actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
   const auto clip=actor.responseClips.find(idle);
-  if(clip==actor.responseClips.end()){Q6H_LOGW("PACKAGE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);return;}
-  const auto package=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
-  if(package!=gPlayerSession->player.Definitions().pipboy.packages.end()&&package->second.procedureIdles[1]==idle&&
-     clip->second.frequency>0&&clip->second.stop>clip->second.start){
+  const auto& packages=gPlayerSession->player.Definitions().pipboy.packages;
+  const auto package=packages.find(actor.aiPackage);
+  const double duration=clip!=actor.responseClips.end()&&clip->second.frequency>0&&clip->second.stop>clip->second.start?
+      (clip->second.stop-clip->second.start)/clip->second.frequency:0.;
+  if(package!=packages.end()&&package->second.procedureIdles[1]==idle){
     actor.runtime.packageEndIdle=idle;
-    actor.runtime.packageEndIdleUntil=actor.responseStarted+(clip->second.stop-clip->second.start)/clip->second.frequency;
+    actor.runtime.packageEndIdleUntil=actor.responseStarted+duration;
+  }
+  if(clip==actor.responseClips.end()){
+    actor.responseIdle=actor.runtime.packagePoseIdle=0;
+    Q6H_LOGW("PACKAGE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);
+    return;
   }
   actor.runtime.authoredMotionUntil=((packageFlags&4)||fo3anim::ControlsAccumulationRoot(clip->second))?
-    actor.responseStarted+(clip->second.stop-clip->second.start)/clip->second.frequency:0;
+    actor.responseStarted+duration:0;
 }
 void Q230DialogueResponseAnimation(Q230ActorVisual& actor,const fo3dialogue::Session& session){
   if(session.phase!=fo3dialogue::Phase::Speaking||(actor.responseToken==session.audioToken&&actor.responseInfo==session.info))return;

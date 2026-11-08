@@ -2452,9 +2452,6 @@ private:
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
             if(wasLoading)MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
-            const bool loadingAudioVisible=IsFo3LoadingVisible();
-            if((wasLoading||loadingAudioVisible_)&&!loadingAudioVisible)fo3audio::StopLoadingSound();
-            loadingAudioVisible_=loadingAudioVisible;
             if (wasLoading && !IsFo3LoadingVisible()) {
                 pendingPlayableGeneration=GetFo3LoadingGeneration();
                 fqloadprofile::Log("PRESENTATION_COMPLETE generation=%llu elapsedMs=%.1f sceneReady=%d worldObjects=%zu collisionReady=%d sceneLoadActive=%d",
@@ -3002,7 +2999,6 @@ private:
     fo3scene::ResidentInputBarrier residentInputBarrier_;
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
-    bool loadingAudioVisible_=false;
     float playerYaw_{0.0f};
     bool snapTurnLatched_{false};
     XrTime lastFrameTime_{0};

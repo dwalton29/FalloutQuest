@@ -122,7 +122,7 @@ bool DecodeClip(const std::vector<uint8_t> &bytes, Clip &out);
 // UI NIFs embed multiple sequences and animate an AVObject hierarchy, including
 // geometry. blockBones maps original NIF block IDs to that hierarchy.
 // World objects also retain visibility, material and emitter controller channels.
-bool DecodeObjectAnimation(const std::vector<uint8_t>&, Skeleton&,std::vector<int>&,std::vector<Clip>&);
+bool DecodeObjectAnimation(const std::vector<uint8_t>&, Skeleton&,std::vector<int>&,std::vector<Clip>&,bool allowOptionalEffects=false);
 bool DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &hierarchy,
                        std::vector<int> &blockBones, std::vector<Clip> &clips);
 } // namespace fo3anim

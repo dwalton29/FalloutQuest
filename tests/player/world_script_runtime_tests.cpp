@@ -68,6 +68,7 @@ void ConfigureFo3DialogueSession(fo3dialogue::Session& s){
 namespace fo3audio {
 uint32_t token=0,secondToken=0;uint64_t completion=0,secondCompletion=0;bool intercom=false;std::string path;std::vector<uint32_t> sounds;
 void SoundEvent(uint32_t id){sounds.push_back(id);}
+void SoundAt(uint32_t id,float,float){sounds.push_back(id);}
 void StopDialogueLane(unsigned lane){(lane?secondToken:token)=0;}
 void DialogueGain(float){}
 void ScriptDialogue(const std::string& p,uint32_t t,unsigned lane,bool filtered){
@@ -88,16 +89,25 @@ bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float
 static void OriginalIntercom(const char* path){
  fo3player::Catalog c;std::string error;Check(fo3player::LoadCatalog(path,c,error),"original intercom catalogue");
  const auto q=c.pipboy.formNames.at("cg02"),dad=c.pipboy.formNames.at("cg02dadref"),jonas=c.pipboy.formNames.at("cg02jonasref"),intercom=c.pipboy.formNames.at("cg02dinerintercomref"),package=c.pipboy.formNames.at("cg02dadtalktojonasonintercom");
- // Isolate the reached birthday intercom boundary; the full New Game test
- // reaches this same assignment through the unmodified quest timer.
- auto& quest=c.initial.pipboy.quests[q];quest.stage=35;quest.running=true;quest.stages.insert(35);c.initial.referenceEnabled[dad]=true;
+ // Start at the end of the original birthday timer and let GameMode
+ // assign the console's speaker and play the authored positional hail.
+ auto& quest=c.initial.pipboy.quests[q];quest.stage=34;quest.running=true;quest.stages={30,34};
+ c.initial.referenceEnabled[dad]=true;
+ c.initial.pipboy.dialogueVariables[fo3dialogue::VariableKey(c.pipboy,"CG02.runTimer")]=1;
  gPlayerSession=std::make_unique<fo3player::Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
- Check(p.SetTalkingActivatorActor(intercom,jonas),"original stage-35 assignment fixture");
  const auto& at=c.pipboy.targets.at(intercom);gCurrentCellFormId=at.cell;gExteriorWorldspaceQ1890=at.world;
  p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);gQ210Head[0]=at.x;gQ210Head[1]=at.z;gQ210Head[2]=-at.y;
  gQ230NpcActors.clear();ActorVisual actor;actor.source={dad,c.pipboy.targets.at(dad).base};actor.aiPackage=package;actor.runtime.position={at.x,at.y,at.z};gQ230NpcActors.push_back(actor);
  actor.source={jonas,c.pipboy.targets.at(jonas).base};actor.runtime.offScene=true;gQ230NpcActors.push_back(actor);++gQ230NpcResidenceRevision;
- fo3worldscript::SpeechTick();Check(fo3worldscript::PackageEvent(dad,package,false),"original intercom package start");
+ fo3worldscript::SpeechTick();
+ auto publish=[](auto plan){return !plan->HasReferenceChanges()&&gPlayerSession->player.CommitScriptTransaction(*plan);};
+ p.SetScriptRuntimeClock(1,.1);p.PumpWorldAwareGameMode(.1,{},publish);
+ Check(p.TalkingActivatorActor(intercom)==jonas&&p.Snapshot().pipboy.quests.at(q).stage==35,"original timer assigns intercom speaker");
+ const auto before=fo3audio::sounds.size();
+ p.SetScriptRuntimeClock(1.1,.1);p.PumpWorldAwareGameMode(.1,{},publish);fo3worldscript::Actions();
+ Check(fo3audio::sounds.size()==before+1&&fo3audio::sounds.back()==c.pipboy.formNames.at("objintercomhail")&&
+   p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(c.pipboy,"CG02.timer"))==3,"original PlaySound3D hails and rearms the timer");
+ Check(fo3worldscript::PackageEvent(dad,package,false),"original intercom package start");
  Check(p.QueueScriptSpeech(dad,c.pipboy.packages.at(package).dialogueTopic,intercom,true,false,package),"original intercom selected topic");
  fo3worldscript::Actions();fo3worldscript::SpeechTick();std::unordered_set<uint32_t> infos;unsigned responses=0;
  while(fo3worldscript::speechLanes[0].dialogue.Active()){

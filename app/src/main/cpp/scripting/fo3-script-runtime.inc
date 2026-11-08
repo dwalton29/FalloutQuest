@@ -611,6 +611,15 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::RemoveImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::RemoveImageModifier;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::ImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::ImageModifier;action.reference=owner;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
+    case C::PlaySound3D:{
+      fo3pipdata::Location location;
+      ok=catalog_->pipboy.sounds.count(c.form)&&ScriptReferenceLocation(c.index,location);
+      if(ok){
+        fo3script::Action action;action.kind=fo3script::ActionKind::SoundAt;
+        action.reference=c.index;action.form=c.form;ok=QueueScriptAction(std::move(action));
+      }
+      break;
+    }
     case C::AddTopic:if(!catalog_->pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
     default:ok=false;break;
     }

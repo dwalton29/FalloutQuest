@@ -389,6 +389,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       // Unentered character-generation branches do not execute them; entered
       // branches still reject the entire transaction explicitly.
       cmd.type=CommandType::Unavailable;cmd.expression=op;
+    } else if(op=="playsound3d"||(op.size()>12&&op.compare(op.size()-12,12,".playsound3d")==0)) {
+      cmd.type=CommandType::PlaySound3D;
+      cmd.index=op=="playsound3d"?owner:form(op.substr(0,op.size()-12));
+      if(!cmd.index||!(in>>a)||(cmd.form=form(a))==0){error="invalid PlaySound3D receiver or sound";return false;}
     } else if(op=="playsound") {
       cmd.type=CommandType::PlaySound;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}

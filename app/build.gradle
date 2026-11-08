@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 327
-        versionName '0.176.0-vault-birthday-routing'
+        versionCode 328
+        versionName '0.177.0-vault-party-sequences'
 
         ndk {
             abiFilters 'arm64-v8a'

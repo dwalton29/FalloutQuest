@@ -339,10 +339,43 @@ static void OriginalIntercomApproach(const fo3player::Catalog& original,const ch
   for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
   gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();assert(p.SetTalkingActivatorActor(c.pipboy.formNames.at("cg02dinerintercomref"),c.pipboy.formNames.at("cg02jonasref")));
   p.SetScriptPlayerLocation(marker.x,marker.y,marker.z,marker.cell,marker.world);
-  Q230ActorVisual actor;actor.source.refFormId=ref;actor.source.baseFormId=c.pipboy.targets.at(ref).base;actor.navigationGraph=graph;actor.runtime.position=Q240ScenePosition({marker.x,marker.y,marker.z});
-  for(unsigned n=0;n<1200&&actor.aiPackage!=conversation;++n)Q240UpdateNpcPackage(actor,n*.05);
-  assert(actor.aiPackage==conversation&&!p.CanStartDailyPackage(ref,travel));
-  std::cout<<"Original Dad intercom Travel reaches completion and selects conversation through Once Per Day scheduling\n";
+  const auto& start=c.pipboy.targets.at(ref);
+  Q230ActorVisual actor;actor.source.refFormId=ref;actor.source.baseFormId=start.base;actor.navigationGraph=graph;
+  actor.runtime.position=Q240ScenePosition({start.x,start.y,start.z});actor.runtime.yaw=-start.rz;
+  gQ230NpcActors={actor};
+  fo3script::Action action;
+  bool queued=false;
+  for(unsigned n=0;n<1200&&!queued;++n){
+    Q240UpdateNpcPackage(gQ230NpcActors.front(),n*.05);
+    while(p.PollScriptAction(action))if(action.kind==fo3script::ActionKind::Conversation){queued=true;break;}
+  }
+  assert(queued&&action.package==conversation&&!p.CanStartDailyPackage(ref,travel));
+  std::cout<<"Original Dad intercom Travel and conversation reach the authored console and queue Jonas speech\n";
+
+  auto& party=c.initial.pipboy.quests[q];party.stage=20;party.stages={5,6,7,8,10,12,15,16,20};
+  const auto butch=c.pipboy.formNames.at("cg02butchref"),find=c.pipboy.formNames.at("cg02butchfindplayer");
+  const auto sit=c.pipboy.formNames.at("cg02butchsit");
+  c.initial.referenceEnabled[ref]=true;
+  gPlayerSession=std::make_unique<Session>(c);auto& birthday=gPlayerSession->player;birthday.RegisterOriginalActors();
+  const auto& boy=c.pipboy.targets.at(butch);const auto& playerAt=c.pipboy.targets.at(c.pipboy.formNames.at("cg02playerstartmarker"));
+  birthday.SetScriptPlayerLocation(playerAt.x,playerAt.y,playerAt.z,playerAt.cell,playerAt.world);
+  gQ210Head=Q240ScenePosition({playerAt.x,playerAt.y,playerAt.z});
+  auto seat=std::make_shared<fo3furniture::Scene>();auto program=std::make_shared<fo3furniture::Program>();
+  program->exit.stop=.1f;auto& slot=seat->slots.emplace_back();slot.childProgram=program;
+  slot.alignment[12]=boy.x;slot.alignment[13]=boy.y;slot.alignment[14]=boy.z;
+  actor={};actor.source.refFormId=butch;actor.source.baseFormId=boy.base;actor.navigationGraph=graph;
+  actor.runtime.position=Q240ScenePosition({boy.x,boy.y,boy.z});
+  actor.aiPackage=actor.runtime.package=sit;actor.runtime.packageKnown=true;
+  actor.runtime.furniture.scene=seat;actor.runtime.furniture.child=true;actor.runtime.furniture.slot=0;
+  actor.runtime.furniture.package=sit;actor.runtime.furniture.phase=fo3furniture::Phase::Loop;
+  gQ230NpcActors={actor};gDialogue={};gDialogueEligibility.clear();
+  assert(Q230ChatEligible(gQ230NpcActors.front(),fo3player::PlayerRef,find));
+  assert(!Q230ChatBegin(butch,fo3player::PlayerRef,0));
+  for(unsigned n=0;n<1200&&!gDialogue.Active();++n)Q240UpdateNpcPackage(gQ230NpcActors.front(),n*.05);
+  assert(gDialogue.Active()&&gDialogue.actor==butch&&gQ230NpcActors.front().aiPackage==find&&
+         !gQ230NpcActors.front().runtime.furniture.Active());
+  EndFo3Dialogue("authored birthday greeting fixture");
+  std::cout<<"Original Butch leaves furniture for his sweetroll greeting\n";
 }
 static void OriginalBirthdayRelease(const fo3player::Catalog& original){
   const auto q=original.pipboy.formNames.at("cg02"),dad=original.pipboy.formNames.at("cg02dadref"),radio=original.pipboy.formNames.at("radiovault101ref");

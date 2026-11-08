@@ -396,7 +396,7 @@ std::shared_ptr<const fo3dooranim::Asset> LoadFo3ObjectAnimation(const std::stri
     Ptr result;std::vector<uint8_t> bytes;
     if(LoadFalloutMeshFile(model,bytes,nullptr)){
         fo3dooranim::Asset asset;
-        if(fo3anim::DecodeObjectAnimation(bytes,asset.hierarchy,asset.blockBones,asset.clips)){
+        if(fo3anim::DecodeObjectAnimation(bytes,asset.hierarchy,asset.blockBones,asset.clips,true)){
             for(auto& bone:asset.hierarchy.bones)if(bone.parent<0)bone.bind={};
             if(fo3anim::FinalizeSkeleton(asset.hierarchy))result=std::make_shared<const fo3dooranim::Asset>(std::move(asset));
         }

@@ -22,6 +22,28 @@ int main(int argc,char** argv){
  for(int k=0;k<3;++k)assert(std::abs(end.global[1][12+k]-loop.global[1][12+k])<.0001f);
  test.loop.tracks.clear();test.Prepare();assert(test.loopHeading==0); // Unrelated/sparse programs get no invented turn.
  if(argc<3){std::cout<<"Furniture continuation frame and accumulated pivot tests passed\n";return 0;}
+ if(std::string(argv[1])=="--children"){
+  const std::string base=argv[2];
+  fo3anim::Skeleton skeleton;assert(fo3anim::DecodeSkeleton(Read(base+"/skeleton.nif"),skeleton));
+  fo3pipdata::Definitions definitions;definitions.furniture[1]={"dinerbooth01.nif","",0x40000003,true};
+  auto& placement=definitions.targets[2];placement.cell=3;placement.base=1;placement.scale=1;
+  const std::pair<const char*,const char*> clips[]={
+    {"chairchildleftenter","chairchild_leftenter.kf"},{"chairchildrightenter","chairchild_rightenter.kf"},
+    {"chairchildleftexit","chairchild_leftexit.kf"},{"chairchildrightexit","chairchild_rightexit.kf"},
+    {"dynamicidlechairchildsit","dynamicidle_chairchildsit.kf"}};
+  uint32_t id=10;for(const auto& [name,path]:clips){definitions.formNames[name]=id;definitions.idleModels[id++]=path;}
+  const auto scene=fo3furniture::BuildScene(definitions,3,0,[&](const std::string& path,auto& bytes){bytes=Read(base+"/"+path);return !bytes.empty();},true,nullptr,true);
+  assert(scene->slots.size()==2);
+  const auto facing=[&](const auto& slot){
+    assert(slot.childProgram&&slot.childProgram->Valid());const auto& clip=slot.childProgram->enter;
+    const auto pose=Sample(skeleton,clip,(clip.stop-clip.start)/clip.frequency);
+    return fo3anim::Multiply(slot.alignment,pose.global.at(fo3anim::FindBone(skeleton,"Bip01 NonAccum")));
+  };
+  const auto left=facing(scene->slots.front()),right=facing(scene->slots.back());
+  CloseRotation(left,right,.01f);assert(left[12]<0&&right[12]>0);
+  std::cout<<"Original child KFs from both diner booth approaches face the same table direction\n";
+  return 0;
+ }
  const std::string base=argv[2];fo3anim::Skeleton skeleton;assert(fo3anim::DecodeSkeleton(Read(argv[1]),skeleton));
  struct Case{const char* model;const char* enter;const char* loop;const char* exit;unsigned marker;};
  const Case cases[]={
