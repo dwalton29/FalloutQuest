@@ -58,7 +58,7 @@ static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference
   if(reference==fo3player::PlayerRef){
     if(!initiator.runtime.CanTalk()||(initiator.source.creature&&!(initiator.source.actorBaseFlags&0x200000u))||
        gPlayerSession->player.ActorHealth(initiator.source.refFormId)<=0)return false;
-    if(!package)return DialogueCanStart(const_cast<Q230ActorVisual&>(initiator));
+    if(!package)return !initiator.runtime.furniture.Active()&&DialogueCanStart(const_cast<Q230ActorVisual&>(initiator));
     auto context=DialogueContext(initiator);
     context.speaker.package=package;context.speaker.packageKnown=true;
     fo3dialogue::Session candidate;Q230PrepareNpcChat(candidate);
@@ -96,7 +96,6 @@ static void Q230ChatStop(const char* reason) {
 static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
   if(gQ230NpcChat.Active()||!gPlayerSession||gDialogue.Active())return false;
   auto* initiator=DialogueActor(speaker);
-  if(initiator&&initiator->runtime.furniture.Active())return false;
   if(initiator){const auto& definitions=gPlayerSession->player.Definitions().pipboy;const auto definition=definitions.packages.find(initiator->aiPackage);
     if(definition!=definitions.packages.end()&&(definition->second.dialogueType==1||definition->second.dialogueTopic)){
       if(!Q230ChatEligible(*initiator,listener,initiator->aiPackage))return false;

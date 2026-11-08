@@ -326,6 +326,7 @@ static void IntercomPackageAdmission(){
   assert(!Q230ChatEligible(gQ230NpcActors.front(),400,50));
   assert(p.SetTalkingActivatorActor(400,500));
   std::array<float,3> point;assert(Q240PackageActorTarget(gQ230NpcActors.front(),400,point));
+  gQ230NpcActors.front().runtime.furniture.phase=fo3furniture::Phase::Loop;
   assert(Q230ChatEligible(gQ230NpcActors.front(),400,50)&&Q230ChatBegin(42,400,1));
   fo3script::Action action;assert(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::Conversation&&action.package==50&&action.flags==400&&action.form==80);
   auto done=p.PreparePackageEventTransaction(42,50,true,error);assert(done&&p.CommitScriptTransaction(*done));
