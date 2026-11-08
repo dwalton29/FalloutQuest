@@ -46,6 +46,14 @@ static bool CanRemoveFo3DialogueInventory(uint32_t reference){
   for(const auto& object:gObjects)if(object.refFormId==reference&&(object.q230NpcActor||object.physicalWeapon||object.q2400SwingDoor||object.baseRecordType=="FURN"))return false;
   return true;
 }
+static bool Fo3RetainedRadioResult(const fo3player::Player& player,
+                                   const fo3player::ScriptTransactionPlan& plan){
+    const auto& changed=plan.AffectedReferences();
+    const auto& transmitters=player.Definitions().pipboy.transmitters;
+    return !changed.empty()&&std::all_of(changed.begin(),changed.end(),[&](uint32_t ref){
+        return gFo3RetainedRadios.count(ref)&&transmitters.count(ref);
+    });
+}
 bool PreviewFo3DialogueReferences(const fo3player::Player& player,
     const fo3player::ScriptTransactionPlan& plan,std::string& error) {
   if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp())){
@@ -53,6 +61,7 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
   }
   std::vector<uint32_t> live;
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890))return !Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active;
+  if(Fo3RetainedRadioResult(player,plan))return !Fo3ResidentAssetLaneBlocked();
   for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
   for(const auto& object:gObjects)live.push_back(object.refFormId);
   return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error)||
@@ -87,6 +96,31 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
     }
     gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(snapshot);
     Q6H_LOGI("SCRIPT CELL HANDOFF queued canonical state and reference snapshot for full scene load");return true;
+  }
+  if(Fo3RetainedRadioResult(player,plan)){
+    auto snapshot=plan.CandidateReferences();
+    auto hidden=gFo3DormantRadios;
+    const auto apply=[&](uint32_t ref,bool enabled){
+      Fo3DoorCollisionPose pose;pose.enabled=enabled;
+      return SetFo3ScriptCollisionPose(ref,pose);
+    };
+    for(const auto ref:plan.AffectedReferences()){
+      if(snapshot->Enabled(ref,false))hidden.erase(ref);
+      else hidden.insert(ref);
+    }
+    const auto& affected=plan.AffectedReferences();
+    auto next=affected.begin();
+    for(;next!=affected.end();++next)
+      if(!apply(*next,!hidden.count(*next)))break;
+    if(next!=affected.end()||!player.CommitScriptTransaction(plan)){
+      for(auto i=affected.begin();i!=next;++i)apply(*i,!gFo3DormantRadios.count(*i));
+      error="retained radio collision or reference publication failed";return false;
+    }
+    gFo3DormantRadios.swap(hidden);
+    gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(std::move(snapshot));
+    gFo3VisualPublication.Changed();gShadowDirtyQ1050=true;
+    Q6H_LOGI("SCRIPT RADIO PUBLISHED IN PLACE refs=%zu",affected.size());
+    return true;
   }
   auto removed=gFo3ScriptRemovedItems;
   std::string removalError;

@@ -162,7 +162,7 @@ struct LootList {
 struct ActorState {
   uint32_t cell=0,world=0,package=0,sequence=0,hostile=0;
   std::array<float,3> position{};
-  float yaw=0,packageWaitSeconds=0;
+  float yaw=0,packageWaitSeconds=0; // OpenXR scene yaw for actor poses.
   uint64_t equippedWeapon=0;
   bool dead=false;
   std::shared_ptr<const CorpsePose> corpse;
@@ -759,7 +759,7 @@ public:
   float LockSetting(const std::string& key,float fallback) const;
   bool CanOpenDoor(uint32_t reference) const;
   bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
-  bool CanScriptActivateDoor(uint32_t reference) const;
+  bool CanScriptActivateDoor(uint32_t reference,uint32_t actor=PlayerRef) const;
   bool CanScriptActivateContainer(uint32_t reference) const;
   bool OpenScriptContainer(uint32_t reference);
   bool QueueScriptDefaultActivate(uint32_t reference,uint32_t activator);

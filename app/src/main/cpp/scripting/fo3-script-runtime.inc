@@ -21,7 +21,7 @@ class Expression {
     if(syntaxOnly){
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
-      if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getav"||
+      if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
          query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
@@ -62,6 +62,14 @@ class Expression {
       value=p.ItemCount(id);return true;
     }
     const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    if(query=="getisreference"){
+      const auto caller=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing reference identity");
+      const auto expected=form(tokens[at++]);
+      const auto reference=[&](uint32_t id){return id==fo3player::PlayerRef||p.Definitions().references.count(id);};
+      if(!reference(caller)||!reference(expected))return Fail("unresolved reference identity");
+      value=caller==expected;return true;
+    }
     if(query=="getinfaction"||query=="getfactionrank"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing faction query");
@@ -916,11 +924,12 @@ void Player::FinishScriptAnimation(uint32_t reference,const std::string& group){
   scriptAnimations_.erase(playing);++scriptEffectRevision_;
 }
 bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
-  if(reference!=scriptReference_||activator!=PlayerRef)return false;
-  if(!CanScriptActivateDoor(reference)){
-    if(!CanScriptActivateContainer(reference)||!PrepareInventory(reference,false))return false;
+  if(reference!=scriptReference_)return false;
+  if(!CanScriptActivateDoor(reference,activator)){
+    if(activator!=PlayerRef||!CanScriptActivateContainer(reference)||!PrepareInventory(reference,false))return false;
   }
-  fo3script::Action action;action.kind=fo3script::ActionKind::DefaultActivate;action.reference=reference;
+  fo3script::Action action;action.kind=fo3script::ActionKind::DefaultActivate;
+  action.reference=reference;action.flags=activator;
   return QueueScriptAction(std::move(action));
 }
 bool Player::QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon){
@@ -1143,7 +1152,7 @@ bool Player::ScriptReferenceLocation(uint32_t id,fo3pipdata::Location& out)const
   const auto actor=state_.actors.find(id);
   if(actor!=state_.actors.end()){const auto& a=actor->second;out={a.cell,a.world,a.position[0],a.position[1],a.yaw};return true;}
   const auto placed=catalog_->pipboy.targets.find(id);if(placed==catalog_->pipboy.targets.end())return false;
-  const auto& p=placed->second;out={p.cell,p.world,p.x,p.y,p.rz};return true;
+  const auto& p=placed->second;out={p.cell,p.world,p.x,p.y,-p.rz};return true;
 }
 bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
   const auto placed=catalog_->actorPlacements.find(reference);

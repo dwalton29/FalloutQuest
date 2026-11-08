@@ -38,7 +38,6 @@ bool ResolveFo3DoorTeleportQ1700(uint32_t,Fo3DoorTeleport* out){*out=defaultTele
 bool QueueFo3DoorTransitionQ1700(uint32_t source,uint32_t destination,float x,float y,float z,float,float,float){Check(x==100&&y==200&&z==300,"original default arrival passed through");++defaultTransitions;defaultSource=source;defaultDestination=destination;return true;}
 bool Q2400ToggleInteriorDoor(uint32_t,float,float){localOpen=!localOpen;return true;}
 bool Q2400DoorOpen(uint32_t){return localOpen;}
-#include "world/interaction/fo3-script-default-activation.inc"
 struct ActorVisual {
   struct Source{uint32_t refFormId=0,baseFormId=0;}source;
   fo3npc::RuntimeState runtime;uint32_t aiPackage=0,responseIdle=0,responseToken=0,responseInfo=0;uint64_t lastFrame=0;
@@ -46,6 +45,9 @@ struct ActorVisual {
 std::vector<ActorVisual> gQ230NpcActors;
 uint64_t gQ230NpcResidenceRevision=0;
 ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
+bool Q2400FindSwingDoorObject(uint32_t){return !defaultTeleport.valid;}
+namespace fo3audio {void Open(uint32_t){}}
+#include "world/interaction/fo3-script-default-activation.inc"
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
 void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
 void Q230PlayPackageIdle(ActorVisual& a,uint32_t idle,uint32_t){a.responseIdle=idle;}

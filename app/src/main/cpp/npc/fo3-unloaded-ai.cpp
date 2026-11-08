@@ -124,7 +124,7 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
       // One authored CELL hop per in-game minute. No off-screen NAVM/door
       // animation or guarantee of detailed pathfinding in an unloaded CELL.
       next.cell=edge->destinationCell;next.world=edge->destinationWorld;
-      next.position=edge->arrival;next.yaw=edge->rotation[2];
+      next.position=edge->arrival;next.yaw=-edge->rotation[2];
       next.sequence=0;next.packageWaitSeconds=0;
     }
     if(next.cell==state.cell&&next.world==state.world&&next.package==state.package)continue;

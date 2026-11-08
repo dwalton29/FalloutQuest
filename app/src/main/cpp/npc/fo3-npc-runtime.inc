@@ -48,7 +48,9 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
       if(speaker)for(const auto& response:info.responses)if(response.speakerAnimation)idles.insert(response.speakerAnimation);
     }
     if(const auto* definition=fo3pipdata::ActorCategory(*d,actor.source.baseFormId,16))for(uint32_t package:definition->packages){
-      const auto found=d->packages.find(package);if(found!=d->packages.end())for(uint32_t idle:found->second.procedureIdles)if(idle)idles.insert(idle);
+      const auto found=d->packages.find(package);if(found==d->packages.end())continue;
+      for(uint32_t idle:found->second.procedureIdles)if(idle)idles.insert(idle);
+      for(uint32_t idle:found->second.idleAnimations)if(idle)idles.insert(idle);
     }
     for(uint32_t id:idles){
       if(actor.responseClips.count(id)||d->idleAnimationObjects.count(id))continue;
@@ -237,7 +239,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   }
   std::shared_ptr<fo3furniture::Scene> furniture;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-  if(defs)furniture=fo3furniture::BuildScene(*defs,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true,&navCells);
+  if(defs)furniture=fo3furniture::BuildScene(*defs,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true,&navCells,true);
 #endif
   // ACHR/ACRE FormIDs are identity keys, even when the authored CELL and
   // relocated-XTEL admission enumerate the same reference. Duplicate rig
@@ -267,7 +269,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
         // Use the canonical arrival root when constructing the new rig;
         // later Q230SimulateActor restores its package and remaining state.
         source.x=pose.position[0];source.y=pose.position[1];source.z=pose.position[2];
-        source.rz=pose.yaw;
+        source.rz=-pose.yaw; // Saved actor headings use scene yaw, opposite ACHR DATA.rz.
       }
     }
 #endif
@@ -617,7 +619,9 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const auto responseClip=actor.responseClips.find(actor.responseIdle);
   const double responseNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
   const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&(actor.runtime.packagePoseIdle==actor.responseIdle||fo3npc::RetainsResponsePose(responseClip->second)||responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency);
-  const bool furniturePose=!responsePose&&slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
+  const auto* program=furniture.SelectedProgram();
+  const bool furniturePose=!responsePose&&slot&&(slot->idleMarker||program)&&
+      (furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
   if(responsePose){
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
     const double keyTime=(responseNow-actor.responseStarted)*responseClip->second.frequency+responseClip->second.start;
@@ -628,10 +632,10 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     if(!fo3anim::Sample(actor.skeleton,responseClip->second,responseNow-actor.responseStarted,actor.pose,&timings,
       fo3anim::ControlsAccumulationRoot(responseClip->second)?fo3anim::RootPolicy::Furniture:fo3anim::RootPolicy::Locomotion))return;
   }else if(furniturePose){
-    const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
+    const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?program->enter:furniture.phase==fo3furniture::Phase::Exit?program->exit:program->loop;
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
-    const auto root=!slot->idleMarker&&furniture.phase==fo3furniture::Phase::Loop?slot->program->LoopRoot(furniture.retainedRoot):furniture.retainedRoot;
+    const auto root=!slot->idleMarker&&furniture.phase==fo3furniture::Phase::Loop?program->LoopRoot(furniture.retainedRoot):furniture.retainedRoot;
     if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&root))return;
   }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
   actor.basePriorities=actor.pose.priorities;

@@ -477,7 +477,7 @@ bool Player::MoveActorTo(uint32_t reference,uint32_t destination,const std::arra
   ActorState moved;const auto old=state_.actors.find(reference);
   if(old!=state_.actors.end())moved=old->second;
   moved.cell=target->second.cell;moved.world=target->second.world;
-  moved.position={target->second.x,target->second.y,target->second.z};moved.yaw=target->second.rz;
+  moved.position={target->second.x,target->second.y,target->second.z};moved.yaw=-target->second.rz;
   const auto live=state_.actors.find(destination);
   if(live!=state_.actors.end()){moved.cell=live->second.cell;moved.world=live->second.world;moved.position=live->second.position;moved.yaw=live->second.yaw;}
   for(size_t i=0;i<3;++i)moved.position[i]+=offset[i];

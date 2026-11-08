@@ -39,34 +39,43 @@ static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,fl
   }
   if(Q230MovingDoorBlocks(origin,{dx,dy,dz},step))return true;
   auto& pending=actor.runtime.navigationDoor;
-  auto trace=[&](Fo3WorldSurfaceHit& hit){
-    // Interaction rays exclude a centimetre at the end. At headset frame
-    // rates that can discard the entire movement step.
-    return TraceFo3WorldSurface(origin[0],origin[1],origin[2],dx,dy,dz,
-        std::min(segment,step+.01f),actor.source.refFormId,0,&hit);
-  };
   if(pending) {
     const auto state=gQ2400InteriorDoors.find(pending);
     if(state!=gQ2400InteriorDoors.end()&&Q230DoorMoving(state->second))return true;
     pending=0;
   }
-  Fo3WorldSurfaceHit hit;
-  if(!trace(hit))return false;
-  if(!hit.reference||!Q2400FindSwingDoorObject(hit.reference)||gExteriorWorldspaceQ1890||
-     Q230DoorSettledOpen(hit.reference))return true;
-  const auto door=gQ2400InteriorDoors.find(hit.reference);
-  if(door!=gQ2400InteriorDoors.end()&&Q230DoorMoving(door->second))return true;
   const double now=std::max(0.,actor.aiLastUpdate);
-  if(now<actor.runtime.nextDoorQuery)return true;
+  const bool reach=!gExteriorWorldspaceQ1890&&now>=actor.runtime.nextDoorProbe;
+  if(reach)actor.runtime.nextDoorProbe=now+.25;
+  // Look ahead to arm's reach along the current route. The nearest surface
+  // still decides access, and a wall outside the step does not stop movement.
+  const float stepTrace=step+.01f;
+  const float distance=std::min(segment,reach?std::max(stepTrace,.55f):stepTrace);
+  Fo3WorldSurfaceHit hit;
+  if(!TraceFo3WorldSurface(origin[0],origin[1],origin[2],dx,dy,dz,
+                          distance,actor.source.refFormId,0,&hit))return false;
+  const bool blocked=hit.distance<stepTrace;
+  if(gExteriorWorldspaceQ1890||now<actor.runtime.nextDoorQuery||!hit.reference||
+     !Q2400FindSwingDoorObject(hit.reference)||Q230DoorSettledOpen(hit.reference))return blocked;
+  const auto door=gQ2400InteriorDoors.find(hit.reference);
+  if(door!=gQ2400InteriorDoors.end()&&Q230DoorMoving(door->second))return blocked;
+  if(!gPlayerSession)return blocked;
+  auto& player=gPlayerSession->player;
+  const auto id=actor.source.refFormId;
   actor.runtime.nextDoorQuery=now+.5;
   pending=hit.reference;
-  if(!gPlayerSession||!gPlayerSession->player.CanActorOpenDoor(actor.source.refFormId,pending)) {
-    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"NPC door lock/key/script access denied ref="+std::to_string(pending));pending=0;return true;
+  if(player.HasReferenceEvent(pending,"OnActivate")&&player.CanScriptActivateDoor(pending,id)){
+    fo3worldscript::Event(pending,"OnActivate",id,false);
+    return blocked;
+  }
+  if(!player.CanActorOpenDoor(id,pending)){
+    Q240AiLogOnce(id,actor.aiPackage,"NPC door access denied ref="+std::to_string(pending));
+    pending=0;return blocked;
   }
   if(Q2400ToggleInteriorDoor(pending,origin[0],origin[2])) {
     const auto ref=gPlayerSession->player.Definitions().references.find(pending);
     if(ref!=gPlayerSession->player.Definitions().references.end())fo3audio::Open(ref->second.base);
     Q6H_LOGI("NPC DOOR actor=%08X door=%08X action=open",actor.source.refFormId,pending);
   }else {Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"resident local door unavailable ref="+std::to_string(pending));pending=0;}
-  return true;
+  return blocked;
 }

@@ -81,7 +81,7 @@ static void Original(const char* path){
   // The authored early-skip outcome has no 300 XP / achievement-4 award.
   assert(travelled.Snapshot().experience==xp&&!travelled.Snapshot().achievements.count(4));
   const auto relocated=travelled.Snapshot().actors.at(sarah);
-  assert(relocated.cell==destination.cell&&relocated.world==destination.world&&relocated.yaw==destination.rz);
+  assert(relocated.cell==destination.cell&&relocated.world==destination.world&&relocated.yaw==-destination.rz);
   assert((relocated.position==std::array<float,3>{destination.x,destination.y,destination.z}));
   bool disabled=false;
   assert(travelled.ReferenceDisabled(catalog.pipboy.formNames.at("mq01behemothref"),disabled,error)&&disabled);

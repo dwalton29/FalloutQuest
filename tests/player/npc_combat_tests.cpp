@@ -139,7 +139,7 @@ static void ScriptedActorMovement(){
   fo3pipdata::ResultScript body;body.source="ActorRef.MoveTo DestMarker 10 -20 30";
   assert(p.PreviewDialogueResult(body,error));assert(p.Snapshot().actors.at(100).cell==1&&!p.ScriptActorMoveEpoch(100));
   auto plan=p.PrepareDialogueTransaction(body,{},error);assert(plan&&p.CommitScriptTransaction(*plan));
-  auto moved=p.Snapshot().actors.at(100);assert(moved.cell==2&&moved.world==0&&moved.yaw==1.25f&&moved.package==77);
+  auto moved=p.Snapshot().actors.at(100);assert(moved.cell==2&&moved.world==0&&moved.yaw==-1.25f&&moved.package==77);
   assert((moved.position==std::array<float,3>{110,180,330})&&p.ScriptActorMoveEpoch(100));
   assert(p.RollbackScriptTransaction(*plan));assert(p.Snapshot().actors.at(100).cell==1&&!p.ScriptActorMoveEpoch(100));
   assert(p.ExecuteDialogueResult(body,error));const auto epoch=p.ScriptActorMoveEpoch(100);

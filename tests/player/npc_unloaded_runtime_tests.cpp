@@ -106,7 +106,7 @@ void TestDayNight() {
   auto s=f.tracked.at(f.actor);
   assert(s.cell==0x300&&s.world==0x700&&s.package==0x900);
   assert((s.position==std::array<float,3>{11,12,13}));
-  assert(s.yaw==.375f);
+  assert(s.yaw==-.375f);
   assert(f.Tick(8.01f).doorHops==0&&f.writes==1); // No duplicate hop in minute.
   assert(f.Tick(8.02f).doorHops==0); // Already at destination; no teleport.
   r=f.Tick(20.01f);

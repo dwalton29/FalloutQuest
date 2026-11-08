@@ -60,7 +60,7 @@ struct Q230ActorVisual {
     std::vector<std::pair<size_t,size_t>> aiPathSurfaces;
     std::array<float,3> aiAnchorGame{};
   size_t aiPathIndex=0;
-  uint32_t aiPackage=0,aiSequence=0;
+  uint32_t aiPackage=0,aiSequence=0,responseIdle=0;
   double aiLastUpdate=-1,aiRepathAt=0;
   uint64_t lastFrame=1;
 };
@@ -419,7 +419,7 @@ int main(int argc,char** argv) {
     for(int frame=0;frame<60&&actor.runtime.procedure!=fo3npc::Procedure::Completed;++frame)
       Q240UpdateNpcPackage(actor,frame*.05);
     assert(actor.runtime.procedure==fo3npc::Procedure::Completed);
-    assert(std::fabs(fo3npc::Angle(actor.runtime.yaw-marker.rz))<.001f&&actor.runtime.returnYaw==actor.runtime.yaw);
+    assert(std::fabs(fo3npc::Angle(actor.runtime.yaw+marker.rz))<.001f&&actor.runtime.returnYaw==actor.runtime.yaw);
   }
   {
     auto actor=Actor(6);actor.runtime.authoredMotionUntil=4;

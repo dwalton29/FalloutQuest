@@ -799,7 +799,7 @@ ActorCensusReport Player::RegisterOriginalActors() {
     if(state_.actors.size()>=10000u){++report.limitReached;continue;}
     ActorState a;
     a.cell=p.cell;a.world=p.world;
-    a.position={p.x,p.y,p.z};a.yaw=p.rz;
+    a.position={p.x,p.y,p.z};a.yaw=-p.rz;
     if(UpdateActor(id,a))++report.registered;
     else ++report.unsupportedBase;
   }
@@ -1074,9 +1074,9 @@ bool Player::Pickup(uint32_t id) {
 }
 bool Player::CanOpenDoor(uint32_t id) const {return CanActorOpenDoor(PlayerRef,id);}
 bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {return CanOpenDoorImpl(actor,id,false);}
-bool Player::CanScriptActivateDoor(uint32_t id) const {
+bool Player::CanScriptActivateDoor(uint32_t id,uint32_t actor) const {
   const auto r=catalog_->references.find(id);
-  return r!=catalog_->references.end()&&catalog_->doorBases.count(r->second.base)&&CanOpenDoorImpl(PlayerRef,id,true);
+  return r!=catalog_->references.end()&&catalog_->doorBases.count(r->second.base)&&CanOpenDoorImpl(actor,id,true);
 }
 bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) const {
   const auto r = catalog_->references.find(id);

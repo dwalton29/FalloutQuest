@@ -583,7 +583,7 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
                 return m[2]*shape.centre[0]+m[6]*shape.centre[1]+m[10]*shape.centre[2]+m[14];
             };
             std::stable_sort(gUiDrawOrder.begin(),gUiDrawOrder.end(),[&](size_t a,size_t b){return depth(gOverlay[a])<depth(gOverlay[b]);});
-            for(const auto& sound:gSlideshow.sounds)fo3audio::NamedSound(sound);
+            for(const auto& sound:gSlideshow.sounds)fo3audio::LoadingSound(sound);
         }
     }
     const bool target=EnsureTarget(width,height);

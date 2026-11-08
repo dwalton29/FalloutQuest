@@ -32,6 +32,7 @@ struct Fo3WorldPlacement {
     int32_t gridY = 0;
     bool hasExteriorGrid = false;
     bool persistentExteriorRef = false;
+    bool retainedRadio = false;
 };
 
 struct Fo3CellArrival {

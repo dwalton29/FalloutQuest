@@ -18,7 +18,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private HandlerThread thread;
     private Handler audio;
     private boolean resumed, focused, destroyed;
-    private MediaPlayer menuLoop;
+    private MediaPlayer menuLoop, loadingEffect;
     private final List<MediaPlayer> effects = new ArrayList<>();
     private final List<String> tracks = new ArrayList<>();
     private int track;
@@ -231,6 +231,26 @@ public final class FalloutNativeActivity extends NativeActivity {
                     () -> effects.contains(player));
         });
     }
+    private native boolean audioLoadingCurrent(long generation);
+    public void audioLoadingEffect(String path, float gain, long generation) {
+        audio.post(() -> {
+            if (!path.isEmpty() && !audioLoadingCurrent(generation)) return;
+            releaseLoadingEffect();
+            if (!enabled() || path.isEmpty()) return;
+            MediaPlayer player = new MediaPlayer(); loadingEffect = player;
+            prepare(player, path, gain, false, this::releaseLoadingEffect,
+                    () -> loadingEffect == player && audioLoadingCurrent(generation));
+            watchLoadingEffect(player, generation);
+        });
+    }
+    private void watchLoadingEffect(MediaPlayer player, long generation) {
+        if (loadingEffect != player) return;
+        if (!audioLoadingCurrent(generation)) releaseLoadingEffect();
+        else audio.postDelayed(() -> watchLoadingEffect(player, generation), 25);
+    }
+    private void releaseLoadingEffect() {
+        if (loadingEffect != null) { loadingEffect.release(); loadingEffect = null; }
+    }
     public void audioMenuLoop(String path, float gain) {
         audio.post(() -> {
             if (menuLoop != null) { menuLoop.release(); menuLoop = null; }
@@ -279,6 +299,7 @@ public final class FalloutNativeActivity extends NativeActivity {
                     if (p == music) { tracks.clear(); releaseMusic(); }
                     else if (p == ambience) { ambientPath = ""; releaseAmbience(); }
                     else if (p == menuLoop) { menuLoop = null; p.release(); }
+                    else if (p == loadingEffect) releaseLoadingEffect();
                     else if (!failBroadcast(p)) { effects.remove(p); p.release(); }
                 }
                 return true;
@@ -290,6 +311,7 @@ public final class FalloutNativeActivity extends NativeActivity {
                 if (player == music) { tracks.clear(); releaseMusic(); }
                 else if (player == ambience) { ambientPath = ""; releaseAmbience(); }
                 else if (player == menuLoop) { menuLoop = null; player.release(); }
+                else if (player == loadingEffect) releaseLoadingEffect();
                 else if (!failBroadcast(player)) { effects.remove(player); player.release(); }
             }
         }
@@ -297,6 +319,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private void releaseMusic() { if (music != null) { music.release(); music = null; } }
     private void releaseAmbience() { if (ambience != null) { ambience.release(); ambience = null; } }
     private void stopAll() {
+        releaseLoadingEffect();
         if (menuLoop != null) { menuLoop.release(); menuLoop = null; }
         for(DialogueVoice voice:voices)releaseDialogue(voice,true);
         releaseMusic(); releaseAmbience();

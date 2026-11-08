@@ -33,6 +33,7 @@ struct RawPlacement {
     uint32_t enableParentFormId = 0u;
     uint8_t enableParentFlags = 0u;
     bool hasEnableParent = false;
+    bool radio = false;
     float x = 0.0f, y = 0.0f, z = 0.0f;
     float rx = 0.0f, ry = 0.0f, rz = 0.0f;
     float scale = 1.0f;
@@ -77,6 +78,8 @@ bool ParsePlacementPayload(const std::vector<uint8_t>& payload, RawPlacement& ou
         } else if (std::memcmp(type, "XSCL", 4u) == 0 && size >= 4u) {
             out.scale = fo3esm::ReadF32(bytes);
             if (!(out.scale > 0.0001f && out.scale < 1000.0f)) out.scale = 1.0f;
+        } else if (std::memcmp(type, "XRDO", 4u) == 0 && size == 16u) {
+            out.radio = true;
         } else if (std::memcmp(type, "XESP", 4u) == 0 && size >= 4u) {
             out.hasEnableParent = true;
             out.enableParentFormId = fo3esm::ReadU32(bytes);
@@ -274,7 +277,7 @@ void ConvertBethesdaRotation(float rx, float ry, float rz,
 bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
                                         std::vector<Fo3WorldPlacement>& outPlacements,
                                         const fo3world::ReferenceStateSnapshot* referenceState,
-                                        bool candidateSelection = false) {
+                                        bool candidateSelection, bool retainRadios) {
     outPlacements.clear();
     std::vector<Q1700Interior::RawPlacement> raw;
     if (!Q1700Interior::CollectCellReferences(cellFormId, raw)) {
@@ -286,6 +289,12 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
     refs.reserve(raw.size());
     for (const auto& p : raw) refs[p.refFormId] = &p;
 
+    // Keep initially disabled, independently switched radio activators ready
+    // so starting a broadcast can publish inside the same interior.
+    const auto retainRadio=[retainRadios](const auto& p){
+        return retainRadios&&p.radio&&!p.hasEnableParent&&(p.recordFlags&Q1700Interior::Q1700_INITIALLY_DISABLED);
+    };
+    std::unordered_set<uint32_t> dormant;
     std::unordered_map<uint32_t, bool> enabledMemo;
     std::vector<const Q1700Interior::RawPlacement*> active;
     active.reserve(raw.size());
@@ -293,7 +302,10 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
         std::unordered_set<uint32_t> visiting;
         const bool authored=Q1700Interior::ResolveEnabled(p.refFormId, refs, enabledMemo, visiting);
         const bool enabled=referenceState?referenceState->Enabled(p.refFormId,authored):authored;
-        if (enabled && !(p.recordFlags & 0x20u)) active.push_back(&p);
+        if (!(p.recordFlags & 0x20u) && (enabled||retainRadio(p))) {
+            active.push_back(&p);
+            if(!enabled)dormant.insert(p.refFormId);
+        }
     }
 
     if (active.empty()) {
@@ -315,12 +327,15 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
         if (baseIt == bases.end()) continue;
         const auto& base = baseIt->second;
         if (base.modelPath.empty() || !Q1700Interior::EndsInNif(base.modelPath)) continue;
+        const bool retained=retainRadio(*p)&&base.recordType=="TACT";
+        if(!retained&&dormant.count(p->refFormId))continue;
 
         Fo3WorldPlacement world;
         world.refFormId = p->refFormId;
         world.owningCellFormId = cellFormId;
         world.baseFormId = p->baseFormId;
         world.baseRecordType = base.recordType;
+        world.retainedRadio = retained;
         world.editorId = base.editorId;
         world.modelPath = base.modelPath;
         world.x = p->x; world.y = p->y; world.z = p->z;

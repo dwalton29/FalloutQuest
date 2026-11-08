@@ -33,7 +33,7 @@ inline bool SameResidentPlacement(const Fo3WorldPlacement& a, const Fo3WorldPlac
         a.x == b.x && a.y == b.y && a.z == b.z && a.rx == b.rx && a.ry == b.ry && a.rz == b.rz &&
         a.scale == b.scale && a.owningCellFormId == b.owningCellFormId &&
         a.gridX == b.gridX && a.gridY == b.gridY && a.hasExteriorGrid == b.hasExteriorGrid &&
-        a.persistentExteriorRef == b.persistentExteriorRef;
+        a.persistentExteriorRef == b.persistentExteriorRef && a.retainedRadio == b.retainedRadio;
 }
 
 // Both placement sets must describe the identical residency scope under the

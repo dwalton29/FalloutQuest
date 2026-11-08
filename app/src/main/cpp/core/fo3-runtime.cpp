@@ -616,7 +616,7 @@ struct GpuObject {
     bool physicalWeapon = false;
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
-    bool scriptAnimated=false,scriptVisible=true;
+    bool scriptAnimated=false,scriptVisible=true,retainedRadio=false;
     bool geneScreen=false;
     std::array<float,4> geneUv{};
     bool nonvisualResident=false;
@@ -2703,6 +2703,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
       }
     }
     gpu.doorActivation=cpu.doorActivation;
+    gpu.retainedRadio=cpu.placement.retainedRadio;
     gpu.refFormId = cpu.placement.refFormId;
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
@@ -3171,6 +3172,7 @@ bool Q1050CreateShadowResources() {
     return true;
 }
 
+bool Fo3WorldReferenceHidden(uint32_t reference);
 bool Q1050UpdateSunShadow() {
     if (!gSceneReady || gObjects.empty()) return false;
     const Fo3Environment& env=GetFo3RenderEnvironment();
@@ -3219,7 +3221,8 @@ bool Q1050UpdateSunShadow() {
             if (std::abs(object.q1970GridX - q1970ShadowGridX) > 1 ||
                 std::abs(object.q1970GridY - q1970ShadowGridY) > 1) continue;
         }
-        if (object.alphaBlend || !object.vao || object.vertexCount<=0) continue;
+        if (object.alphaBlend || !object.vao || object.vertexCount<=0 ||
+            (object.retainedRadio&&Fo3WorldReferenceHidden(object.refFormId))) continue;
         glUniform1f(gShadowAlphaTestLocationQ1050,object.alphaTest?1.0f:0.0f);
         glUniform1f(gShadowAlphaThresholdLocationQ1050,object.alphaThreshold);
         glBindTexture(GL_TEXTURE_2D,object.diffuse);
@@ -3670,8 +3673,10 @@ std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 // Disabled inventory displays keep their immutable GPU resources until normal
 // scene retirement, while render, targeting and collision share the removal.
 std::unordered_set<uint32_t> gFo3ScriptRemovedItems;
+std::unordered_set<uint32_t> gFo3RetainedRadios, gFo3DormantRadios;
 bool Fo3WorldReferenceHidden(uint32_t reference){
-    return gFo3ScriptRemovedItems.count(reference)||(gPlayerSession&&gPlayerSession->player.IsCollected(reference));
+    return gFo3DormantRadios.count(reference)||gFo3ScriptRemovedItems.count(reference)||
+        (gPlayerSession&&gPlayerSession->player.IsCollected(reference));
 }
 void RefreshFo3RemovedCollisionRefs(){
     if(!gPlayerSession)return;
@@ -5214,6 +5219,14 @@ bool ProcessQ74TransitionRequest() {
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
     gObjects = std::move(replacement);
+    gFo3RetainedRadios.clear();gFo3DormantRadios.clear();
+    for(const auto& object:gObjects)if(object.retainedRadio&&gFo3RetainedRadios.insert(object.refFormId).second){
+        if(!gFo3ReferenceState||!gFo3ReferenceState->Enabled(object.refFormId,false)){
+            Fo3DoorCollisionPose pose;pose.enabled=false;
+            SetFo3ScriptCollisionPose(object.refFormId,pose);
+            gFo3DormantRadios.insert(object.refFormId);
+        }
+    }
     // Worker was published before this swap; defer missing XEMI binding until
     // all pending meshes are owned by the new scene. One fallback scan per scene
     // (never per object) preserves authored region/light colours on worker errors.
@@ -12147,7 +12160,7 @@ fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement& placement);
 bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual,bool headOnly=false) {
     visual.source = source;
     visual.runtime.reference=source.refFormId;
-    visual.runtime.authoredYaw=visual.runtime.yaw=visual.runtime.returnYaw=source.rz;
+    visual.runtime.authoredYaw=visual.runtime.yaw=visual.runtime.returnYaw=-source.rz;
     const Fo3NpcActorQ230* npc = &visual.source;
     std::vector<uint8_t> bytes;
     if (LoadFalloutMeshFile(source.skeletonModel, bytes) &&

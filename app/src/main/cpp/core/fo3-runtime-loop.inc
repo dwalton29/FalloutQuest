@@ -1909,10 +1909,13 @@ private:
                     fo3worldscript::Register();
                     if(!scriptMenu)fo3worldscript::seconds+=seconds;
                     scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,scriptMenu?0:seconds);
+                    // Trigger occupancy follows the player capsule while
+                    // heading checks continue to use the tracked view.
+                    const float bodyCentreY=(FLOOR_Y+playerPosition_.y+gQ210Head[1])*.5f;
                     scriptPlayer.SetScriptPlayerLocation(
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
                         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
-                        gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
+                        gSceneFloorZQ1730+(bodyCentreY-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
                         gCurrentCellFormId,gExteriorWorldspaceQ1890);
                     scriptPlayer.SetScriptPlayerHeading(gQ210Head[3]);
                     if(!scriptMenu)fo3worldscript::SpeechTick();
@@ -2449,6 +2452,9 @@ private:
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
             if(wasLoading)MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
+            const bool loadingAudioVisible=IsFo3LoadingVisible();
+            if((wasLoading||loadingAudioVisible_)&&!loadingAudioVisible)fo3audio::StopLoadingSound();
+            loadingAudioVisible_=loadingAudioVisible;
             if (wasLoading && !IsFo3LoadingVisible()) {
                 pendingPlayableGeneration=GetFo3LoadingGeneration();
                 fqloadprofile::Log("PRESENTATION_COMPLETE generation=%llu elapsedMs=%.1f sceneReady=%d worldObjects=%zu collisionReady=%d sceneLoadActive=%d",
@@ -2996,6 +3002,7 @@ private:
     fo3scene::ResidentInputBarrier residentInputBarrier_;
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
+    bool loadingAudioVisible_=false;
     float playerYaw_{0.0f};
     bool snapTurnLatched_{false};
     XrTime lastFrameTime_{0};

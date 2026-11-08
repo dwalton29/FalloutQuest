@@ -41,8 +41,8 @@ extern void PumpFo3AndroidEventsQ1860();
 bool LoadFo3CellPlacements(uint32_t cellFormId,
                            std::vector<Fo3WorldPlacement>& outPlacements,
                            const fo3world::ReferenceStateSnapshot* referenceState = nullptr,
-                           bool candidateSelection = false) {
-    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState, candidateSelection);
+                           bool candidateSelection = false, bool retainRadios = false) {
+    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState, candidateSelection, retainRadios);
 }
 
 // Placement metadata is compiled separately; LAND shares only explicit CPU
@@ -1156,7 +1156,7 @@ bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
             {request.worldspaceFormId, request.cellFormId, request.x, request.y, -1, candidateSelection},
             outPlacements, referenceState);
     }
-    return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState, candidateSelection);
+    return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState, candidateSelection, true);
 }
 
 bool HasPendingFo3CellTransitionRequestQ74() noexcept {

@@ -383,7 +383,7 @@ void Actions(){
             else Q6H_LOGW("SCRIPT WEAPON HIT QUEUE FULL ref=%08X",action.reference);
             Hits();if(Fo3ResidentFrameBlocked())return;
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
-            if(!DeliverFo3ScriptDefaultActivation(action.reference))
+            if(!DeliverFo3ScriptDefaultActivation(action.reference,action.flags))
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
         }else if(action.kind==fo3script::ActionKind::ImageModifier){
             const auto i=player.Definitions().imageModifiers.find(action.form);

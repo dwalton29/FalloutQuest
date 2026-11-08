@@ -63,7 +63,7 @@ struct RuntimeState {
   double nextManoeuvre=0,manoeuvreUntil=0,nextMeleeDecision=0;
   uint64_t equippedWeapon=0,actionSerial=0;
   std::array<float,3> lastThreat{},pathDestinationGame{};
-  double nextDoorQuery=0,nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
+  double nextDoorQuery=0,nextDoorProbe=0,nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
   double actionStart=0,lastActionTime=0,pendingHit=0,hitUntil=0; // Nonlethal authored IDLE reaction gate.
   bool pendingAttack=false;
   uint32_t hitSequence=0; // Per-actor original hit IDLE A/B/C rotation, transient.
@@ -88,7 +88,7 @@ struct RuntimeState {
     furniture.Clear();position=destination=point;yaw=returnYaw=facing;speed=0;offScene=!resident;
     navigationDoor=xtelDoor=xtelCell=0;blockedSince=crowdBlockedSince=-1;
     hasLastRoamDestination=false;packageRetryAfter.clear();
-    nextPath=nextDoorQuery=nextPackageEvaluation=0;packageRevision=UINT64_MAX;
+    nextPath=nextDoorQuery=nextDoorProbe=nextPackageEvaluation=0;packageRevision=UINT64_MAX;
     procedure=Procedure::Interrupted;tacticalRouteKind=0;coverUntil=-1;
   }
   bool Alive() const {return activity!=Activity::Dying&&activity!=Activity::Dead&&activity!=Activity::Unconscious;}

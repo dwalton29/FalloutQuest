@@ -21,6 +21,13 @@ bool TraceFo3WorldSurface(float,float,float,float,float,float,float,uint32_t,uin
 const DoorObject* Q2400FindSwingDoorObject(uint32_t id){return id==20&&doorAvailable&&!loadDoor?&gObjects.front():nullptr;}
 bool Q2400ToggleInteriorDoor(uint32_t id,float,float){++toggles;auto& d=gQ2400InteriorDoors[id];d.targetOpen=!d.targetOpen;d.q2401Moving=true;d.collisionSceneSerial=gQ2400DoorSceneSerial;return true;}
 namespace fo3audio {void Open(uint32_t){++openSounds;}}
+namespace fo3worldscript {
+bool Event(uint32_t reference,const char* event,uint32_t activator,bool){
+  std::string error;auto& p=gPlayerSession->player;
+  auto plan=p.PrepareReferenceEventTransaction(reference,event,activator,error);
+  return plan&&p.CommitScriptTransaction(*plan);
+}
+}
 #include "npc/fo3-npc-door-runtime.inc"
 static Q230ActorVisual Prepare(bool locked=false,bool npcKey=false){
   gExteriorWorldspaceQ1890=0;
@@ -48,6 +55,24 @@ static void OriginalDoors(const char* path){
   assert(checked>0);
   const auto dad=c.pipboy.formNames.at("cg01dadref"),door=c.pipboy.formNames.at("cg01playroomdoor");
   assert(player.GetLock(door).locked&&!player.CanOpenDoor(door)&&player.CanActorOpenDoor(dad,door));
+  const auto birthday=c.pipboy.formNames.at("cg02"),atrium=c.pipboy.formNames.at("cg02atriumdoor");
+  const auto exit=c.pipboy.formNames.at("cg02dinerexitref"),overseer=c.pipboy.formNames.at("cg02overseerref");
+  const auto childDad=c.pipboy.formNames.at("cg02dadref");
+  auto fixture=c;fixture.initial.pipboy.quests[birthday].stage=5;fixture.initial.pipboy.quests[birthday].running=true;
+  auto verify=[&](uint32_t ref,uint32_t actor,bool delegates){
+    fo3player::Player p(fixture);p.RegisterOriginalActors();
+    auto plan=p.PrepareReferenceEventTransaction(ref,"OnActivate",actor,error);
+    if(!plan)std::cerr<<"Original diner door activation failed: "<<error<<'\n';
+    assert(plan&&p.CommitScriptTransaction(*plan));
+    fo3script::Action action;
+    assert(p.PollScriptAction(action)==delegates);
+    if(delegates)assert(action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==ref&&action.flags==actor);
+  };
+  verify(atrium,overseer,true);
+  verify(atrium,childDad,false);
+  verify(exit,childDad,false);
+  fixture.initial.pipboy.quests[birthday].stage=44;
+  verify(exit,childDad,true);
 }
 int main(int argc,char** argv){
   auto a=Prepare();auto before=a.runtime.position;Q240AdvancePath(a,.1f,1);

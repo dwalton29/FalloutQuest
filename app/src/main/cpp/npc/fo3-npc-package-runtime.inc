@@ -417,7 +417,7 @@ static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata:
   const auto& f=actor.runtime.furniture;if(!f.scene)return SIZE_MAX;
   const auto& d=gPlayerSession->player.Definitions().pipboy;
   const auto* def=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
-  if(def&&d.childRaces.count(def->race))return SIZE_MAX; // Child IDLE branch requires its own authored program.
+  const bool child=def&&d.childRaces.count(def->race);
   const auto here=Q240GamePosition(actor);std::array<float,3> anchor=here;bool exact=false;
   const auto destination=Q240LocationReference(actor,p);
   if(p.location.type==0||p.location.type==6){auto t=d.targets.find(destination);if(t==d.targets.end())return SIZE_MAX;anchor={t->second.x,t->second.y,t->second.z};exact=d.furniture.count(t->second.base)!=0;}
@@ -426,7 +426,7 @@ static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata:
   else return SIZE_MAX;
   size_t best=SIZE_MAX;float distance=INFINITY;
   for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];if(slot.idleMarker||slot.sleep!=(p.type==4))continue;
-    if(exact&&slot.reference!=destination)continue;
+    if((child?!slot.childProgram:!slot.program)||(exact&&slot.reference!=destination))continue;
     if(slot.marker.reference==17&&def&&def->female)continue; // Authored skirt branch requires its own entry/exit program.
     if(!exact&&p.location.type!=1&&Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>std::max(0,p.location.radius))continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
@@ -455,7 +455,7 @@ static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::P
   for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];
     if(slot.reference==actor.runtime.sandboxBlockedTarget&&actor.aiLastUpdate<actor.runtime.sandboxBlockedUntil)continue;
     if(slot.sleep||(slot.idleMarker?(p.typeFlags&8u)||(p.flags&0x01000000u):(p.typeFlags&16u)))continue;
-    if(!slot.idleMarker&&def&&(d.childRaces.count(def->race)||(slot.marker.reference==17&&def->female)))continue;
+    if(!slot.idleMarker&&(!slot.program||(def&&(d.childRaces.count(def->race)||(slot.marker.reference==17&&def->female)))))continue;
     if(Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>radius)continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
     const auto owner=f.Pool()->owners.find(uint64_t(slot.reference)<<32);
@@ -684,7 +684,12 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       anchor={target->second.x,target->second.y,target->second.z};
     } else if(package.location.type==1u&&package.type==12&&package.location.value==gCurrentCellFormId) anchor=game;
     else if(package.location.type==2u) anchor=game;
-    else if(package.location.type==3u) anchor={actor.source.x,actor.source.y,actor.source.z};
+    else if(package.location.type==3u) {
+      const auto placed=definitions.targets.find(actor.source.refFormId);
+      if(placed!=definitions.targets.end()&&placed->second.cell==gCurrentCellFormId&&placed->second.world==gExteriorWorldspaceQ1890)
+        anchor={placed->second.x,placed->second.y,placed->second.z};
+      else anchor={actor.source.x,actor.source.y,actor.source.z};
+    }
     else {Q240AiLogOnce(actor.source.refFormId,packageId,"PLDT type "+std::to_string(package.location.type));continue;}
     radius=package.type==12&&package.location.type==1?std::numeric_limits<float>::max():float(std::max(0,package.location.radius));id=packageId;return &package;
   }
@@ -762,6 +767,7 @@ static bool Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
     actor.runtime.sandboxLastTarget=0;actor.runtime.sandboxCycles=0;actor.runtime.sandboxNext=0;
     actor.runtime.hasLastRoamDestination=false;actor.runtime.roamWaitUntil=0;
     actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
+    if(actor.responseIdle==actor.runtime.packagePoseIdle)actor.responseIdle=0;
     actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;actor.runtime.packagePoseIdle=0;
 #ifdef FO3_NPC_STAGGER_ROUTING
     // Megaton's 10:00 schedules may all change on the same stereo frame.
@@ -780,7 +786,7 @@ static bool Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
 }
 static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& package,
                                  const std::array<float,3>& anchor,float radius) {
-  actor.runtime.nextDoorQuery=0;actor.runtime.navigationDoor=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0)return false;
+  actor.runtime.nextDoorQuery=actor.runtime.nextDoorProbe=0;actor.runtime.navigationDoor=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0)return false;
   const auto& graph=*actor.navigationGraph;
   const auto current=Q240GamePosition(actor);
   std::array<float,3> destination=anchor;
@@ -1205,7 +1211,7 @@ static void Q240AdvanceNpcXtel(Q230ActorVisual& actor,float dt,double now){
     const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
     if(saved!=player.Snapshot().actors.end())moved=saved->second;
     moved.cell=edge->destinationCell;moved.world=edge->destinationWorld;
-    moved.position=edge->arrival;moved.yaw=edge->rotation[2];
+    moved.position=edge->arrival;moved.yaw=-edge->rotation[2];
     moved.package=actor.aiPackage;moved.sequence=0;moved.packageWaitSeconds=0;
     if(!player.UpdateActor(actor.source.refFormId,moved)){
       Q240PackageRouteFailed(actor,now,"XTEL canonical actor transfer rejected");return;
@@ -1368,11 +1374,12 @@ static void Q240FurnitureExit(Q230ActorVisual& actor,double now) {
   auto& f=actor.runtime.furniture;const auto* slot=f.Selected();if(!slot){f.Clear();return;}
   if(slot->idleMarker){f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.sandboxNext=now+.5;actor.lastFrame=UINT64_MAX;return;}
   if(f.phase==fo3furniture::Phase::Approach){f.Clear();return;}
+  const auto* program=f.SelectedProgram();if(!program){f.Clear();return;}
   if(f.phase==fo3furniture::Phase::Enter){
     // Finish entry before using the exit's authored accumulated starting pose.
-    const double duration=(slot->program->enter.stop-slot->program->enter.start)/slot->program->enter.frequency;
+    const double duration=(program->enter.stop-program->enter.start)/program->enter.frequency;
     if(now-f.started<duration){f.interrupted=true;return;}
-    f.retainedRoot=fo3furniture::Root(slot->program->enter,duration);
+    f.retainedRoot=fo3furniture::Root(program->enter,duration);
   }
   if(f.phase!=fo3furniture::Phase::Exit){f.phase=fo3furniture::Phase::Exit;f.started=now;actor.lastFrame=UINT64_MAX;}
 }
@@ -1381,14 +1388,14 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
   if(f.Active()&&(f.interrupted||!p||id!=f.package))Q240FurnitureExit(actor,now);
   if(f.interrupted&&f.phase==fo3furniture::Phase::Enter){actor.runtime.speed=0;actor.lastFrame=UINT64_MAX;return true;}
   if(f.phase==fo3furniture::Phase::Exit){
-    const auto* slot=f.Selected();if(!slot){f.Clear();return false;}
+    const auto* program=f.SelectedProgram();if(!program){f.Clear();return false;}
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.lastFrame=UINT64_MAX;
-    const double duration=(slot->program->exit.stop-slot->program->exit.start)/slot->program->exit.frequency;
+    const double duration=(program->exit.stop-program->exit.start)/program->exit.frequency;
     if(now-f.started>=duration){
       // Exit's residual is authored. Bake it once into the world root before
       // ordinary locomotion resumes; every new cycle reanchors to FRN.
-      const auto end=fo3furniture::Root(slot->program->exit,duration,&f.retainedRoot);
-      const auto endpoint=fo3anim::Multiply(slot->alignment,fo3anim::ToMatrix(end));
+      const auto end=fo3furniture::Root(program->exit,duration,&f.retainedRoot);
+      const auto endpoint=fo3anim::Multiply(f.Selected()->alignment,fo3anim::ToMatrix(end));
       actor.runtime.position=Q240ScenePosition({endpoint[12],endpoint[13],endpoint[14]});actor.runtime.yaw=actor.runtime.returnYaw=std::atan2(-endpoint[4],endpoint[5]);
       f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiSequence=0;actor.aiRepathAt=0;actor.runtime.nextPackageEvaluation=0;actor.aiLastUpdate=now;actor.lastFrame=UINT64_MAX;
     }return true;
@@ -1398,6 +1405,9 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     const size_t target=p->type==12?Q240SandboxTarget(actor,*p,actor.runtime.evaluatedAnchor,actor.runtime.evaluatedRadius):Q240FurnitureTarget(actor,*p);if(target==SIZE_MAX){Q240PackageRouteFailed(actor,now,"furniture unavailable");return true;}
     const auto& slot=f.scene->slots[target];auto lease=std::make_shared<fo3furniture::Lease>();
     if(!lease->Acquire(f.Pool(),slot.reference,slot.index,actor.source.refFormId)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
+    const auto* def=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
+    const auto& races=gPlayerSession->player.Definitions().pipboy.childRaces;
+    f.child=def&&races.count(def->race);
     f.slot=target;f.lease=std::move(lease);f.phase=fo3furniture::Phase::Approach;f.started=now;f.package=id;
     if(slot.idleMarker){
       // The marker may reference several original Bethesda IDLE sequences.
@@ -1450,8 +1460,9 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     if(actor.runtime.procedure!=fo3npc::Procedure::Waiting&&(p->type==6||p->type==14)&&!Q240PackageEvent(actor,id,true))return true;
     actor.runtime.procedure=fo3npc::Procedure::Waiting;return true;
   }
-  if(f.phase==fo3furniture::Phase::Enter){const double duration=(slot->program->enter.stop-slot->program->enter.start)/slot->program->enter.frequency;
-    if(now-f.started>=duration){f.retainedRoot=fo3furniture::Root(slot->program->enter,duration);f.phase=fo3furniture::Phase::Loop;f.started=now;}
+  const auto* program=f.SelectedProgram();if(!program){f.Clear();return true;}
+  if(f.phase==fo3furniture::Phase::Enter){const double duration=(program->enter.stop-program->enter.start)/program->enter.frequency;
+    if(now-f.started>=duration){f.retainedRoot=fo3furniture::Root(program->enter,duration);f.phase=fo3furniture::Phase::Loop;f.started=now;}
   }
   if(f.phase==fo3furniture::Phase::Loop&&actor.runtime.procedure!=fo3npc::Procedure::Waiting&&(p->type==6||p->type==14)&&!Q240PackageEvent(actor,id,true))return true;
   actor.runtime.procedure=f.phase==fo3furniture::Phase::Loop?fo3npc::Procedure::Waiting:fo3npc::Procedure::Executing;return true;
@@ -1538,6 +1549,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     if(actor.runtime.procedure!=fo3npc::Procedure::Unsupported)
       Q6H_LOGI("NPC AI IDLE actor=%08X base=%08X reason=no-executable-package",actor.source.refFormId,actor.source.baseFormId);
     actor.runtime.procedure=fo3npc::Procedure::Unsupported;
+    if(actor.responseIdle==actor.runtime.packagePoseIdle)actor.responseIdle=0;
     actor.aiPackage=actor.runtime.package=0;actor.runtime.packageKnown=false;actor.runtime.packagePoseIdle=0;
     actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;return;
@@ -1628,20 +1640,32 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
           if(package->type==6){
             const auto& definitions=gPlayerSession->player.Definitions().pipboy;
             const auto heading=definitions.formNames.find("xmarkerheading");
-            const auto marker=definitions.targets.find(Q240LocationReference(actor,*package));
-            if(heading!=definitions.formNames.end()&&marker!=definitions.targets.end()&&marker->second.base==heading->second){
-              const float turn=fo3npc::Angle(marker->second.rz-state.yaw);
+            const bool editorLocation=package->location.type==3u&&package->location.radius==0;
+            const auto marker=definitions.targets.find(editorLocation?actor.source.refFormId:Q240LocationReference(actor,*package));
+            if(marker!=definitions.targets.end()&&
+               ((heading!=definitions.formNames.end()&&marker->second.base==heading->second)||
+                (editorLocation&&marker->second.cell==gCurrentCellFormId&&marker->second.world==gExteriorWorldspaceQ1890))){
+              const float turn=fo3npc::Angle(-marker->second.rz-state.yaw);
               if(std::fabs(turn)>.01f){
                 state.yaw=fo3npc::Angle(state.yaw+std::clamp(turn,-fo3npc::MovementPolicy::StandingTurn*dt,fo3npc::MovementPolicy::StandingTurn*dt));
                 state.returnYaw=state.yaw;
                 state.animation=turn>0?fo3npc::Animation::TurnLeft:fo3npc::Animation::TurnRight;
                 return;
               }
-              state.yaw=state.returnYaw=marker->second.rz;
+              state.yaw=state.returnYaw=fo3npc::Angle(-marker->second.rz);
             }
           }
           Q6H_LOGI("NPC PACKAGE COMPLETE actor=%08X package=%08X type=%u scheduleReevaluated=1",actor.source.refFormId,packageId,unsigned(package->type));
           if(!Q240PackageEvent(actor,packageId,true))return;
+          if(package->type==6&&!package->procedureIdles[1]){
+            for(const auto idle:package->idleAnimations){
+              if(!idle||!Q240MarkerIdleEligible(actor,idle))continue;
+              fo3script::Action action;action.kind=fo3script::ActionKind::PackageIdle;
+              action.reference=actor.source.refFormId;action.form=idle;action.flags=package->flags;
+              gPlayerSession->player.QueueScriptAction(std::move(action));
+              break;
+            }
+          }
         }
         actor.runtime.procedure=fo3npc::Procedure::Completed;return;
       }
