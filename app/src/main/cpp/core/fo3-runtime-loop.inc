@@ -2267,8 +2267,9 @@ private:
                     frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
-                    frame.modal=std::abs(Fo3PlayerTrackingScale()-1.f)>.001f||gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
-                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset*Fo3PlayerTrackingScale();
+                    frame.trackingScale=Fo3PlayerTrackingScale();
+                    frame.modal=gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset*frame.trackingScale;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
                         std::copy(vp.m,vp.m+16,frame.viewProjection[eye].begin());}
@@ -2308,7 +2309,10 @@ private:
                 }
 #ifdef FQ_ENABLE_VULKAN
                 if(vulkanGameplay_) {
-                    rendered=fqvk::PresentGameplay(views.data(),projectionViews.data(),.04f,125000.0f/FO3_UNITS_PER_METRE_Q715)&&rendered;
+                    const float scale=Fo3PlayerTrackingScale();
+                    rendered=fqvk::PresentGameplay(views.data(),projectionViews.data(),
+                        fqspacewarp::TrackingMetres(.04f,scale),
+                        fqspacewarp::TrackingMetres(125000.f/FO3_UNITS_PER_METRE_Q715,scale))&&rendered;
                     if(rendered&&spacewarp_.Requested())spacewarpHistory_.EyeRendered(1); // One native multiview submission covers both eyes.
                     if(!rendered){FQ_LOGE("FQVK gameplay presentation failed; exiting without GLES fallback");exitRequested_=true;}
                 }
@@ -2323,8 +2327,9 @@ private:
                    spacewarpHistory_.CanSynthesize(spacewarpCoverage_)&&
                    spacewarpHistory_.CurrentFrame().scene==gSceneLoad.generation){
                     XrPosef delta{};
+                    const auto& current=spacewarpHistory_.CurrentFrame();
                     if(fqspacewarp::ArtificialYawDelta(spacewarpHistory_.PreviousFrame().appToWorld,
-                       spacewarpHistory_.CurrentFrame().appToWorld,spacewarp_.Backend(),delta))
+                       current.appToWorld,spacewarp_.Backend(),delta,current.trackingScale))
                         spacewarpAttached=spacewarp_.Attach(projectionViews,spacewarpHistory_,spacewarpCoverage_,delta,.04f,125000.f/FO3_UNITS_PER_METRE_Q715);
                 }
 
@@ -2380,8 +2385,8 @@ private:
         if(spacewarp_.Requested()){
             if(spacewarpProducerReady_)spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount>=1);
             else spacewarpHistory_.Reset();
-            if(spacewarpProducerReady_&&(spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d nativeEffectsLayer=%d layers=%u periodUs=%lld",
-                gExteriorWorldspaceQ1890,spacewarpHistory_.SubmittedFrames(),!spacewarpAttached,spacewarpAttached,q1700FrameSubmitted,
+            if(spacewarpProducerReady_&&(spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X cell=%08X trackingScale=%.3f history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d nativeEffectsLayer=%d layers=%u periodUs=%lld",
+                gExteriorWorldspaceQ1890,gCurrentCellFormId,Fo3PlayerTrackingScale(),spacewarpHistory_.SubmittedFrames(),!spacewarpAttached,spacewarpAttached,q1700FrameSubmitted,
                 spacewarpCoverage_[0].Complete(spacewarpSerial_),spacewarpCoverage_[1].Complete(spacewarpSerial_),layerCount==2,layerCount,
                 (long long)(frameState.predictedDisplayPeriod/1000));
         }
@@ -2914,8 +2919,9 @@ private:
             eye.depthInfo.subImage.imageRect = {{0,0},{eye.width,eye.height}};
             eye.depthInfo.subImage.imageArrayIndex = 0;
             eye.depthInfo.minDepth = 0.0f; eye.depthInfo.maxDepth = 1.0f;
-            eye.depthInfo.nearZ = 0.04f;
-            eye.depthInfo.farZ = 125000.0f / FO3_UNITS_PER_METRE_Q715;
+            const float scale=Fo3PlayerTrackingScale();
+            eye.depthInfo.nearZ = fqspacewarp::TrackingMetres(.04f,scale);
+            eye.depthInfo.farZ = fqspacewarp::TrackingMetres(125000.f/FO3_UNITS_PER_METRE_Q715,scale);
             projectionView.next = &eye.depthInfo;
         }
         projectionView.pose = view.pose;

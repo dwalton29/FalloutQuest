@@ -5,11 +5,11 @@
 #include <vector>
 namespace fqspacewarp {
 enum class Api { None,EXT,FB };
-// ToVirtualPose uses only a rigid yaw + translation for artificial locomotion.
-// Head/controller tracking belongs in VP matrices, never in this delta.
-inline bool ArtificialYawDelta(const Matrix& previous,const Matrix& current,Api api,XrPosef& delta){
+// With stable tracking scale the artificial transform is rigid in headset metres.
+// Head/controller tracking belongs in VP matrices.
+inline bool ArtificialYawDelta(const Matrix& previous,const Matrix& current,Api api,XrPosef& delta,float trackingScale=1.f){
     delta={};delta.orientation.w=1;
-    if(api==Api::None)return false;
+    if(api==Api::None||!std::isfinite(trackingScale)||trackingScale<=0)return false;
     for(const auto* m:{&previous,&current}){
         if(!Finite(*m))return false;
         for(unsigned i:{1u,3u,4u,6u,7u,9u,11u})if(std::abs((*m)[i])>1e-4f)return false;
@@ -21,7 +21,9 @@ inline bool ArtificialYawDelta(const Matrix& previous,const Matrix& current,Api 
     // EXT explicitly requires translation in current application coordinates.
     // Meta's FB guide specifies inverse(previousAppPose) * currentAppPose.
     const auto& basis=api==Api::EXT?current:previous;
-    const float x=current[12]-previous[12],y=current[13]-previous[13],z=current[14]-previous[14];
+    const float x=TrackingMetres(current[12]-previous[12],trackingScale);
+    const float y=TrackingMetres(current[13]-previous[13],trackingScale);
+    const float z=TrackingMetres(current[14]-previous[14],trackingScale);
     delta.position={basis[0]*x+basis[1]*y+basis[2]*z,basis[4]*x+basis[5]*y+basis[6]*z,basis[8]*x+basis[9]*y+basis[10]*z};
     return std::isfinite(delta.position.x)&&std::isfinite(delta.position.y)&&std::isfinite(delta.position.z);
 }
@@ -86,7 +88,12 @@ public:
   }
   bool Attach(std::array<XrCompositionLayerProjectionView,2>& views,const History& history,
               const std::array<Coverage,2>& coverage,const XrPosef& appDelta,float nearZ,float farZ){
-    if(!allocated_||!history.CanSynthesize(coverage)||!std::isfinite(nearZ)||!std::isfinite(farZ)||nearZ<=0||farZ<=nearZ)return false;
+    if(!allocated_||!history.CanSynthesize(coverage))return false;
+    // Perspective depth is invariant under a uniform change of units when
+    // both clip planes and the sample distance use the same conversion.
+    const float scale=history.CurrentFrame().trackingScale;
+    nearZ=TrackingMetres(nearZ,scale);farZ=TrackingMetres(farZ,scale);
+    if(!std::isfinite(nearZ)||!std::isfinite(farZ)||nearZ<=0||farZ<=nearZ)return false;
     const float norm=appDelta.orientation.x*appDelta.orientation.x+appDelta.orientation.y*appDelta.orientation.y+appDelta.orientation.z*appDelta.orientation.z+appDelta.orientation.w*appDelta.orientation.w;
     if(!std::isfinite(norm)||std::abs(norm-1)>1e-3f||!std::isfinite(appDelta.position.x)||!std::isfinite(appDelta.position.y)||!std::isfinite(appDelta.position.z))return false;
     for(unsigned eye=0;eye<2;++eye)if(views[eye].next==&ext_[eye]||views[eye].next==&fb_[eye])return false;

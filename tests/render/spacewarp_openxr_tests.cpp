@@ -35,6 +35,41 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetSystemProperties(XrInstance,XrSystemId,XrSys
 }
 Frame Input(uint64_t serial){Frame f;f.serial=serial;f.displayTime=int64_t(serial)*1000;f.world=0x3c;f.sceneReady=f.focused=true;return f;}
 Matrix Yaw(float yaw,float x=0,float y=0,float z=0){auto m=fqskin::Identity();m[0]=m[10]=std::cos(yaw);m[2]=-std::sin(yaw);m[8]=std::sin(yaw);m[12]=x;m[13]=y;m[14]=z;return m;}
+static void ScaledInterior(Session& session){
+ History history;
+ Frame frame=Input(1);frame.world=0;frame.trackingScale=.5f;
+ for(unsigned i=1;i<=2;++i){
+   frame.serial=i;frame.displayTime=i*1000;assert(history.Begin(frame));
+   history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));
+ }
+ frame.serial=3;frame.displayTime=3000;frame.appToWorld=Yaw(0,.2f,.1f,-.3f);
+ assert(history.Begin(frame)&&history.Ready());history.EyeRendered(0);history.EyeRendered(1);
+ std::array<Coverage,2> coverage{};
+ for(auto& c:coverage){c.serial=3;c.motion=c.depth=c.staticWorld=c.cutouts=c.hands=c.weapons=true;}
+ XrPosef delta{};
+ assert(ArtificialYawDelta(history.PreviousFrame().appToWorld,frame.appToWorld,session.Backend(),delta,frame.trackingScale));
+ assert(delta.position.x==.4f&&delta.position.y==.2f&&delta.position.z==-.6f);
+ std::array<XrCompositionLayerProjectionView,2> views{{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}}};
+ assert(session.Attach(views,history,coverage,delta,.04f,1000));
+ for(const auto& view:views){
+   if(session.Backend()==Api::EXT){
+     const auto* info=static_cast<const XrFrameSynthesisInfoEXT*>(view.next);
+     assert(info->nearZ==.08f&&info->farZ==2000&&info->appSpaceDeltaPose.position.z==-.6f);
+   }else{
+     const auto* info=static_cast<const XrCompositionLayerSpaceWarpInfoFB*>(view.next);
+     assert(info->nearZ==.08f&&info->farZ==2000&&info->appSpaceDeltaPose.position.z==-.6f);
+   }
+ }
+ assert(history.Finish(true));
+ assert(!CameraCut(Yaw(0),Yaw(0,.99f),frame.trackingScale));
+ assert(CameraCut(Yaw(0),Yaw(0,1.01f),frame.trackingScale));
+ frame.serial=4;frame.displayTime=4000;frame.trackingScale=.75f;
+ assert(history.Begin(frame)&&!history.Ready()&&history.SubmittedFrames()==0);
+ frame.serial=5;frame.displayTime=5000;frame.modal=true;
+ assert(!history.Begin(frame)&&!history.Active());
+ frame.modal=false;frame.trackingScale=0;assert(!history.Begin(frame));
+ assert(!ArtificialYawDelta(Yaw(0),Yaw(0),session.Backend(),delta,0));
+}
 int main(){
  XrPosef motionDelta{};
  for(auto api:{Api::EXT,Api::FB}){
@@ -66,6 +101,7 @@ int main(){
  const auto* info=static_cast<const XrFrameSynthesisInfoEXT*>(views[0].next);assert(info->next==&depth&&info->motionVectorSubImage.swapchain==session.Eye(0).motion);
  assert(info->layerFlags==XR_FRAME_SYNTHESIS_INFO_REQUEST_RELAXED_FRAME_INTERVAL_BIT_EXT&&info->nearZ==.04f&&info->farZ==1000);
  assert(info->motionVectorScale.y==1);
+ ScaledInterior(session);
  assert(!session.Attach(views,history,coverage,delta,.04f,1000));
  for(auto& v:views)v.next=&depth;
  coverage[1].weapons=false;assert(!session.Attach(views,history,coverage,delta,.04f,1000)&&views[0].next==&depth);coverage[1].weapons=true;
@@ -112,6 +148,7 @@ int main(){
  extensions.resize(1);assert(session.Negotiate(true,extensions)==std::string(XR_FB_SPACE_WARP_EXTENSION_NAME));assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,1,2));
  for(auto& v:views)v.next=nullptr;
  assert(session.Attach(views,history,coverage,delta,.04f,1000));assert(static_cast<const XrCompositionLayerSpaceWarpInfoFB*>(views[0].next)->type==XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB);
+ ScaledInterior(session);
  session.Destroy();assert(live.empty());
  assert(session.Negotiate(true,extensions));failAt=creates+3;assert(!session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,1,2)&&live.empty());failAt=0;
  extensions.resize(2);std::strcpy(extensions[1].extensionName,XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME);session.Negotiate(true,extensions);width=0;

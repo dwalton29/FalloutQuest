@@ -13,22 +13,25 @@ struct Frame {
   uint64_t serial=0,scene=0;
   int64_t displayTime=0;
   uint32_t world=0;
+  float trackingScale=1.f; // Render-world metres per OpenXR tracking metre.
   std::array<float,3> origin{};
   Matrix appToWorld=fqskin::Identity();
   std::array<Matrix,2> viewProjection{fqskin::Identity(),fqskin::Identity()};
   bool sceneReady=false,loading=false,focused=false,modal=false;
 };
 inline bool Finite(const Matrix& m){for(float f:m)if(!std::isfinite(f))return false;return true;}
+inline float TrackingMetres(float worldMetres,float scale){return worldMetres/scale;}
 inline bool Eligible(const Frame& f){
   if(!f.sceneReady||f.loading||!f.focused||f.modal||f.displayTime<=0||!Finite(f.appToWorld))return false;
+  if(!std::isfinite(f.trackingScale)||f.trackingScale<=0)return false;
   for(float v:f.origin)if(!std::isfinite(v))return false;
   return Finite(f.viewProjection[0])&&Finite(f.viewProjection[1]);
 }
-inline bool CameraCut(const Matrix& a,const Matrix& b){
+inline bool CameraCut(const Matrix& a,const Matrix& b,float trackingScale){
   float distance=0,rotation=0;
-  for(int i=0;i<3;++i){const float d=a[12+i]-b[12+i];distance+=d*d;}
+  for(int i=0;i<3;++i){const float d=TrackingMetres(a[12+i]-b[12+i],trackingScale);distance+=d*d;}
   for(int i:{0,1,2,4,5,6,8,9,10})rotation+=a[i]*b[i];
-  // VR policy: a >2 m jump or >30 degree turn invalidates temporal history.
+  // VR policy: a >2 tracking-metre jump or >30 degree turn invalidates history.
   return distance>4.f||rotation<1.f+2.f*std::cos(.5235987756f);
 }
 struct Drawable {
@@ -57,7 +60,9 @@ public:
   void Reset(){committed_.clear();pending_.clear();submitted_=0;candidate_=false;eyes_={};pendingBytes_=0;consistent_=true;}
   bool Begin(const Frame& f){
     if(!Eligible(f)){Reset();return false;}
-    if(submitted_&&(f.world!=previous_.world||f.scene!=previous_.scene||f.origin!=previous_.origin||f.displayTime<=previous_.displayTime||CameraCut(previous_.appToWorld,f.appToWorld)))Reset();
+    if(submitted_&&(f.world!=previous_.world||f.scene!=previous_.scene||f.origin!=previous_.origin||
+                   f.trackingScale!=previous_.trackingScale||f.displayTime<=previous_.displayTime||
+                   CameraCut(previous_.appToWorld,f.appToWorld,f.trackingScale)))Reset();
     current_=f;pending_.clear();pendingBytes_=0;eyes_={};consistent_=true;candidate_=true;return true;
   }
   bool Record(uint64_t identity,const Drawable& d){
