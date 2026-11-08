@@ -32,6 +32,7 @@ struct SessionState {
   Location lastExterior;
   Waypoint waypoint;
   uint32_t selectedQuest = 0, tunedRadio = 0;
+  std::unordered_set<uint32_t> silentRadios;
   // Runtime-observed counters. Original General label comes from GMST/exe.
   uint32_t aidUsed = 0;
   float radiation = 0;

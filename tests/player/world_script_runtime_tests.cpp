@@ -69,6 +69,7 @@ namespace fo3audio {
 uint32_t token=0,secondToken=0;uint64_t completion=0,secondCompletion=0;bool intercom=false;std::string path;std::vector<uint32_t> sounds;
 void SoundEvent(uint32_t id){sounds.push_back(id);}
 void SoundAt(uint32_t id,float,float){sounds.push_back(id);}
+void RadioConversation(uint32_t,uint32_t,const fo3pipdata::SessionState&){}
 void StopDialogueLane(unsigned lane){(lane?secondToken:token)=0;}
 void DialogueGain(float){}
 void ScriptDialogue(const std::string& p,uint32_t t,unsigned lane,bool filtered){

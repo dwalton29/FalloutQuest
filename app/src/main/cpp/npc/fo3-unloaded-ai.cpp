@@ -74,6 +74,7 @@ bool SupportedLocalProcedure(const fo3pipdata::PackageDefinition& p) {
   // idle/procedure actions or unsupported PLDT mode.
   switch(p.type){case 3:case 4:case 5:case 6:case 12:case 14:break;default:return false;}
   return p.combatStyleValid&&!p.scripted&&!p.procedureActions&&
+         std::none_of(p.procedureTopics.begin(),p.procedureTopics.end(),[](uint32_t topic){return topic!=0;})&&
          p.location.valid&&p.location.type==0&&!p.location2.valid;
 }
 void Scheduler::Reset(){minute_=-1;previousMinute_=-1;batchHour_=0.f;batchCalendar_={};cursor_=0;pending_.clear();lastTransferredMinute_.clear();}

@@ -364,6 +364,11 @@ void Actions(){
             else if(auto* actor=DialogueActor(action.reference))Q230StopScriptCombat(*actor,seconds);
         }else if(action.kind==fo3script::ActionKind::PipboyReset){ResetFo3Pipboy();}
         else if(action.kind==fo3script::ActionKind::RadioRefresh){RefreshFo3PipboyRadio();}
+        else if(action.kind==fo3script::ActionKind::RadioConversation){
+            bool disabled=false;std::string error;
+            if(player.ReferenceDisabled(action.reference,disabled,error)&&!disabled)
+                fo3audio::RadioConversation(action.reference,action.form,player.Snapshot().pipboy);
+        }
         else if(action.kind==fo3script::ActionKind::PackageIdle){
             if(auto* actor=DialogueActor(action.reference))Q230PlayPackageIdle(*actor,action.form,action.flags);
         }else if(action.kind==fo3script::ActionKind::KillQuestUpdates){

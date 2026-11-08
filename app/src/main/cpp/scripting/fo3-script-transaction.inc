@@ -143,7 +143,7 @@ bool Player::PackageEventNeeded(uint32_t reference,uint32_t package,bool complet
   if(old!=state_.actorPackageEvents.end()&&old->second.first==package&&(!completed||old->second.second))return false;
   auto actions=[&](uint32_t id){const auto p=catalog_->pipboy.packages.find(id);if(p==catalog_->pipboy.packages.end())return false;
     if((p->second.flags&0x400u)||p->second.procedureActions||p->second.otherProcedureScript||p->second.dialogueType==1||(p->second.dialogueType==0&&p->second.dialogueTopic))return true;
-    for(size_t n=0;n<3;++n)if(p->second.procedureIdles[n]||!p->second.procedureScripts[n].source.empty()||!p->second.procedureScripts[n].compiled.empty())return true;
+    for(size_t n=0;n<3;++n)if(p->second.procedureIdles[n]||p->second.procedureTopics[n]||!p->second.procedureScripts[n].source.empty()||!p->second.procedureScripts[n].compiled.empty())return true;
     return false;};
   if(!actions(package)&&!(old!=state_.actorPackageEvents.end()&&actions(old->second.first))&&
      !HasReferenceEvent(reference,"OnPackageStart")&&!HasReferenceEvent(reference,"OnPackageDone")&&!HasReferenceEvent(reference,"OnPackageChange"))return false;
@@ -165,7 +165,7 @@ std::unique_ptr<ScriptTransactionPlan> Player::PreparePackageEventTransaction(
     struct Restore {Player& p;uint32_t reference;~Restore(){p.scriptReference_=reference;}} restore{candidate,previousReference};
     auto run=[&](const char* event,uint32_t filter,unsigned phase){
       const auto& definition=catalog_->pipboy.packages.at(filter);
-      if(definition.procedureActions||definition.otherProcedureScript){e="unsupported package topic/action framing";return false;}
+      if(definition.procedureActions||definition.otherProcedureScript){e="unsupported package action framing";return false;}
       const auto& result=definition.procedureScripts[phase];
       if(!result.source.empty()||!result.compiled.empty()){
         ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::PackageResult;origin.record=filter;origin.item=phase;
@@ -174,6 +174,11 @@ std::unique_ptr<ScriptTransactionPlan> Player::PreparePackageEventTransaction(
       if(definition.procedureIdles[phase]){
         fo3script::Action idle;idle.kind=fo3script::ActionKind::PackageIdle;idle.reference=reference;idle.form=definition.procedureIdles[phase];idle.flags=definition.flags;
         if(!candidate.QueueScriptAction(std::move(idle))){e="package idle action queue full";return false;}
+      }
+      const auto topic=definition.procedureTopics[phase];
+      if(topic&&(!catalog_->pipboy.dialogueTopics.count(topic)||
+                 !candidate.QueueScriptSpeech(reference,topic,PlayerRef,false,false,0,true))){
+        e="package procedure speech unavailable";return false;
       }
       return !candidate.HasReferenceEvent(reference,event)||candidate.RunSourceEventDirect(script,event,reference,0,e,filter);
     };

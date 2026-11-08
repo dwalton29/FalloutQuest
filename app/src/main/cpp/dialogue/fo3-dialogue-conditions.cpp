@@ -10,6 +10,20 @@ bool Compare(float a,float b,uint8_t flags) {
   if(!std::isfinite(a)||!std::isfinite(b))return false;
   switch(flags>>5){case 0:return a==b;case 1:return a!=b;case 2:return a>b;case 3:return a>=b;case 4:return a<b;case 5:return a<=b;default:return false;}
 }
+bool DeadCount(const fo3player::Player& player,uint32_t base,float& value,std::string& error){
+  const auto& definitions=player.Definitions();
+  if(!definitions.pipboy.dialogueActors.count(base)){error="GetDeadCount actor base unavailable";return false;}
+  const auto actor=definitions.weapons.actors.find(base);
+  if(actor==definitions.weapons.actors.end()||(actor->second.flags&8)){error="GetDeadCount respawning/unknown actor unsupported";return false;}
+  value=0;
+  for(const auto& placement:definitions.actorPlacements){
+    if(placement.second.base!=base||(placement.second.flags&0x20))continue;
+    const auto health=player.ActorHealth(placement.first);
+    if(health<0){error="GetDeadCount actor health unavailable";return false;}
+    if(health==0)++value;
+  }
+  return true;
+}
 uint64_t VariableKey(const fo3pipdata::Definitions& d,uint32_t owner,uint32_t index,bool quest,CommandFormCapture* capture) {
   uint32_t script=0,base=0;
   if(quest){auto q=d.quests.find(owner);if(q!=d.quests.end())script=q->second.script;}
@@ -81,16 +95,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 35: {bool disabled=false;
     if(!p.ReferenceDisabled(who.reference,disabled,error))return false;
     value=disabled;return true;}
-  case 84: {
-    if(!d.dialogueActors.count(c.a)){error="GetDeadCount actor base unavailable";return false;}
-    // Count canonical original ACHRs and persisted deaths, independently of residency.
-    // Respawning actors require a cumulative death counter and remain unsupported.
-    auto a=p.Definitions().weapons.actors.find(c.a);
-    if(a==p.Definitions().weapons.actors.end()||(a->second.flags&8)){error="GetDeadCount respawning/unknown actor unsupported";return false;}
-    value=0;for(const auto& ref:p.Definitions().actorPlacements)if(ref.second.base==c.a&&!(ref.second.flags&0x20)) {
-      const auto health=p.ActorHealth(ref.first);if(health<0){error="GetDeadCount actor health unavailable";return false;}if(health==0)++value;
-    }
-    return true;}
+  case 84:return DeadCount(p,c.a,value,error);
   case 46:{const float health=pc?p.Health():p.ActorHealth(who.reference);if(health<0){error="actor health unavailable";return false;}value=health<=0;return true;}
   case 47:
     if(!pc){error="NPC inventory state unavailable";return false;}
@@ -102,7 +107,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 56:{auto q=d.quests.find(c.a);if(q==d.quests.end()){error="quest unavailable";return false;}value=quest==state.pipboy.quests.end()?(q->second.flags&1)!=0:quest->second.running;return true;}
   case 58:value=quest==state.pipboy.quests.end()?0:quest->second.stage;return d.quests.count(c.a)!=0;
   case 59:value=quest!=state.pipboy.quests.end()&&quest->second.stages.count(c.b);return d.quests.count(c.a)!=0;
-  case 67:value=who.cell==c.a;return who.cell!=0;
+  case 67:value=fo3pipdata::InCell(d,who.cell,c.a);return who.cell!=0;
   case 68:case 69:case 70:case 71:case 73:
     if(!def){error="actor identity unavailable";return false;}
     if(c.function==68)value=def->actorClass==c.a;

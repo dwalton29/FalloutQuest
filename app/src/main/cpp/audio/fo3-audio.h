@@ -22,6 +22,7 @@ void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
            const fo3pipdata::SessionState &state);
 void Note(uint32_t note, const std::vector<std::string> &paths);
 void RadioState(const fo3pipdata::SessionState &state);
+void RadioConversation(uint32_t transmitter,uint32_t topic,const fo3pipdata::SessionState& state);
 uint32_t PlayingNote();
 void BroadcastDone(int channel, uint32_t generation);
 void Start(JavaVM *vm, jobject activity);

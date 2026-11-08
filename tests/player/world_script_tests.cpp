@@ -131,7 +131,7 @@ static void Synthetic(){
   Check(!doorPlayer.PollScriptAction(action)&&doorPlayer.CommitScriptTransaction(*delegated),"default action is transactional");
   Check(doorPlayer.PollScriptAction(action)&&action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==30,"source default action queued");
   Check(doorPlayer.ScriptLock(30,100)&&!doorPlayer.CanScriptActivateDoor(30),"source delegation respects locks");
-  doors.pipboy.scripts[301].source="Begin OnActivate\nif 1\nforceSave\nendif\nActivate\nEnd";doors.eventPrograms[301]=fo3script::ParseEvents(doors.pipboy.scripts[301]);
+  doors.pipboy.scripts[301].source="Begin OnActivate\nif 1\nUnsupportedOperation\nendif\nActivate\nEnd";doors.eventPrograms[301]=fo3script::ParseEvents(doors.pipboy.scripts[301]);
   Player unsupported(doors);Check(!unsupported.PrepareReferenceEventTransaction(30,"OnActivate",PlayerRef,error)&&!unsupported.PollScriptAction(action),"executed unsupported operation rejects entire event");
   // Image curves are sampled over the authored duration, not reduced to last keys.
   fo3script::ImageModifier m;m.valid=true;m.flags=1;m.duration=10;m.fade.keys={{0,{1,1,1,.8f}},{1,{1,1,1,0}}};m.blur.keys={{0,{2,0,0,0}},{1,{0,0,0,0}}};

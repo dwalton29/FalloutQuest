@@ -134,7 +134,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       in>>std::ws;if(in.peek()!='"'||!(in>>std::quoted(cmd.expression))||!fo3movie::ValidPath(cmd.expression)){error="invalid quoted Bink filename";return false;}
       for(unsigned n=0;n<4;++n){if(!(in>>a)){in.clear();break;}if(a!="0"&&a!="1"){error="invalid Bink flag";return false;}if(a=="1")cmd.index|=1u<<n;else cmd.index&=~(1u<<n);}
     }else if(op=="showracemenu")cmd.type=CommandType::AppearanceMenu;
-    else if(op=="showspecialbookmenu"||op=="ssbmp"){
+    else if(op=="showspecialbookmenu"||op=="ssbmp"||op=="setspecialpoints"){
       cmd.type=CommandType::SpecialBook;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<7||cmd.value>70||std::floor(cmd.value)!=cmd.value){error="invalid SPECIAL point total";return false;}
     }else if(op=="setplayertagskill"){
@@ -384,11 +384,6 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
         if(in>>b){if(b!="0"&&b!="1"){error="invalid Activate event flag";return false;}cmd.variable=b=="1";}
       }
       in.clear();
-    } else if(op=="forcesave") {
-      // Recognize these commands without pretending their effects exist.
-      // Unentered character-generation branches do not execute them; entered
-      // branches still reject the entire transaction explicitly.
-      cmd.type=CommandType::Unavailable;cmd.expression=op;
     } else if(op=="playsound3d"||(op.size()>12&&op.compare(op.size()-12,12,".playsound3d")==0)) {
       cmd.type=CommandType::PlaySound3D;
       cmd.index=op=="playsound3d"?owner:form(op.substr(0,op.size()-12));
@@ -398,10 +393,24 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}
       if(in>>b){if(b!="0"&&b!="1"){error="invalid PlaySound wait flag";return false;}cmd.index=uint32_t(b=="1");}
       in.clear();
-    } else if(op=="autosave")cmd.type=CommandType::AutoSave;
+    } else if(op=="autosave"||op=="forcesave")cmd.type=CommandType::AutoSave;
     else if(op=="resetpipboymanager")cmd.type=CommandType::PipboyReset;
     else if(op=="forceradiostationupdate")cmd.type=CommandType::RadioRefresh;
     else if(op=="pipboyradiooff")cmd.type=CommandType::RadioOff;
+    else if(op.find('.')!=std::string::npos&&
+            (op.substr(op.find('.')+1)=="setbroadcaststate"||op.substr(op.find('.')+1)=="startradioconversation")){
+      const auto dot=op.find('.');
+      if(!(cmd.form=form(op.substr(0,dot)))){error="invalid radio transmitter";return false;}
+      if(op.substr(dot+1)=="setbroadcaststate"){
+        cmd.type=CommandType::BroadcastState;
+        if(!(in>>a)||(a!="0"&&a!="1")){error="invalid broadcast state";return false;}
+        cmd.value=a=="1";
+      }else{
+        cmd.type=CommandType::RadioConversation;
+        if(in>>a){if(!(cmd.index=form(a))){error="invalid radio topic";return false;}}
+        else in.clear();
+      }
+    }
     else if(op=="player.removeallitems")cmd.type=CommandType::RemoveAllItems;
     else if(op=="player.equipitem"||op=="player.unequipitem"){
       cmd.type=op=="player.equipitem"?CommandType::EquipItem:CommandType::UnequipItem;

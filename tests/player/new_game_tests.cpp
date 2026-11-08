@@ -10,6 +10,7 @@
 #include "dialogue/fo3-dialogue-conditions.h"
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-selection.h"
+#include "pipboy/fo3-radio-runtime.h"
 #include <cassert>
 #include <iostream>
 #include <unistd.h>
@@ -240,11 +241,13 @@ static void CalendarAssignments(){
   Check(p.ExecuteDialogueResult(change,error),error);
   assert(p.Snapshot().gameYear==2268&&p.Snapshot().gameMonth==6&&p.Snapshot().gameDay==13&&p.Snapshot().gameHour==16&&p.Snapshot().pipboy.mutableGlobals.empty());
   float value=0;assert(p.GlobalValue(701,value)&&value==2268&&p.GlobalValue(704,value)&&value==16);
-  assert(!p.SetGlobalValue(701,0)&&!p.SetGlobalValue(702,12)&&!p.SetGlobalValue(703,32)&&!p.SetGlobalValue(704,24)&&!p.SetGlobalValue(704,NAN)&&!p.SetGlobalValue(705,1)&&!p.SetGlobalValue(706,1));
+  assert(!p.SetGlobalValue(701,0)&&!p.SetGlobalValue(702,12)&&!p.SetGlobalValue(703,32)&&!p.SetGlobalValue(704,24)&&!p.SetGlobalValue(704,NAN)&&!p.SetGlobalValue(705,-1)&&!p.SetGlobalValue(706,1));
+  assert(p.SetGlobalValue(705,5.25f)&&p.GlobalValue(705,value)&&value==5.25f&&p.Snapshot().gameDaysPassed==0);
   assert(p.SetGlobalValue(703,29)&&p.SetGlobalValue(702,1)&&!p.SetGlobalValue(701,2269));
   assert(p.SetGlobalValue(703,28)&&p.SetGlobalValue(701,2269));
   const auto path="/tmp/fq-script-calendar-"+std::to_string(getpid());Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);unlink(path.c_str());
   assert(restored.Snapshot().gameYear==2269&&restored.Snapshot().gameMonth==1&&restored.Snapshot().gameDay==28&&restored.Snapshot().gameHour==16);
+  assert(restored.GlobalValue(705,value)&&value==5.25f&&restored.AdvanceGameHours(6)&&restored.GlobalValue(705,value)&&value==5.5f);
 }
 static void TalkingActivators(){
   using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
@@ -426,6 +429,179 @@ static void OriginalInventory(const fo3player::Catalog& catalog){
   Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.ItemCount(id("vaultsuit101"))==1&&restored.ItemCount(pipboy)>=1&&restored.ItemCount(id("ammo10mm"))==66);
 }
+static void OriginalEscapeStart(fo3player::Player& p,const char* master){
+  const auto& catalog=p.Definitions();const auto& d=catalog.pipboy;
+  const auto id=[&](const char* name){return d.formNames.at(name);};
+  const auto exam=id("cg03"),escape=id("cg04"),amata=id("cg04amataref"),radio=id("radiovault101ref");
+  const auto triggerScript=id("cg03freddiebrotchtriggerscript");
+  uint32_t trigger=0;
+  for(const auto& volume:d.triggerPrimitives){
+    const auto ref=catalog.references.find(volume.first);if(ref==catalog.references.end())continue;
+    const auto script=catalog.eventBaseScripts.find(ref->second.base);
+    if(script!=catalog.eventBaseScripts.end()&&script->second==triggerScript){trigger=volume.first;break;}
+  }
+  assert(trigger);
+  const auto& at=d.targets.at(trigger);
+  p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+  std::string error,lastDiagnostic;
+  p.SetScriptEventDiagnostic([&](const std::string& value){
+    if(value.find("SCPT "+std::to_string(id("cg03script"))+" ")!=std::string::npos||
+       value.find("SCPT "+std::to_string(id("cg04script"))+" ")!=std::string::npos)lastDiagnostic=value;
+  });
+  auto enter=p.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",fo3player::PlayerRef,error,
+                                               fo3player::ScriptProgramCapture::EnteredPrograms);
+  Check(bool(enter),error);
+  fo3script::ScriptMasterMatch evidence;std::atomic<bool> cancelled{false};
+  Check(fo3script::MatchScriptProgramsToMaster(master,enter->ExecutedScripts(),evidence,cancelled,error),error);
+  Check(p.CommitScriptTransaction(*enter),error);
+  assert(p.Snapshot().pipboy.quests.at(exam).stage==90);
+  double now=2400;
+  auto tick=[&](){
+    now+=.1;p.SetScriptRuntimeClock(now,.1);
+    p.PumpWorldAwareGameMode(.1,{},[&](auto plan){return p.CommitScriptTransaction(*plan);});
+  };
+  for(unsigned i=0;i<100&&!p.Snapshot().playerMove.pending;++i)tick();
+  Check(p.Snapshot().playerMove.pending,"G.O.A.T. to Escape handoff: "+lastDiagnostic);
+  const auto move=p.Snapshot().playerMove;
+  const auto movie=p.Snapshot().movie;
+  assert(move.marker==id("cg04playerstartmarker")&&movie.owner&&movie.path=="3 years later.bik");
+  assert(!p.Snapshot().pipboy.quests.at(exam).running&&p.Snapshot().pipboy.quests.at(escape).stages.count(0));
+  assert(p.Snapshot().pipboy.silentRadios.count(radio)&&p.Snapshot().inCharGen&&p.GetLock(id("vault101exitdoor")).locked);
+  const auto radioEnabled=[&](uint32_t ref){bool disabled=true;return p.ReferenceDisabled(ref,disabled,error)&&!disabled;};
+  const auto& transmitter=d.transmitters.at(radio);
+  assert(fo3pipdata::InRange(d,transmitter,{move.cell,move.world,move.position[0],move.position[1]},radioEnabled));
+  assert(fo3pipdata::InRange(d,transmitter,{id("vault101b")},radioEnabled));
+  Check(p.CompleteMovie(movie.serial),"Escape movie completion");
+  p.AcknowledgePlayerMove();p.SetScriptPlayerLocation(move.position[0],move.position[1],move.position[2],move.cell,move.world);
+  auto stage=[&](){return p.Snapshot().pipboy.quests.at(escape).stage;};
+  for(unsigned i=0;i<100&&stage()==0;++i)tick();
+  Check(stage()==2,"Escape wake-up package: "+lastDiagnostic);
+  const auto waking=id("cg04playersection0");
+  assert(d.packages.at(waking).procedureIdles[0]&&p.Snapshot().scriptPackages.at(fo3player::PlayerRef).front()==waking);
+  auto wakePackage=p.PreparePackageEventTransaction(amata,id("cg04amatasection0"),false,error);
+  Check(bool(wakePackage),error);Check(p.CommitScriptTransaction(*wakePackage),error);
+  fo3script::Action opening;bool wakeIdle=false,wakeSpeech=false;
+  while(p.PollScriptAction(opening)){
+    if(opening.reference!=amata)continue;
+    wakeIdle|=opening.kind==fo3script::ActionKind::PackageIdle&&opening.form==id("loosecg04amatawaking");
+    wakeSpeech|=opening.kind==fo3script::ActionKind::SayTo&&opening.form==id("cg04amataspeech");
+  }
+  assert(wakeIdle&&wakeSpeech);
+  for(unsigned i=0;i<120&&stage()==2;++i)tick();
+  Check(stage()==3,"Escape wake-up timer: "+lastDiagnostic);
+  assert(!p.Snapshot().scriptPackages.count(fo3player::PlayerRef));
+  fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;
+  Check(fo3dialogue::ReferenceContext(p,amata,ctx.speaker)&&
+        fo3dialogue::ReferenceContext(p,fo3player::PlayerRef,ctx.target),"Escape dialogue context");
+  fo3dialogue::Session wake;
+  wake.previewReferences=[](const auto&,const auto&,auto&){return true;};
+  wake.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};
+  Check(wake.Start(ctx,p),"original Amata wake-up greeting");
+  for(unsigned lines=0;wake.phase==fo3dialogue::Phase::Speaking&&lines<10;++lines)
+    wake.AudioDone(wake.audioToken,true,ctx,p);
+  Check(stage()>=4&&!p.PlayerControlDisabled(0),"Amata's greeting restores control");
+  uint32_t topic=0;
+  float interval=0;assert(p.GlobalValue(id("cg04broadcasttimer"),interval)&&interval>0&&interval<360);
+  for(unsigned i=0;i<unsigned((interval+5)*10)&&!topic;++i){
+    tick();fo3script::Action action;
+    while(p.PollScriptAction(action))if(action.kind==fo3script::ActionKind::RadioConversation&&action.reference==radio)topic=action.form;
+  }
+  Check(topic==id("cg04emergencybroadcast"),"Escape PA timer: "+lastDiagnostic);
+  fo3pipdata::Broadcast broadcast;
+  Check(broadcast.Tune(d,radio)&&broadcast.StartConversation(d,p.Snapshot().pipboy,topic),"original PA request");
+  for(unsigned i=0;i<5;++i)Check(broadcast.Advance(d,p.Snapshot().pipboy,error).size()==1,error);
+  Check(broadcast.Advance(d,p.Snapshot().pipboy,error).empty()&&error.empty(),"one-shot PA returns to quiet");
+  const auto save="/tmp/fq-escape-"+std::to_string(getpid());
+  Check(p.Save(save,error),error);fo3player::Player restored(catalog);
+  Check(restored.Restore(save,error),error);unlink(save.c_str());
+  assert(restored.Snapshot().pipboy.silentRadios.count(radio));
+  std::cout<<"Original exam exit, Escape movie/setup, wake-up package, Amata greeting and five PA lines passed\n";
+  p.SetScriptEventDiagnostic({});
+}
+static void OriginalEscapeExit(const fo3player::Catalog& original){
+  using namespace fo3player;
+  auto catalog=original;const auto& d=catalog.pipboy;
+  const auto id=[&](const char* name){return d.formNames.at(name);};
+  const auto quest=id("cg04"),follow=id("mq01"),door=id("vault101cavedoorinterior");
+  // Start at the final door boundary, after the prior encounters.
+  auto& start=catalog.initial.pipboy.quests[quest];
+  start.stage=145;start.running=true;start.stages={0,4,10,33,120,145};
+  catalog.initial.inCharGen=true;
+  Player p(catalog);p.RegisterOriginalActors();
+  const auto& at=d.targets.at(door);
+  p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+  const auto vault=id("vault101");
+  assert(fo3pipdata::InCell(d,at.cell,vault)&&fo3pipdata::InCell(d,id("vault101b"),vault));
+  fo3dialogue::Context cellContext;cellContext.player=&p;cellContext.speaker.cell=at.cell;
+  fo3pipdata::Condition inCell;inCell.function=67;inCell.a=vault;inCell.value=1;
+  std::string error,diagnostic;
+  assert(fo3dialogue::Conditions({inCell},cellContext,error));
+  p.SetScriptEventDiagnostic([&](const std::string& value){diagnostic=value;});
+  auto activation=p.PrepareReferenceEventTransaction(door,"OnActivate",PlayerRef,error);
+  Check(bool(activation),error);Check(p.CommitScriptTransaction(*activation),error);
+  fo3script::Action action;
+  bool saved=false;
+  while(p.PollScriptAction(action)){saved|=action.kind==fo3script::ActionKind::AutoSave;assert(action.kind!=fo3script::ActionKind::DefaultActivate);}
+  assert(saved);
+  ScriptMessage message;assert(!p.PollScriptMessage(message));
+  double now=1;
+  auto tick=[&](){
+    now+=.1;p.SetScriptRuntimeClock(now,.1);
+    p.PumpWorldAwareGameMode(.1,{door},[&](auto plan){return p.CommitScriptTransaction(*plan);});
+  };
+  auto waitForMenu=[&](){
+    for(unsigned i=0;i<30;++i){tick();if(p.PollScriptMessage(message))return true;}
+    return false;
+  };
+  Check(waitForMenu(),"original exit prompt: "+diagnostic);
+  assert(message.form==id("cg04vaultexitmessage")&&message.owner==door&&message.buttons.size()==5);
+  assert(p.Snapshot().pipboy.quests.at(quest).stage==145&&!p.Snapshot().pipboy.quests.count(follow));
+  assert(p.SubmitScriptMessageButton(door,2));
+  for(unsigned i=0;i<10&&!p.Snapshot().specialMenuOwner;++i)tick();
+  Check(p.Snapshot().specialMenuOwner==door,"original final SPECIAL choice: "+diagnostic);
+  while(p.SpecialBookRemaining()>0){
+    bool adjusted=false;for(unsigned attr=0;attr<7&&!adjusted;++attr)adjusted=p.AdjustSpecialBook(attr,1);
+    assert(adjusted);
+  }
+  assert(p.ConfirmSpecialBook());
+  Check(waitForMenu(),"original exit prompt after SPECIAL: "+diagnostic);
+  assert(p.SubmitScriptMessageButton(door,4));
+  for(unsigned i=0;i<15&&p.Snapshot().pipboy.quests.at(quest).stage<150;++i)tick();
+  Check(p.Snapshot().pipboy.quests.at(quest).stage==150,"original exit result: "+diagnostic);
+  bool delegated=false;
+  while(p.PollScriptAction(action))delegated|=action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==door&&action.flags==PlayerRef;
+  assert(delegated);
+  const auto& outside=d.targets.at(at.teleportRef);
+  assert(!fo3pipdata::InCell(d,outside.cell,vault));
+  p.SetScriptPlayerLocation(outside.x,outside.y,outside.z,outside.cell,outside.world);
+  for(unsigned i=0;i<200&&p.Snapshot().pipboy.quests.at(quest).stage<200;++i)tick();
+  Check(p.Snapshot().pipboy.quests.at(quest).stage==200,"original Escape completion: "+diagnostic);
+  assert(!p.Snapshot().inCharGen&&!p.Snapshot().locationSpecificLoadScreens&&
+         !p.Snapshot().pipboy.quests.at(quest).running&&p.Snapshot().pipboy.quests.at(follow).stage==10);
+  std::cout<<"Original active cave exit, final SPECIAL choice, completion and MQ01 handoff passed\n";
+}
+static void OriginalEscapeAmbush(const fo3player::Catalog& catalog){
+  using namespace fo3player;
+  const auto id=[&](const char* name){return catalog.pipboy.formNames.at(name);};
+  const auto quest=id("cg04"),marker=id("cg04radroachambusharef"),roach=id("cg04radroachambusha");
+  Player p(catalog);p.RegisterOriginalActors();
+  std::string error;
+  auto enter=p.PrepareQuestStageTransaction(quest,12,error);
+  Check(bool(enter),error);Check(p.CommitScriptTransaction(*enter),error);
+  bool disabled=true;
+  assert(p.ReferenceDisabled(marker,disabled,error)&&!disabled);
+  std::vector<uint32_t> roaches;
+  for(const auto& ref:catalog.actorPlacements){
+    if(ref.second.base==roach&&p.ReferenceDisabled(ref.first,disabled,error)&&!disabled)roaches.push_back(ref.first);
+  }
+  assert(roaches.size()==3);
+  for(size_t i=0;i<roaches.size();++i){
+    assert(p.ApplyAttack(PlayerRef,id("weap10mmpistol"),roaches[i],10000));
+    const uint16_t expected=i+1==roaches.size()?15:12;
+    Check(p.Snapshot().pipboy.quests.at(quest).stage==expected,"authored radroach death threshold");
+  }
+  std::cout<<"Original radroach ambush advances on its third combat death\n";
+}
 static void OriginalExam(const fo3player::Catalog& original,const char* master,bool skip){
   auto catalog=original;const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg03"),teacher=d.formNames.at("cg03mrbrotchref"),butch=d.formNames.at("cg03butchref");
   // Boundary fixture: the prior introduction and hallway conversation ended.
@@ -490,6 +666,7 @@ static void OriginalExam(const fo3player::Catalog& original,const char* master,b
   const auto save="/tmp/fq-exam-"+std::to_string(getpid());Check(p.Save(save,error),error);fo3player::Player resumed(catalog);Check(resumed.Restore(save,error),error);unlink(save.c_str());
   assert(resumed.Snapshot().taggedSkills==p.Snapshot().taggedSkills&&resumed.Snapshot().tagBonuses==p.Snapshot().tagBonuses);
   std::cout<<"Original G.O.A.T. "<<(skip?"skip/selection":"ten questions/results")<<" path passed\n";
+  OriginalEscapeStart(p,master);
 }
 static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const char* master){
   fo3player::Player p(catalog);p.RegisterOriginalActors();std::string error;
@@ -796,7 +973,9 @@ int main(int argc,char** argv){
   Synthetic();HeadingAngles();TagSkills();ScriptMathAndPrompts();NestedActivation();ActorFurniture();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
-  if(argc>2&&std::string(argv[2])=="--exam"){OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);return 0;}
+  if(argc>2&&std::string(argv[2])=="--escape-exit"){OriginalEscapeExit(catalog);return 0;}
+  if(argc>2&&std::string(argv[2])=="--escape-ambush"){OriginalEscapeAmbush(catalog);return 0;}
+  if(argc>2&&std::string(argv[2])=="--exam"){OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);return 0;}
   fo3player::Player player(catalog);player.RegisterOriginalActors();
   auto plan=player.PrepareNewGameTransaction(catalog.pipboy.formNames.at("cg00"),error);Check(bool(plan),error);
   fo3script::ScriptMasterMatch match;std::atomic<bool> cancelled{false};
@@ -827,5 +1006,6 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);
-  std::cout<<"Original birth, playpen, birthday, intercom, target practice, photo, six-year jump and G.O.A.T. introduction, both sex branches, package callbacks, heading, inventory and saves passed\n";
+  OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);
+  std::cout<<"Original birth, playpen, birthday, intercom, target practice, photo, age jumps and G.O.A.T., both sex branches, package callbacks, heading, inventory and saves passed\n";
 }

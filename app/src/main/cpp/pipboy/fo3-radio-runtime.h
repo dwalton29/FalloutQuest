@@ -8,11 +8,14 @@ using EnabledReference=std::function<bool(uint32_t)>;
 bool InRange(const Definitions &, const Transmitter &, const Location &,const EnabledReference& enabled={});
 std::vector<uint32_t> AvailableStations(const Definitions &, const Location &,const EnabledReference& enabled={});
 struct Broadcast {
-  uint32_t station = 0, quest = 0, topic = 0;
+  uint32_t transmitter = 0, station = 0, quest = 0, topic = 0;
+  bool scripted = false;
   std::vector<uint32_t> next;
   std::unordered_map<std::string, float> variables;
+  std::unordered_map<std::string, float> scriptedVariables;
   std::mt19937 random{std::random_device{}()};
   bool Tune(const Definitions &, uint32_t transmitter);
+  bool StartConversation(const Definitions &, const SessionState &, uint32_t topic);
   std::vector<std::string> Advance(const Definitions &, const SessionState &,
                                    std::string &error);
   bool Conditions(const Definitions &, const SessionState &,

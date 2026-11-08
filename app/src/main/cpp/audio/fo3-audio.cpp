@@ -23,6 +23,7 @@
 #include <unordered_set>
 namespace fo3audio {
 namespace {
+constexpr int RadioConversationEvent=19;
 struct Event {
   Event() = default;
   Event(int k, uint32_t form, bool enabled, std::string editor = {})
@@ -36,6 +37,7 @@ struct Event {
   std::vector<std::string> paths;
   std::array<float,4> volumes{1,.3f,1,1};
   unsigned dialogueLane=0;
+  uint32_t radioTopic=0;
   bool intercom=false;
   float distance=-1,pan=0;
 };
@@ -458,7 +460,17 @@ void Worker() {
     }
     if(e.kind==14) {float gain=0;std::memcpy(&gain,&e.id,4);env->CallVoidMethod(runtime.activity,dialogueGain,gain);if(env->ExceptionCheck())env->ExceptionClear();continue;}
     if (e.kind == 10) {
+      const auto transmitter=radio.transmitter;
+      const bool modeChanged=transmitter&&broadcastState.silentRadios.count(transmitter)!=e.state.silentRadios.count(transmitter);
       broadcastState = std::move(e.state);
+      if(modeChanged&&!radio.scripted)advanceRadio();
+      continue;
+    }
+    if(e.kind==RadioConversationEvent){
+      if(definitions&&radio.transmitter==e.id&&radio.StartConversation(*definitions,e.state,e.radioTopic)){
+        broadcastState=std::move(e.state);
+        advanceRadio();
+      }
       continue;
     }
     if (e.kind == 6) {
@@ -670,6 +682,11 @@ void Note(uint32_t id, const std::vector<std::string> &paths) {
 void RadioState(const fo3pipdata::SessionState &state) {
   Event e{10, 0, true};
   e.state = state;
+  Push(std::move(e));
+}
+void RadioConversation(uint32_t transmitter,uint32_t topic,const fo3pipdata::SessionState& state) {
+  Event e{RadioConversationEvent,transmitter,true};
+  e.radioTopic=topic;e.state=state;
   Push(std::move(e));
 }
 uint32_t PlayingNote() { return runtime.playingNote.load(); }

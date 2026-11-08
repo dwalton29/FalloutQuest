@@ -11792,7 +11792,7 @@ void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
   gPipSolved = true;
 }
 #include "ui/pipboy/fo3-pipboy-runtime.inc"
-// Player packages use the same original IDLA/KF data as NPC packages. Their
+// Player packages use the same original INAM/IDLA/KF data as NPC packages. Their
 // skeletal pose can override avatar IK, but never the tracked OpenXR camera.
 struct QScriptPlayerAnimation {
     const fo3player::Player* owner=nullptr;uint64_t generation=0,serial=UINT64_MAX;
@@ -11816,7 +11816,9 @@ bool QPrepareScriptPlayerAnimation(){
         state={};state.owner=&player;state.generation=player.ScriptRuntimeGeneration();state.package=package;
         state.started=player.ScriptRuntimeSeconds();
         if(package){const auto& definition=defs.packages.at(package);
-            for(auto idle:definition.idleAnimations){const auto model=defs.idleModels.find(idle);std::vector<uint8_t> bytes;
+            auto idles=definition.idleAnimations;
+            if(definition.procedureIdles[0])idles.insert(idles.begin(),definition.procedureIdles[0]);
+            for(auto idle:idles){const auto model=defs.idleModels.find(idle);std::vector<uint8_t> bytes;
                 if(model!=defs.idleModels.end()&&LoadFalloutMeshFile(model->second,bytes)&&fo3anim::DecodeClip(bytes,state.clip)){
                     fo3anim::BindClip(gVrSkeleton,state.clip,state.pose);state.valid=true;break;
                 }

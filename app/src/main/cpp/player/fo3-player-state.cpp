@@ -770,8 +770,11 @@ bool Player::GlobalValue(uint32_t form,float& value) const {
   else if(form==catalog_->dayGlobal)value=float(state_.gameDay);
   else if(form==catalog_->monthGlobal)value=float(state_.gameMonth);
   else if(form==catalog_->yearGlobal)value=float(state_.gameYear);
-  else if(form==catalog_->daysPassedGlobal)
-    value=float(double(state_.gameDaysPassed)+(double(state_.gameHour)-double(catalog_->initial.gameHour))/24.);
+  else if(form==catalog_->daysPassedGlobal){
+    const auto adjustment=state_.pipboy.mutableGlobals.find(form);
+    const double offset=adjustment==state_.pipboy.mutableGlobals.end()?0.:adjustment->second;
+    value=float(double(state_.gameDaysPassed)+(double(state_.gameHour)-catalog_->initial.gameHour)/24.+offset);
+  }
   else if(form==catalog_->timeScaleGlobal)value=catalog_->gameTimeScale;
   else {auto v=state_.pipboy.mutableGlobals.find(form);value=v==state_.pipboy.mutableGlobals.end()?found->second:v->second;}
   return true;
@@ -2426,7 +2429,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
      !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)
     return fail("Invalid saved player resources");
   for(const auto& global:next.pipboy.mutableGlobals) {
-    if(!catalog_->globals.count(global.first)||global.first==catalog_->hourGlobal||global.first==catalog_->dayGlobal||global.first==catalog_->monthGlobal||global.first==catalog_->yearGlobal||global.first==catalog_->daysPassedGlobal||global.first==catalog_->timeScaleGlobal)
+    if(!catalog_->globals.count(global.first)||global.first==catalog_->hourGlobal||global.first==catalog_->dayGlobal||global.first==catalog_->monthGlobal||global.first==catalog_->yearGlobal||global.first==catalog_->timeScaleGlobal||
+       (global.first==catalog_->daysPassedGlobal&&std::abs(global.second)>1000001.f))
       return fail("Invalid mutable script global");
   }
   if (version < 5 && !MigrateWeaponInstances(next))

@@ -207,6 +207,7 @@ struct PackageDefinition {
   std::string onBeginScript;
   std::array<ResultScript,3> procedureScripts; // POBA, POEA, POCA
   std::array<uint32_t,3> procedureIdles{};
+  std::array<uint32_t,3> procedureTopics{};
 };
 struct Response {
   Response()=default;
@@ -292,6 +293,8 @@ struct Definitions {
   std::unordered_map<uint32_t, std::vector<Info>> topics;
   std::unordered_map<uint32_t, std::string> topicNames, voices, sounds;
   std::unordered_map<uint32_t, uint32_t> npcVoices, cellWorlds;
+  std::unordered_map<uint32_t, std::string> cellEditors;
+  std::unordered_map<uint32_t, std::unordered_set<uint32_t>> linkedRadioCells;
   std::unordered_map<uint32_t,std::array<int32_t,2>> cellGrids;
   std::unordered_map<uint32_t, Script> scripts;
   std::unordered_set<uint32_t> scriptReferencedForms; // Original SCRO dependencies survive placement pruning.
@@ -325,6 +328,7 @@ void Decode(Definitions &, const std::string &, uint32_t id, uint32_t flags,
             const std::vector<uint8_t> &payload, uint32_t cell, uint32_t world,
             uint32_t topic);
 void Finalize(Definitions &);
+bool InCell(const Definitions &, uint32_t current, uint32_t prefix);
 std::vector<std::string> NoteAudio(const Definitions &, uint32_t note);
 } // namespace fo3pipdata
 

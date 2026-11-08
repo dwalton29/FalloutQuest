@@ -22,7 +22,7 @@ class Expression {
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
       if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
-         query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
+         query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="getdeadcount"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
         if(at==tokens.size()||tokens[at]=="("||tokens[at]==")"||tokens[at]=="&&"||tokens[at]=="||"||tokens[at]=="==")return Fail("missing expression query argument");
@@ -61,6 +61,10 @@ class Expression {
       const auto id=form(tokens[at++]);if(!id)return Fail("unresolved item form");
       value=p.ItemCount(id);return true;
     }
+    if(t=="getdeadcount"){
+      if(at==tokens.size())return Fail("missing death-count actor base");
+      return fo3dialogue::DeadCount(p,form(tokens[at++]),value,error);
+    }
     const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
     if(query=="getisreference"){
       const auto caller=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -96,7 +100,7 @@ class Expression {
       if(at==tokens.size())return Fail("missing cell query");
       const auto cell=form(tokens[at++]);fo3pipdata::Location location;
       if(!d.cellWorlds.count(cell)||!p.ScriptReferenceLocation(id,location))return Fail("cell query location unavailable");
-      value=location.cell==cell;return true;
+      value=fo3pipdata::InCell(d,location.cell,cell);return true;
     }
     if(query=="getopenstate"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -161,7 +165,8 @@ class Expression {
     if(query=="getlocked"||query=="getlocklevel"||query=="getislockbroken") {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));auto lock=p.GetLock(id);
       if(!lock.known||lock.leveled)return Fail("unresolved lock query");
-      value=query=="getlocked"?float(lock.locked):query=="getlocklevel"?float(lock.level):float(lock.broken);return true;
+      value=query=="getlocked"?float(lock.locked?(lock.broken||lock.level>100?2:1):0):
+            query=="getlocklevel"?float(lock.level):float(lock.broken);return true;
     }
     if(t=="getcurrenttime"){value=p.Snapshot().gameHour;return true;}
     if(t=="getsecondspassed"){value=float(p.ScriptSecondsPassed());return true;}
@@ -553,6 +558,21 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::EquipItem:case C::UnequipItem:ok=ScriptEquipItem(c.form,c.type==C::EquipItem);break;
     case C::PipboyReset:case C::RadioRefresh:{fo3script::Action action;action.kind=c.type==C::PipboyReset?fo3script::ActionKind::PipboyReset:fo3script::ActionKind::RadioRefresh;ok=QueueScriptAction(std::move(action));break;}
     case C::RadioOff:ok=TuneRadio(0);break;
+    case C::BroadcastState:case C::RadioConversation:{
+      const auto& radio=catalog_->pipboy;
+      const auto transmitter=radio.transmitters.find(c.form);
+      if(transmitter==radio.transmitters.end()||!radio.stations.count(transmitter->second.base)){ok=false;break;}
+      if(c.type==C::BroadcastState){
+        const bool changed=c.value!=0?state_.pipboy.silentRadios.erase(c.form)!=0:state_.pipboy.silentRadios.insert(c.form).second;
+        if(changed)++revision_;
+      }else{
+        const auto topic=radio.dialogueTopics.find(c.index?c.index:radio.radioHello);
+        if(topic==radio.dialogueTopics.end()||topic->second.type!=7){ok=false;break;}
+        fo3script::Action action;action.kind=fo3script::ActionKind::RadioConversation;
+        action.reference=c.form;action.form=c.index;ok=QueueScriptAction(std::move(action));
+      }
+      break;
+    }
     case C::AutoSave:{fo3script::Action action;action.kind=fo3script::ActionKind::AutoSave;ok=QueueScriptAction(std::move(action));break;}
     case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;
     case C::TerminalBack:ok=QueueTerminalBack(c.form);break;
@@ -1168,7 +1188,7 @@ bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
   if((reference!=PlayerRef&&(placed==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(placed->second.base)))||(add&&!catalog_->pipboy.packages.count(package)))return false;
   if(reference==PlayerRef&&add){
     const auto& definition=catalog_->pipboy.packages.at(package);
-    if(definition.type!=6||definition.idleAnimations.empty()||definition.scripted)return false;
+    if(definition.type!=6||(!definition.procedureIdles[0]&&definition.idleAnimations.empty())||definition.scripted)return false;
   }
   if(!add&&!state_.scriptPackages.count(reference))return true;
   if(add&&!state_.scriptPackages.count(reference)&&state_.scriptPackages.size()>=10000)return false;

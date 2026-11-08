@@ -116,6 +116,12 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
     std::vector<uint32_t> ids(set->begin(),set->end());std::sort(ids.begin(),ids.end());
     Put(b,ids.size());for(auto id:ids)Put(b,id);
   }
+  if(!s.silentRadios.empty()){
+    Put(b,0x52414431); // RAD1: stations set to scripted broadcasts only.
+    std::vector<uint32_t> ids(s.silentRadios.begin(),s.silentRadios.end());
+    std::sort(ids.begin(),ids.end());
+    Put(b,ids.size());for(auto id:ids)Put(b,id);
+  }
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -233,6 +239,14 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
     for(auto* set:{&s.revealed,&s.travelEnabled}){
       const auto count=r.Count(10000);
       for(uint32_t i=0;i<count&&r.ok;++i){const auto id=r.U();if(!d.markers.count(id)||!set->insert(id).second)return fail();}
+    }
+  }
+  if(r.ok&&r.at<n){
+    if(r.U()!=0x52414431)return fail();
+    const auto count=r.Count(10000);
+    for(uint32_t i=0;i<count&&r.ok;++i){
+      const auto id=r.U();
+      if(!d.transmitters.count(id)||!s.silentRadios.insert(id).second)return fail();
     }
   }
   if (!r.ok || r.at != n ||

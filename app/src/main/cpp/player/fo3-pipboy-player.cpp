@@ -137,7 +137,14 @@ bool Player::SetGlobalValue(uint32_t id,float value) {
       state_.gameYear=uint32_t(date.year);state_.gameMonth=uint32_t(date.month);state_.gameDay=uint32_t(date.day);++revision_;
     }return true;
   }
-  if(id==catalog_->daysPassedGlobal||id==catalog_->timeScaleGlobal)return false;
+  if(id==catalog_->daysPassedGlobal){
+    if(value<0||value>1000000)return false;
+    // A script can rebase elapsed calendar time. Keep the monotonic counter
+    // used by restocks, package cooldowns and dialogue history intact.
+    const double elapsed=double(state_.gameDaysPassed)+(double(state_.gameHour)-catalog_->initial.gameHour)/24.;
+    value=float(double(value)-elapsed);
+  }
+  if(id==catalog_->timeScaleGlobal)return false;
   state_.pipboy.mutableGlobals[id]=value;++revision_;return true;
 }
 bool Player::SetObjective(uint32_t id, uint32_t index, bool displayed,

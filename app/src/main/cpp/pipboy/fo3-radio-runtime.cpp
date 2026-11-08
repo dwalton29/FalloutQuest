@@ -69,8 +69,10 @@ bool InRange(const Definitions &d, const Transmitter &t, const Location &l,const
     return t.cell == l.cell;
   if (t.range == 2)
     return t.world && t.world == l.world;
-  if (t.range == 3)
-    return t.cell == l.cell;
+  if (t.range == 3) {
+    const auto linked=d.linkedRadioCells.find(t.cell);
+    return t.cell==l.cell||(linked!=d.linkedRadioCells.end()&&linked->second.count(l.cell));
+  }
   auto position = d.targets.find(t.position);
   const Placement &p = position == d.targets.end()
                            ? static_cast<const Placement &>(t)
@@ -110,14 +112,17 @@ std::vector<uint32_t> AvailableStations(const Definitions &d,
   return out;
 }
 bool Broadcast::Tune(const Definitions &d, uint32_t id) {
-  station = quest = topic = 0;
+  transmitter = station = quest = topic = 0;
+  scripted=false;
   next.clear();
   variables.clear();
+  scriptedVariables.clear();
   if (!id)
     return true;
   auto t = d.transmitters.find(id);
   if (t == d.transmitters.end() || !d.stations.count(t->second.base))
     return false;
+  transmitter=id;
   station = t->second.base;
   for (auto &q : d.quests) {
     for (auto &c : q.second.conditions)
@@ -130,6 +135,20 @@ bool Broadcast::Tune(const Definitions &d, uint32_t id) {
   }
   topic = d.radioHello;
   return d.stations.at(station).sound || (quest && topic);
+}
+bool Broadcast::StartConversation(const Definitions& d,const SessionState& s,uint32_t requested) {
+  if(!station)return false;
+  const auto start=requested?requested:d.radioHello;
+  if(!d.topics.count(start))return false;
+  scripted=true;
+  topic=start;
+  next.clear();
+  scriptedVariables.clear();
+  for(const auto& entry:s.dialogueVariables){
+    auto name=Key(d,uint32_t(entry.first>>32),uint32_t(entry.first));
+    if(!name.empty())scriptedVariables.emplace(std::move(name),entry.second);
+  }
+  return true;
 }
 bool Broadcast::Conditions(const Definitions &d, const SessionState &s,
                            const std::vector<Condition> &conditions) const {
@@ -148,9 +167,10 @@ bool Broadcast::Conditions(const Definitions &d, const SessionState &s,
       if (key.empty())
         known = false;
       else {
-        auto v = variables.find(key);
+        const auto& active=scripted?scriptedVariables:variables;
+        auto v = active.find(key);
         auto persistent=s.dialogueVariables.find((uint64_t(c.a)<<32)|c.b);
-        value = persistent!=s.dialogueVariables.end()?persistent->second:(v == variables.end() ? 0 : v->second);
+        value = !scripted&&persistent!=s.dialogueVariables.end()?persistent->second:(v == active.end() ? 0 : v->second);
       }
       break;
     }
@@ -186,7 +206,8 @@ bool Broadcast::Conditions(const Definitions &d, const SessionState &s,
 }
 bool Broadcast::Assign(const Definitions &d,
                        const std::vector<std::string> &scripts, bool apply) {
-  auto vars = variables;
+  auto& active=scripted?scriptedVariables:variables;
+  auto vars = active;
   auto recognized = [&](std::string token) {
     auto dot = token.find('.');
     if (dot == std::string::npos)
@@ -245,20 +266,24 @@ bool Broadcast::Assign(const Definitions &d,
     }
   }
   if (apply)
-    variables = std::move(vars);
+    active = std::move(vars);
   return true;
 }
 std::vector<std::string> Broadcast::Advance(const Definitions &d,
                                             const SessionState &s,
                                             std::string &error) {
   error.clear();
+  if(scripted&&!topic){
+    scripted=false;topic=d.radioHello;scriptedVariables.clear();
+  }
   auto stationDef = d.stations.find(station);
   if (stationDef == d.stations.end()) {
     error = "Station missing";
     return {};
   }
+  if(!scripted&&s.silentRadios.count(transmitter))return {};
   auto direct = d.sounds.find(stationDef->second.sound);
-  if (direct != d.sounds.end())
+  if (!scripted&&direct != d.sounds.end())
     return {direct->second};
   for (int hop = 0; hop < 16; ++hop) {
     std::vector<uint32_t> choices =
@@ -270,11 +295,14 @@ std::vector<std::string> Broadcast::Advance(const Definitions &d,
       if (list == d.topics.end())
         continue;
       std::vector<const Info *> eligible;
-      for (auto &i : list->second)
-        if (i.type == 7 && i.quest == quest && !(i.flags & 4) &&
+      for (auto &i : list->second){
+        const auto owner=d.quests.find(i.quest);
+        const bool eligibleQuest=scripted?owner!=d.quests.end()&&Conditions(d,s,owner->second.conditions):i.quest==quest;
+        if (i.type == 7 && eligibleQuest && !(i.flags & 4) &&
             !i.compiledOnly && Conditions(d, s, i.conditions) &&
             Assign(d, i.scripts, false))
           eligible.push_back(&i);
+      }
       if (!eligible.empty()) {
         chosen = eligible.front();
         if (chosen->flags & 2)
@@ -284,6 +312,7 @@ std::vector<std::string> Broadcast::Advance(const Definitions &d,
       }
     }
     if (!chosen) {
+      if(scripted){scripted=false;next.clear();topic=d.radioHello;scriptedVariables.clear();}
       error = "No evaluable original broadcast branch (quest/condition/script "
               "runtime required)";
       return {};
@@ -296,8 +325,10 @@ std::vector<std::string> Broadcast::Advance(const Definitions &d,
     Assign(d, chosen->scripts, true);
     next = chosen->links;
     topic = (chosen->flags & 1) ? d.radioHello : chosen->topic;
-    if (chosen->flags & 1)
+    if ((chosen->flags & 1)||(scripted&&next.empty())){
       next.clear();
+      if(scripted)topic=0;
+    }
     return paths;
   }
   error = "Broadcast graph exceeded bounded traversal";

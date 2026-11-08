@@ -94,7 +94,8 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   // records. Keep their authored SCRO dependencies independently of map targets.
   for(const auto& v:s)if(v.type=="SCRO"&&v.n==4)d.scriptReferencedForms.insert(U(&v));
   const auto editor=Text(s,"EDID");
-  if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
+  auto editorKey=editor;
+  if(!editorKey.empty()) { for(auto& c:editorKey)c=char(std::tolower((unsigned char)c));d.formNames[editorKey]=id; }
   if(t=="GMST"){
     const auto v=Find(s,"DATA");if(!v||v->n!=4)return;
     const float value=editor.empty()?0:editor[0]=='i'?float(int32_t(U(v))):fo3esm::ReadF32(v->p);
@@ -253,6 +254,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.worlds[id] = std::move(w);
   } else if (t == "CELL") {
     d.cellWorlds[id] = world;
+    if(!editorKey.empty())d.cellEditors.emplace(id,std::move(editorKey));
     if(auto grid=Find(s,"XCLC");grid&&grid->n>=8)d.cellGrids[id]={int32_t(U(grid)),int32_t(U(grid,4))};
   }
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
@@ -533,18 +535,17 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       package.schedule.duration=static_cast<int32_t>(U(schedule,4));
       package.schedule.valid=true;
     }
-    // Keep each procedure fragment separate, including its compiled/source
-    // evidence. INAM is an idle action; TNAM topic actions remain unsupported.
+    // Keep each procedure fragment, idle and spoken topic on its own phase.
     int event=-1;
     for(auto& v:s) {
       if(v.type=="POBA"){event=0;continue;}
       if(v.type=="POEA"){event=1;continue;}
       if(v.type=="POCA"){event=2;continue;}
       if(v.type=="CTDA")package.conditions.push_back(Cond(v));
-      else if(v.type=="TNAM"&&v.n==4&&U(&v))package.procedureActions=true;
-      else if(v.type=="INAM"&&v.n==4){
-        if(event>=0)package.procedureIdles[event]=U(&v);
-        else if(U(&v))package.procedureActions=true;
+      else if((v.type=="INAM"||v.type=="TNAM")&&v.n==4){
+        const auto form=U(&v);
+        if(event>=0)(v.type=="INAM"?package.procedureIdles:package.procedureTopics)[event]=form;
+        else if(form)package.procedureActions=true;
       }
       else if(v.type=="SCHR"||v.type=="SCDA"||v.type=="SCTX"||v.type=="SCRO"||v.type=="SCRV"||v.type=="SLSD"||v.type=="SCVR"){
         if(event<0){
@@ -758,6 +759,25 @@ void Finalize(Definitions &d) {
   for (auto &t : d.transmitters)
     if (t.second.position)
       retain.insert(t.second.position);
+  for(const auto& entry:d.transmitters){
+    const auto& transmitter=entry.second;
+    if(transmitter.range!=3||transmitter.world||!transmitter.cell)continue;
+    auto [cached,inserted]=d.linkedRadioCells.try_emplace(transmitter.cell);
+    if(!inserted)continue;
+    auto& visited=cached->second;
+    visited.insert(transmitter.cell);
+    std::queue<uint32_t> pending;pending.push(transmitter.cell);
+    while(!pending.empty()){
+      const auto doors=d.doors.find(pending.front());pending.pop();
+      if(doors==d.doors.end())continue;
+      for(const auto& door:doors->second){
+        const auto other=d.targets.find(door.teleportRef);
+        if(other==d.targets.end()||other->second.world||!other->second.cell)continue;
+        const auto cell=other->second.cell;
+        if(visited.insert(cell).second)pending.push(cell);
+      }
+    }
+  }
   for (auto &t : d.targets)
     if (t.second.parent)
       retain.insert(t.second.parent);
@@ -766,6 +786,13 @@ void Finalize(Definitions &d) {
       i = d.targets.erase(i);
     else
       ++i;
+}
+bool InCell(const Definitions& d,uint32_t current,uint32_t prefix) {
+  if(!current||!prefix)return false;
+  if(current==prefix)return true;
+  const auto actual=d.cellEditors.find(current),expected=d.cellEditors.find(prefix);
+  return actual!=d.cellEditors.end()&&expected!=d.cellEditors.end()&&
+         actual->second.compare(0,expected->second.size(),expected->second)==0;
 }
 std::vector<std::string> BroadcastAudio(const Definitions &d, const Info &i,
                                         uint32_t voice) {
