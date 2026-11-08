@@ -205,7 +205,7 @@ fo3tagmenu::Model gTagSkillsEntry;
 fo3dialogue::Panel gTagSkillsPanel;
 bool Fo3TagSkillsFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().tagMenuOwner!=0;}
 bool Fo3MovieFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().movie.owner!=0;}
-bool Fo3ScriptMessageFocus(){return Fo3MovieFocus()||gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().deferredAppearanceOwner);}
+bool Fo3ScriptMessageFocus(){return Fo3MovieFocus()||gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().appearanceMenuOwner);}
 void UpdateFo3TagSkills(double now,float y,bool a,bool b,bool focused,const float* head){
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& player=gPlayerSession->player;
@@ -271,7 +271,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
     if(previous!=&player||generation!=player.ScriptRuntimeGeneration()){
         gScriptMessagePanel={};gScriptMessageOwner=0;gScriptMessageCursor={};previous=&player;generation=player.ScriptRuntimeGeneration();
     }
-    if(Fo3MovieFocus()||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||player.Snapshot().deferredAppearanceOwner)return;
+    if(Fo3MovieFocus()||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||player.Snapshot().appearanceMenuOwner)return;
     if(!gScriptMessagePanel.visible){
         if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;

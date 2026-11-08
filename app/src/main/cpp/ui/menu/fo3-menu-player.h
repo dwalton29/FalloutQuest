@@ -49,6 +49,8 @@ inline Document &PipDocument(int tab) {
   return docs[tab];
 }
 inline Document &NameDocument() {static Document d;return d;}
+inline Document &AppearanceDocument() {static Document d;return d;}
+inline Document &PortraitDocument() {static Document d;return d;}
 inline Document &DialogueDocument() {
   static Document d;
   return d;
@@ -151,6 +153,55 @@ inline void PlayerName(const float* mvp,const fo3player::Player& p,bool confirmS
     doc.Build();doc.revision=key;doc.selection=confirmSelected;
   }
   World(doc.surface,doc.layout,mvp);
+}
+inline void Appearance(const float* mvp,const fo3dialogue::Panel& panel,
+                       const fo3player::Player& p,GLuint portrait){
+  auto& doc=AppearanceDocument();
+  if(!doc.Ensure("menus\\chargen\\race_sex_menu.xml")){
+    Message(mvp,panel,p);
+  }else{
+    const auto key=PanelKey(panel);
+    if(doc.revision!=key||doc.selection!=panel.selected){
+      doc.Begin(p);
+      auto& layout=doc.layout;
+      const int background=layout.Find("RSM_Background");
+      layout.Set(layout.Root(),"user0",0.);
+      layout.Set(background,"x",162.);layout.Set(background,"y",160.);
+      layout.Set(background,"width",700.);layout.Set(background,"height",405.);
+      for(const auto* name:{"RSM_scroll_up_target","RSM_scroll_down_target","RSM_Face_Grab","RSM_back_button","RSM_next_button"})
+        layout.Set(name,"visible",0.);
+      const auto row=[&](const std::string& label,double y,bool selected,bool header){
+        const int id=layout.Instantiate("RSM_list_item_template",background);
+        if(id<0)return;
+        layout.Set(id,"string",label);layout.Set(id,"y",y);layout.Set(id,"width",680.);
+        layout.Set(id,"user0",0.);layout.Set(id,"_is_header",double(header));
+        layout.Set(id,"_selected",selected?2.:0.);layout.Set(id,"mouseover",double(selected));
+      };
+      row(panel.title,26,false,true);
+      for(size_t i=0;i<panel.choices.size();++i)row(panel.choices[i],80+36*i,i==panel.selected,false);
+      row(panel.subtitle,350,false,true);
+      doc.Build();doc.revision=key;doc.selection=panel.selected;
+    }
+    World(doc.surface,doc.layout,mvp);
+  }
+  if(!portrait)return;
+  auto& face=PortraitDocument();
+  if(!face.ready){
+    face.layout.width=1024;face.layout.height=768;Measure(face.layout);
+    face.ready=face.layout.Load("portrait",[](const std::string&,std::string& xml){
+      xml="<menu name='Portrait'><image name='Face'><x>307</x><y>164</y><width>410</width><height>410</height><filename>fq_character_portrait</filename><systemcolor>0</systemcolor></image></menu>";
+      return true;
+    });
+  }
+  if(face.ready&&face.revision!=portrait){
+    Shared().dynamicImages["fq_character_portrait"]=portrait;
+    face.Build();face.revision=portrait;
+  }
+  if(face.ready){
+    float shifted[16];std::copy_n(mvp,16,shifted);
+    for(int i=0;i<4;++i)shifted[12+i]-=.57f*mvp[i];
+    World(face.surface,face.layout,shifted);
+  }
 }
 inline void Notice(const float *mvp, const std::string &text,
                    const fo3player::Player &p, bool world,
@@ -797,7 +848,7 @@ inline void Shutdown() {
     d = {};
   }
   for (auto *d : {&DialogueDocument(), &BarterDocument(), &MessageDocument(),
-                  &QuantityDocument(), &NameDocument()}) {
+                  &QuantityDocument(), &NameDocument(), &AppearanceDocument(), &PortraitDocument()}) {
     d->surface.Shutdown();
     *d = {};
   }

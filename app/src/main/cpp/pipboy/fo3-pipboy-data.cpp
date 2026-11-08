@@ -80,7 +80,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
 bool Relevant(const std::string &t) {
   return t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
-         t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "CREA" || t == "PACK";
+         t == "RACE" || t == "HAIR" || t == "EYES" || t == "HDPT" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "CREA" || t == "PACK";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
             const std::vector<uint8_t> &bytes, uint32_t cell, uint32_t world,
@@ -163,6 +163,22 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   else if(t=="RACE"){
     auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};
     auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);
+    if(data&&data->n==36&&(U(data,32)&1)&&!(U(data,32)&4)){
+      auto& race=d.appearance.races[id];
+      race.name=Text(s,"FULL");
+      if(const auto* hair=Find(s,"DNAM");hair&&hair->n==8)race.defaultHair={U(hair),U(hair,4)};
+      for(const auto& sub:s){
+        if(sub.type=="HNAM"||sub.type=="ENAM"){
+          auto& options=sub.type=="HNAM"?race.hair:race.eyes;
+          for(uint32_t offset=0;offset+4<=sub.n;offset+=4)options.push_back(U(&sub,offset));
+        }
+      }
+      const auto clamp=[&](const char* name){
+        const auto* value=Find(s,name);
+        return value&&value->n==4?fo3esm::ReadF32(value->p):0.f;
+      };
+      race.shapeClamp=clamp("PNAM");race.textureClamp=clamp("UNAM");
+    }
     d.raceAges[id]={U(Find(s,"YNAM")),U(Find(s,"ONAM"))};
     if(data&&data->n==36){const float male=fo3esm::ReadF32(data->p+16),female=fo3esm::ReadF32(data->p+20);
       if(std::isfinite(male)&&std::isfinite(female)&&male>0&&female>0&&male<=10&&female<=10)d.raceHeights[id]={male,female};}
@@ -174,6 +190,14 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       else if(v.type=="FNAM"&&body){sex=1;slot=UINT32_MAX;}
       else if(v.type=="INDX"&&v.n==4)slot=U(&v);
       else if(v.type=="MODL"&&body&&slot<3)d.raceBodyModels[id][sex][slot]=fo3esm::ZString(v.p,v.n);
+    }
+  }
+  else if(t=="HAIR"||t=="EYES"||t=="HDPT"){
+    const auto* data=Find(s,"DATA");
+    if(data&&data->n==1&&(data->p[0]&1)){
+      auto& options=t=="HAIR"?d.appearance.hair:t=="EYES"?d.appearance.eyes:d.appearance.beards;
+      auto name=Text(s,"FULL");
+      options[id]={name.empty()?editor:std::move(name),data->p[0]};
     }
   }
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
@@ -460,6 +484,16 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       if(v.type=="AIDT")actor.aiData.assign(v.p,v.p+v.n);
     }
     d.dialogueActors[id]=std::move(actor);
+    if(t=="NPC_"&&(U(acbs)&4)){
+      auto& preset=d.appearance.presets[id];
+      preset.editor=editor;preset.female=(U(acbs)&1)!=0;
+      auto& appearance=preset.appearance;
+      appearance.race=U(Find(s,"RNAM"));appearance.preset=id;
+      appearance.hair=U(Find(s,"HNAM"));appearance.eyes=U(Find(s,"ENAM"));
+      if(const auto* color=Find(s,"HCLR");color&&color->n>=3)
+        std::copy_n(color->p,3,appearance.color.begin());
+      for(const auto& part:s)if(part.type=="PNAM"&&part.n==4)preset.parts.push_back(U(&part));
+    }
     if (id == 7)
       d.playerFemale = (U(Find(s, "ACBS")) & 1) != 0;
   } else if (t == "PACK") {

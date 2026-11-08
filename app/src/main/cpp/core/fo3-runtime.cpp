@@ -617,6 +617,8 @@ struct GpuObject {
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
     bool scriptAnimated=false,scriptVisible=true;
+    bool geneScreen=false;
+    std::array<float,4> geneUv{};
     bool nonvisualResident=false;
     std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;
     int q2401AnimationBone = -1;
@@ -2721,6 +2723,17 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.q2401DoorAnimation=cpu.q2401DoorAnimation;
     gpu.scriptAnimated=bool(cpu.q2401DoorAnimation)&&cpu.placement.baseRecordType!="DOOR";
     gpu.q2401AnimationBone=cpu.q2401AnimationBone;
+    if(gpu.scriptAnimated&&fo3appearance::SameModel(gpu.modelPath,"Terminals/GeneProjectorAnim01.NIF")&&
+       fo3appearance::SameModel(cpu.mesh.shapeName,"Sphere01:0")&&!cpu.mesh.texcoords.empty()){
+        gpu.geneScreen=true;
+        gpu.geneUv={1,1,0,0};
+        for(size_t i=0;i+1<cpu.mesh.texcoords.size();i+=2){
+            gpu.geneUv[0]=std::min(gpu.geneUv[0],cpu.mesh.texcoords[i]);
+            gpu.geneUv[1]=std::min(gpu.geneUv[1],cpu.mesh.texcoords[i+1]);
+            gpu.geneUv[2]=std::max(gpu.geneUv[2],cpu.mesh.texcoords[i]);
+            gpu.geneUv[3]=std::max(gpu.geneUv[3],cpu.mesh.texcoords[i+1]);
+        }
+    }
     if(gpu.scriptAnimated){
         for(int bone=gpu.q2401AnimationBone;bone>=0;bone=gpu.q2401DoorAnimation->hierarchy.bones[size_t(bone)].parent)
             gpu.scriptVisible=gpu.scriptVisible&&gpu.q2401DoorAnimation->hierarchy.bones[size_t(bone)].visible;
@@ -7593,6 +7606,8 @@ extern uint64_t gStereoFrame;
 // detailed opaque submission, never native LOD, alpha or environment passes.
 bool gQ230DetailedObjectPrevalidated=false;
 bool Q241Hidden(const GpuObject& object);
+GLuint gFo3AppearanceTexture=0;
+uint32_t gFo3AppearanceScreenRef=0;
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if(object.nonvisualResident||!object.scriptVisible)return;
     if (!gQ230DetailedObjectPrevalidated &&
@@ -7709,7 +7724,8 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                     q1900LodClipCount);
     }
     glUniform1f(gGlossinessLocation, object.glossiness);
-    glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
+    const bool genePreview=object.geneScreen&&gFo3AppearanceTexture&&object.refFormId==gFo3AppearanceScreenRef;
+    glUniform1f(gNoLightingLocationQ1020, (object.noLighting||genePreview) ? 1.0f : 0.0f);
     glUniform1f(gPipGain,object.pipScreen ? (Fo3PipboyFocus()? .85f : .012f) : 1.f);
     glUniform1f(gNoLightingFalloffLocationQ1160, object.noLightingFalloff ? 1.0f : 0.0f);
     glUniform4fv(gNoLightingFalloffParamsLocationQ1160, 1, object.noLightingFalloffParams);
@@ -7718,7 +7734,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     // terrain towards black. Keep the authored stream for diagnostics, but do
     // not apply it to landscape LOD colour/alpha.
     const bool q2025ApplyVertexColor =
-        object.useVertexColor && !object.q2024TerrainLod;
+        object.useVertexColor && !object.q2024TerrainLod && !genePreview;
     const bool q2025ApplyVertexAlpha =
         object.useVertexAlpha && !object.q2024TerrainLod;
     glUniform1f(gUseVertexColorLocationQ1020,
@@ -7745,7 +7761,9 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
     glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
     glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
-    fqgl::BindTextureUnit(GL_TEXTURE0, GL_TEXTURE_2D, object.pipScreen && fo3pipui::State().ready ? fo3pipui::State().texture : object.diffuse);
+    const auto diffuse=genePreview?gFo3AppearanceTexture:
+        object.pipScreen&&fo3pipui::State().ready?fo3pipui::State().texture:object.diffuse;
+    fqgl::BindTextureUnit(GL_TEXTURE0, GL_TEXTURE_2D, diffuse);
     fqgl::BindTextureUnit(GL_TEXTURE1, GL_TEXTURE_2D, object.normal);
     fqgl::BindTextureUnit(GL_TEXTURE2, GL_TEXTURE_2D, object.glow);
     fqgl::BindTextureUnit(GL_TEXTURE4, GL_TEXTURE_CUBE_MAP,
@@ -12126,7 +12144,7 @@ void Q230ConvertBethesdaRotation(
 
 fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement& placement);
 
-bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
+bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual,bool headOnly=false) {
     visual.source = source;
     visual.runtime.reference=source.refFormId;
     visual.runtime.authoredYaw=visual.runtime.yaw=visual.runtime.returnYaw=source.rz;
@@ -12134,7 +12152,8 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     std::vector<uint8_t> bytes;
     if (LoadFalloutMeshFile(source.skeletonModel, bytes) &&
         !fo3anim::DecodeSkeleton(bytes, visual.skeleton)) visual.skeleton = {};
-    const std::string idle=Fo3ActorClipPath(source.skeletonModel,"mtidle",source.creature);
+    if(headOnly&&visual.skeleton.bones.empty())return false;
+    const std::string idle=headOnly?std::string{}:Fo3ActorClipPath(source.skeletonModel,"mtidle",source.creature);
     if (!idle.empty() && LoadFalloutMeshFile(idle, bytes))
         fo3anim::DecodeClip(bytes, visual.clip);
     if(source.creature&&visual.clip.tracks.empty()){
@@ -12187,13 +12206,13 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
 
     // Fallout equipment slots: 0x4 Upper Body, 0x8 Left Hand,
     // 0x10 Right Hand. Only add uncovered RACE body pieces.
-    if(npc->raceBodyModels.size()>0u &&
+    if(!headOnly && npc->raceBodyModels.size()>0u &&
        (q236EquippedMask & 0x00000004u)==0u)
         addFaceGenModel(npc->raceBodyModels[0u]);
-    if(npc->raceBodyModels.size()>1u &&
+    if(!headOnly && npc->raceBodyModels.size()>1u &&
        (q236EquippedMask & 0x00000008u)==0u)
         addFaceGenModel(npc->raceBodyModels[1u]);
-    if(npc->raceBodyModels.size()>2u &&
+    if(!headOnly && npc->raceBodyModels.size()>2u &&
        (q236EquippedMask & 0x00000010u)==0u)
         addFaceGenModel(npc->raceBodyModels[2u]);
 
@@ -12294,7 +12313,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         npc->raceBodyTextures.size());
     size_t q237BodyEgtTextures=0u;
     size_t q237BodyEgtPixels=0u;
-    if(!npc->raceBodyTextureModel.empty() && !q234FaceTex.empty()){
+    if(!headOnly&&!npc->raceBodyTextureModel.empty() && !q234FaceTex.empty()){
         for(size_t slot=0u;
             slot<npc->raceBodyTextures.size() && slot<3u;
             ++slot){
@@ -12526,6 +12545,9 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
             if(!q235RaceTexture.empty()){
                 part.mesh.diffuseTexturePath=q235RaceTexture;
             }
+            const auto alternate=npc->headPartDiffuse.find(path);
+            if(alternate!=npc->headPartDiffuse.end())
+                part.mesh.diffuseTexturePath=alternate->second;
 
             const int q236BodySlot=isRaceBodyModel(path);
             if(q236BodySlot>=0 &&
@@ -12692,6 +12714,7 @@ static float Q230PlayerLightLevel(const std::array<float,3>& point,double now){
 }
 #include "npc/fo3-npc-ragdoll-cache.inc"
 #include "fo3-npc-runtime.inc"
+#include "ui/chargen/fo3-appearance-preview.inc"
 #include "npc/fo3-npc-ragdoll-runtime.inc"
 
 bool Q210EnsurePlayerBody() {
@@ -15330,6 +15353,7 @@ bool ShutdownFo3SceneGpu() {
     DiscardFo3ResidentDoorInteractionPlan();
     FlushFo3PlayerState();
     ShutdownFo3Movie();
+    ShutdownFo3AppearancePreview();
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.preparation.Ready()) {
         for (auto& actor : gSceneLoad.preparation.Get().actors)

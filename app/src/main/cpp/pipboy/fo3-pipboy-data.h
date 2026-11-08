@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "../npc/fo3-character-appearance.h"
 namespace fo3pipdata {
 struct Condition {
   uint8_t flags = 0;
@@ -296,6 +297,7 @@ struct Definitions {
   std::unordered_set<uint32_t> scriptReferencedForms; // Original SCRO dependencies survive placement pruning.
   std::unordered_map<std::string, uint32_t> questNames;
   bool playerFemale = false;
+  fo3character::Catalog appearance;
   std::unordered_map<uint32_t,std::array<std::array<std::string,3>,2>> raceBodyModels;
   std::unordered_map<uint32_t,std::vector<uint32_t>> formLists;
   std::unordered_map<uint32_t,std::array<uint32_t,2>> raceVoices;

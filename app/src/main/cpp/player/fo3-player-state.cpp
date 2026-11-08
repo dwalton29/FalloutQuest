@@ -1140,7 +1140,7 @@ bool Player::KillQuestUpdates(){
   fo3script::Action action;action.kind=fo3script::ActionKind::KillQuestUpdates;return QueueScriptAction(std::move(action));
 }
 bool Player::PlayMovie(uint32_t owner,const std::string& path,uint8_t flags){
-  if(!owner||state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||flags>15||!fo3movie::ValidPath(path)||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner||flags>15||!fo3movie::ValidPath(path)||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   auto& movie=state_.movie;
   if(movie.owner)return movie.owner==owner&&movie.path==path&&movie.flags==flags;
   if(movie.serial==UINT64_MAX)return false;
@@ -1161,13 +1161,14 @@ std::string Player::PlayerName()const{
   return base!=catalog_->pipboy.dialogueActors.end()&&!base->second.name.empty()?base->second.name:"Player";
 }
 bool Player::SetPlayerSex(bool female){
+  if(PlayerFemale()!=female){state_.appearance={};state_.appearanceDraft={};}
   const auto sex=uint8_t(female);if(state_.playerSex!=sex){state_.playerSex=sex;++revision_;}return true;
 }
 static bool ValidNameDraft(const std::string& name){
   return name.size()<=32&&std::all_of(name.begin(),name.end(),[](unsigned char c){return c>=32&&c<=126;});
 }
 bool Player::OpenPlayerNameMenu(uint32_t owner){
-  if(!owner||state_.movie.owner||state_.tagMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.movie.owner||state_.tagMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.nameMenuOwner)return state_.nameMenuOwner==owner;
   state_.nameMenuOwner=owner;state_.nameDraft=state_.playerName;++revision_;return true;
 }
@@ -1181,16 +1182,37 @@ bool Player::ConfirmPlayerName(){
   state_.playerName=state_.nameDraft.substr(first,state_.nameDraft.find_last_not_of(' ')-first+1);
   state_.nameMenuOwner=0;state_.nameDraft.clear();++revision_;return true;
 }
-bool Player::DeferAppearanceMenu(uint32_t owner){
+bool Player::OpenAppearanceMenu(uint32_t owner){
   if(!owner||state_.movie.owner||state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
-  if(state_.deferredAppearanceOwner)return state_.deferredAppearanceOwner==owner;
-  state_.deferredAppearanceOwner=owner;++revision_;return true;
+  if(state_.appearanceMenuOwner)return state_.appearanceMenuOwner==owner;
+  state_.appearanceMenuOwner=owner;++revision_;return true;
+}
+fo3character::Appearance Player::AppearanceDraft() const {
+  if(!state_.appearanceMenuOwner)return {};
+  if(state_.appearanceDraft.race)return state_.appearanceDraft;
+  if(catalog_->pipboy.appearance.Valid(state_.appearance,PlayerFemale()))return state_.appearance;
+  return catalog_->pipboy.appearance.Default(PlayerRace(),PlayerFemale());
+}
+bool Player::EditAppearance(const fo3character::Appearance& draft) {
+  if(!state_.appearanceMenuOwner||!catalog_->pipboy.appearance.Valid(draft,PlayerFemale())||
+     draft==AppearanceDraft())return false;
+  state_.appearanceDraft=draft;++revision_;return true;
+}
+bool Player::ConfirmAppearance() {
+  if(!state_.appearanceMenuOwner)return false;
+  const auto draft=AppearanceDraft();
+  if(draft.race){
+    if(!catalog_->pipboy.appearance.Valid(draft,PlayerFemale()))return false;
+    state_.appearance=draft;state_.playerRace=draft.race;
+  }
+  state_.appearanceDraft={};state_.appearanceMenuOwner=0;++revision_;
+  return true;
 }
 int Player::SpecialBookRemaining()const{
   int remaining=int(state_.specialMenuTotal);for(auto value:state_.specialDraft)remaining-=value;return remaining;
 }
 bool Player::OpenSpecialBook(uint32_t owner,uint32_t total){
-  if(!owner||total<7||total>70||state_.tagMenuOwner||state_.movie.owner||state_.nameMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||total<7||total>70||state_.tagMenuOwner||state_.movie.owner||state_.nameMenuOwner||state_.appearanceMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.specialMenuOwner)return state_.specialMenuOwner==owner&&state_.specialMenuTotal==total;
   auto draft=state_.special;unsigned used=0;for(auto value:draft){if(value<1||value>10)return false;used+=value;}
   if(used>total)draft.fill(1);
@@ -1461,12 +1483,13 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasTags=state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
-  if(!fo3tags::Valid(state_)||(state_.tagMenuOwner&&((!catalog_->pipboy.quests.count(state_.tagMenuOwner)&&!catalog_->references.count(state_.tagMenuOwner))||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner))){error="Invalid tag skills state";return false;}
+  const bool hasAppearance=state_.appearance.race||state_.appearanceDraft.race;
+  const bool hasTags=hasAppearance||state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
+  if(!fo3tags::Valid(state_)||(state_.tagMenuOwner&&((!catalog_->pipboy.quests.count(state_.tagMenuOwner)&&!catalog_->references.count(state_.tagMenuOwner))||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner))){error="Invalid tag skills state";return false;}
   const bool hasTalking=hasTags||!state_.talkingActivators.empty()||!state_.dailyPackages.empty();
   const bool hasCrime=hasTalking||!state_.ignoredCrimeActors.empty();
   const bool hasLife=hasCrime||state_.playerScale!=1||state_.playerRace||state_.playerToddler||state_.autoDisplayObjectives||state_.movie.serial;
-  const bool hasMenus=hasLife||state_.deferredAppearanceOwner||state_.specialMenuOwner;
+  const bool hasMenus=hasLife||state_.appearanceMenuOwner||state_.specialMenuOwner;
   const bool hasIdentity=hasMenus||state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
   const bool hasNewGame=hasIdentity||state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
   const bool hasFactionRanks=hasNewGame||!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
@@ -1680,17 +1703,17 @@ bool Player::Save(const std::string &path, std::string &error) const {
   if(hasMenus){
     auto validOwner=[&](uint32_t owner){return !owner||catalog_->pipboy.quests.count(owner)||catalog_->references.count(owner);};
     unsigned used=0;for(auto value:state_.specialDraft)used+=value;
-    if(!validOwner(state_.deferredAppearanceOwner)||!validOwner(state_.specialMenuOwner)||state_.nameMenuOwner||
-       (state_.specialMenuOwner&&(state_.deferredAppearanceOwner||state_.specialMenuTotal<7||state_.specialMenuTotal>70||used>state_.specialMenuTotal||std::any_of(state_.specialDraft.begin(),state_.specialDraft.end(),[](auto v){return v<1||v>10;})))||
+    if(!validOwner(state_.appearanceMenuOwner)||!validOwner(state_.specialMenuOwner)||state_.nameMenuOwner||
+       (state_.specialMenuOwner&&(state_.appearanceMenuOwner||state_.specialMenuTotal<7||state_.specialMenuTotal>70||used>state_.specialMenuTotal||std::any_of(state_.specialDraft.begin(),state_.specialDraft.end(),[](auto v){return v<1||v>10;})))||
        (!state_.specialMenuOwner&&(used||state_.specialMenuTotal))){error="Invalid character menu state";return false;}
     Put32(payload,0x31495543); // CUI1
-    Put32(payload,state_.deferredAppearanceOwner);Put32(payload,state_.specialMenuOwner);Put32(payload,state_.specialMenuTotal);
+    Put32(payload,state_.appearanceMenuOwner);Put32(payload,state_.specialMenuOwner);Put32(payload,state_.specialMenuTotal);
     for(auto value:state_.specialDraft)Put32(payload,value);
   }
   if(hasLife){
     const auto& movie=state_.movie;
     if(!fo3scale::Valid(state_.playerScale)||(state_.playerRace&&!catalog_->pipboy.raceAges.count(state_.playerRace))||movie.flags>15||
-       (movie.owner&&(state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||!movie.serial||!fo3movie::ValidPath(movie.path)||(!catalog_->pipboy.quests.count(movie.owner)&&!catalog_->references.count(movie.owner))))||(!movie.owner&&!movie.path.empty())){error="Invalid player lifecycle state";return false;}
+       (movie.owner&&(state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner||!movie.serial||!fo3movie::ValidPath(movie.path)||(!catalog_->pipboy.quests.count(movie.owner)&&!catalog_->references.count(movie.owner))))||(!movie.owner&&!movie.path.empty())){error="Invalid player lifecycle state";return false;}
     Put32(payload,0x31415453); // STA1
     Put32(payload,uint32_t(state_.playerToddler)|(uint32_t(state_.autoDisplayObjectives)<<1));PutFloat(payload,state_.playerScale);Put32(payload,state_.playerRace);
     Put64(payload,movie.serial);Put32(payload,movie.owner);Put32(payload,movie.flags);Put32(payload,uint32_t(movie.path.size()));payload.insert(payload.end(),movie.path.begin(),movie.path.end());
@@ -1733,7 +1756,20 @@ bool Player::Save(const std::string &path, std::string &error) const {
     for(const auto& button:buttons){if((!catalog_->pipboy.quests.count(button.first)&&!catalog_->references.count(button.first))||button.second<0||button.second>31){error="Invalid script button";return false;}Put32(payload,button.first);Put32(payload,uint32_t(button.second));}
 
   }
-  Put32(bytes, hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasAppearance){
+    if((state_.appearance.race&&!catalog_->pipboy.appearance.Valid(state_.appearance,PlayerFemale()))||
+       (state_.appearanceDraft.race&&(!state_.appearanceMenuOwner||
+           !catalog_->pipboy.appearance.Valid(state_.appearanceDraft,PlayerFemale())))){
+      error="Invalid player appearance";return false;
+    }
+    Put32(payload,0x31505041); // APP1
+    for(const auto* a:{&state_.appearance,&state_.appearanceDraft}){
+      for(uint32_t value:{a->race,a->preset,a->hair,a->eyes,a->beard})Put32(payload,value);
+      payload.insert(payload.end(),a->color.begin(),a->color.end());
+      for(int value:a->adjustments)payload.push_back(uint8_t(value+10));
+    }
+  }
+  Put32(bytes, hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1793,7 +1829,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 34))
+      (version < 1 || version > 35))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2298,11 +2334,11 @@ bool Player::Restore(const std::string &path, std::string &error) {
       }
       if(version>=30){
         if((version>=31?payload.size()-at<44:payload.size()-at!=44)||fo3esm::ReadU32(p+at)!=0x31495543)return fail("Missing character menu state");
-        next.deferredAppearanceOwner=fo3esm::ReadU32(p+at+4);next.specialMenuOwner=fo3esm::ReadU32(p+at+8);next.specialMenuTotal=fo3esm::ReadU32(p+at+12);at+=16;
+        next.appearanceMenuOwner=fo3esm::ReadU32(p+at+4);next.specialMenuOwner=fo3esm::ReadU32(p+at+8);next.specialMenuTotal=fo3esm::ReadU32(p+at+12);at+=16;
         unsigned used=0;for(auto& value:next.specialDraft){const auto raw=fo3esm::ReadU32(p+at);at+=4;if(raw>10)return fail("Invalid SPECIAL draft value");value=uint8_t(raw);used+=value;}
         auto validOwner=[&](uint32_t owner){return !owner||catalog_->pipboy.quests.count(owner)||catalog_->references.count(owner);};
-        if(!validOwner(next.deferredAppearanceOwner)||!validOwner(next.specialMenuOwner)||next.nameMenuOwner||
-           (next.specialMenuOwner&&(next.deferredAppearanceOwner||next.specialMenuTotal<7||next.specialMenuTotal>70||used>next.specialMenuTotal||std::any_of(next.specialDraft.begin(),next.specialDraft.end(),[](auto v){return v<1;})))||
+        if(!validOwner(next.appearanceMenuOwner)||!validOwner(next.specialMenuOwner)||next.nameMenuOwner||
+           (next.specialMenuOwner&&(next.appearanceMenuOwner||next.specialMenuTotal<7||next.specialMenuTotal>70||used>next.specialMenuTotal||std::any_of(next.specialDraft.begin(),next.specialDraft.end(),[](auto v){return v<1;})))||
            (!next.specialMenuOwner&&(used||next.specialMenuTotal)))return fail("Invalid character menu state");
       }
       if(version>=31){
@@ -2312,7 +2348,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         const auto movieFlags=fo3esm::ReadU32(p+at+28),length=fo3esm::ReadU32(p+at+32);at+=36;
         if(flags>3||!fo3scale::Valid(next.playerScale)||(next.playerRace&&!catalog_->pipboy.raceAges.count(next.playerRace))||movieFlags>15||length>240||(version>=32?payload.size()-at<length:payload.size()-at!=length))return fail("Invalid player lifecycle state");
         next.movie.flags=uint8_t(movieFlags);next.movie.path.assign(reinterpret_cast<const char*>(p+at),length);at+=length;
-        if((next.movie.owner&&(next.nameMenuOwner||next.specialMenuOwner||next.deferredAppearanceOwner||!next.movie.serial||!fo3movie::ValidPath(next.movie.path)||(!catalog_->pipboy.quests.count(next.movie.owner)&&!catalog_->references.count(next.movie.owner))))||(!next.movie.owner&&!next.movie.path.empty()))return fail("Invalid saved movie request");
+        if((next.movie.owner&&(next.nameMenuOwner||next.specialMenuOwner||next.appearanceMenuOwner||!next.movie.serial||!fo3movie::ValidPath(next.movie.path)||(!catalog_->pipboy.quests.count(next.movie.owner)&&!catalog_->references.count(next.movie.owner))))||(!next.movie.owner&&!next.movie.path.empty()))return fail("Invalid saved movie request");
       }
       if(version>=32){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524349)return fail("Missing crime-ignore state");
@@ -2342,7 +2378,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         at+=4;
         std::copy_n(p+at,4,next.taggedSkills.begin());at+=4;std::copy_n(p+at,14,next.tagBonuses.begin());at+=14;
         next.tagMenuOwner=fo3esm::ReadU32(p+at);next.tagMenuTotal=fo3esm::ReadU32(p+at+4);const auto draft=fo3esm::ReadU32(p+at+8);at+=12;next.tagDraft=uint16_t(draft);
-        if(draft>65535||!fo3tags::Valid(next)||(next.tagMenuOwner&&((!catalog_->pipboy.quests.count(next.tagMenuOwner)&&!catalog_->references.count(next.tagMenuOwner))||next.movie.owner||next.nameMenuOwner||next.specialMenuOwner||next.deferredAppearanceOwner)))return fail("Invalid saved tag skills");
+        if(draft>65535||!fo3tags::Valid(next)||(next.tagMenuOwner&&((!catalog_->pipboy.quests.count(next.tagMenuOwner)&&!catalog_->references.count(next.tagMenuOwner))||next.movie.owner||next.nameMenuOwner||next.specialMenuOwner||next.appearanceMenuOwner)))return fail("Invalid saved tag skills");
         if(fo3esm::ReadU32(p+at)!=0x31474e52)return fail("Missing script random state");
         next.scriptRandom=U64(p+at+4);at+=12;
         if(payload.size()-at<16||fo3esm::ReadU32(p+at)!=0x31504d53)return fail("Missing script prompts");
@@ -2352,11 +2388,27 @@ bool Player::Restore(const std::string &path, std::string &error) {
           restoredPrompts.push_back(std::move(message));
         }
         if(fo3esm::ReadU32(p+at)!=0x31424d53)return fail("Missing script buttons");
-        const auto buttons=fo3esm::ReadU32(p+at+4);at+=8;if(buttons>10000||payload.size()-at!=size_t(buttons)*8)return fail("Invalid script button count");
+        const auto buttons=fo3esm::ReadU32(p+at+4);at+=8;if(buttons>10000||payload.size()-at<size_t(buttons)*8)return fail("Invalid script button count");
         for(uint32_t i=0;i<buttons;++i){const auto owner=fo3esm::ReadU32(p+at),index=fo3esm::ReadU32(p+at+4);at+=8;
           if(index>31||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner))||!restoredButtons.emplace(owner,int(index)).second)return fail("Invalid saved script button");
         }
 
+      }
+      if(version>=35){
+        constexpr size_t appearanceBytes=23+fo3character::ControlLimit;
+        if(payload.size()-at!=4+2*appearanceBytes||fo3esm::ReadU32(p+at)!=0x31505041)return fail("Missing saved appearance");
+        at+=4;
+        const bool female=next.playerSex<2?next.playerSex==1:catalog_->pipboy.playerFemale;
+        for(auto* a:{&next.appearance,&next.appearanceDraft}){
+          for(uint32_t* value:{&a->race,&a->preset,&a->hair,&a->eyes,&a->beard}){
+            *value=fo3esm::ReadU32(p+at);at+=4;
+          }
+          std::copy_n(p+at,3,a->color.begin());at+=3;
+          for(auto& value:a->adjustments){if(p[at]>20)return fail("Invalid saved appearance adjustment");value=int8_t(int(p[at++])-10);}
+          if(a->race?!catalog_->pipboy.appearance.Valid(*a,female):*a!=fo3character::Appearance{})
+            return fail("Invalid saved appearance");
+        }
+        if(next.appearanceDraft.race&&!next.appearanceMenuOwner)return fail("Orphaned appearance draft");
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

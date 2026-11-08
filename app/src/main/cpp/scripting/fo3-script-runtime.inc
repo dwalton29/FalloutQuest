@@ -485,7 +485,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AutoObjectives:ok=SetAutoDisplayObjectives(c.value!=0,owner);break;
     case C::KillUpdates:ok=KillQuestUpdates();break;
     case C::PlayMovie:ok=PlayMovie(owner,c.expression,uint8_t(c.index));break;
-    case C::DeferredAppearanceMenu:ok=DeferAppearanceMenu(owner);break;
+    case C::AppearanceMenu:ok=OpenAppearanceMenu(owner);break;
     case C::SpecialBook:ok=OpenSpecialBook(owner,uint32_t(c.value));break;
     case C::PlayerTagSkill:ok=SetPlayerTagSkill(c.form,c.index);break;
     case C::TagSkills:ok=OpenTagSkills(owner,uint32_t(c.value),c.index!=0);break;
@@ -910,6 +910,11 @@ bool Player::QueueScriptPlayGroup(uint32_t reference,const std::string& group,ui
   }
   return false;
 }
+void Player::FinishScriptAnimation(uint32_t reference,const std::string& group){
+  const auto playing=scriptAnimations_.find(reference);
+  if(playing==scriptAnimations_.end()||playing->second.group!=fo3script::Lower(group))return;
+  scriptAnimations_.erase(playing);++scriptEffectRevision_;
+}
 bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
   if(reference!=scriptReference_||activator!=PlayerRef)return false;
   if(!CanScriptActivateDoor(reference)){
@@ -1011,8 +1016,7 @@ bool Player::SourceEventCompileReady(uint32_t script,const char* event,uint32_t 
 bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& resident,
     const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode) {
   if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
-  const auto deferredOwner=state_.deferredAppearanceOwner;
-  if(deferredOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)menuMode=true;
+  if(state_.appearanceMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)menuMode=true;
   // Reference scripts retain their bounded cadence. Quest scripts use their
   // original DATA/SetQuestDelay interval, with at most one run per frame.
   if(!menuMode)questScriptAccumulator_=std::min(.5,questScriptAccumulator_+seconds);
@@ -1032,20 +1036,13 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     // Capture the *same* original event that would be committed. An
     // uncommitted candidate has no world, inventory or effect side effects.
     auto plan=PrepareScriptTransaction([=](Player& candidate,std::string& e){
-      if(!candidate.RunSourceEventDirect(script,event,owner,0,e))return false;
-      if(candidate.state_.deferredAppearanceOwner==owner&&std::string(event)=="MenuMode"){
-        candidate.state_.deferredAppearanceOwner=0;++candidate.revision_;
-      }
-      return true;
+      return candidate.RunSourceEventDirect(script,event,owner,0,e);
     },error,true);
     if(!plan){
       // Some existing non-world scripts are source-supported but cannot
       // capture the stricter resident provenance yet. Preserve their existing
       // transactional gameplay path; it never publishes world changes.
-      if(RunSourceEvent(script,event,owner,0,error)){
-        if(state_.deferredAppearanceOwner==owner&&std::string(event)=="MenuMode"){state_.deferredAppearanceOwner=0;++revision_;}
-        return false;
-      }
+      if(RunSourceEvent(script,event,owner,0,error))return false;
     }else if(!plan->HasReferenceChanges()){
       if(CommitScriptTransaction(*plan))return false;
       error="GameMode script transaction changed before publication";
@@ -1099,16 +1096,7 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     if(elapsed+1e-7<interval)continue;
     tick->second=questScriptClock_;scriptElapsedSeconds_=elapsed;
     if(run(q->second.script,"GameMode",id,false))return true;
-    if(state_.deferredAppearanceOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)return false;
-  }
-  if(menuMode&&deferredOwner&&state_.deferredAppearanceOwner==deferredOwner){
-    const auto quest=catalog_->pipboy.quests.find(deferredOwner);
-    bool handler=false;
-    if(quest!=catalog_->pipboy.quests.end()&&std::find(quests.begin(),quests.end(),deferredOwner)!=quests.end()){
-      const auto program=catalog_->eventPrograms.find(quest->second.script);
-      if(program!=catalog_->eventPrograms.end())for(const auto& block:program->second.blocks)handler|=block.event=="menumode";
-    }
-    if(!handler){state_.deferredAppearanceOwner=0;++revision_;}
+    if(state_.appearanceMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)return false;
   }
   if(menuMode||!referencesDue)return false;
   scriptElapsedSeconds_=referenceElapsed;
@@ -1122,7 +1110,7 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     if(!ReferenceDisabled(id,disabled,error)||disabled)continue;
     const auto script=catalog_->eventBaseScripts.at(ref->second.base);
     if(run(script,"GameMode",id,true))return true;
-    if(state_.deferredAppearanceOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)return false;
+    if(state_.appearanceMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)return false;
   }
   return false;
 }

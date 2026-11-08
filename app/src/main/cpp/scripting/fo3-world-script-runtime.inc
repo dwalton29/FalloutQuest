@@ -8,7 +8,7 @@ namespace fo3worldscript {
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
 struct Animation {
     std::shared_ptr<const fo3dooranim::Asset> asset;
-    int clip=-1;double started=0,lastCollision=-1,lastSound=-1;bool settled=false;
+    int clip=-1;double started=0,lastCollision=-1,lastSound=-1,presentationTime=0;bool settled=false;
     fo3anim::Pose pose;
     std::vector<bool> visible;
     std::vector<size_t> shapes;
@@ -394,11 +394,30 @@ void Actions(){
             const auto i=animations.find(action.reference);if(i==animations.end())continue;
             auto& state=i->second;
             for(size_t c=0;c<state.asset->clips.size();++c)if(fo3dooranim::EqualName(state.asset->clips[c].name,action.group.c_str())){
-                state.clip=int(c);state.started=action.started;state.lastCollision=-1;state.lastSound=-1;state.settled=false;
+                state.clip=int(c);state.started=action.started;state.lastCollision=-1;state.lastSound=-1;state.presentationTime=0;state.settled=false;
                 fo3anim::BindClip(state.asset->hierarchy,state.asset->clips[c],state.pose);break;
             }
         }
     }
+}
+// A rendered menu freezes the game clock. Only its own physical display may
+// finish opening on presentation time. A restored menu reposes its display
+// from the authored endpoint when no transient playback survived the save.
+void AdvanceMenuDisplay(uint32_t reference,double dt){
+    const auto found=animations.find(reference);
+    if(found==animations.end())return;
+    auto& state=found->second;
+    if(state.clip<0){
+        for(size_t i=0;i<state.asset->clips.size();++i){
+            const auto& clip=state.asset->clips[i];
+            if(!fo3dooranim::EqualName(clip.name,"Forward")||clip.frequency<=0)continue;
+            state.clip=int(i);state.started=seconds;
+            state.presentationTime=(clip.stop-clip.start)/clip.frequency;
+            state.lastSound=state.presentationTime;
+            fo3anim::BindClip(state.asset->hierarchy,clip,state.pose);
+            return;
+        }
+    }else if(!state.settled)state.presentationTime+=dt;
 }
 void Animate(){
     // OnLoad/GameMode actions can publish a new visual inventory after the
@@ -406,7 +425,7 @@ void Animate(){
     Register();
     for(auto& entry:animations){auto& state=entry.second;const auto& asset=*state.asset;
         if(state.clip<0||state.settled)continue;
-        const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started);
+        const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started+state.presentationTime);
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
         fo3animsound::Advance(gPlayerSession->player.Definitions().pipboy,clip,state.lastSound,elapsed,[](uint32_t id){fo3audio::SoundEvent(id);});state.lastSound=elapsed;
         for(const auto& value:state.pose.properties)if(value.kind==fo3anim::PropertyKind::Visibility)state.visible[size_t(value.bone)]=value.value[0]!=0;
@@ -426,6 +445,8 @@ void Animate(){
         }
         const double duration=clip.frequency>0?double(clip.stop-clip.start)/clip.frequency:0;
         const bool ended=clip.cycle==2&&elapsed>=duration;
+        if(ended&&state.presentationTime>0)
+            gPlayerSession->player.FinishScriptAnimation(entry.first,clip.name);
         // Collision targets come from BHK's targetBlock, never nearest geometry.
         // Publish at 10 Hz and once at the precise settled endpoint.
         if(first&&(state.lastCollision<0||elapsed-state.lastCollision>=.1||ended)){

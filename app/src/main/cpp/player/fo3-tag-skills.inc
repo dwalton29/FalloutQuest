@@ -6,7 +6,7 @@ bool Player::SetPlayerTagSkill(uint32_t value,unsigned slot){
   fo3tags::Apply(state_,next,unsigned(std::lround(bonus)));++revision_;return true;
 }
 bool Player::OpenTagSkills(uint32_t owner,uint32_t total,bool showExisting){
-  if(!owner||total<1||total>4||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||
+  if(!owner||total<1||total>4||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner||
      (!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.tagMenuOwner)return state_.tagMenuOwner==owner&&state_.tagMenuTotal==total;
   const auto mask=showExisting?fo3tags::Mask(state_.taggedSkills):0;

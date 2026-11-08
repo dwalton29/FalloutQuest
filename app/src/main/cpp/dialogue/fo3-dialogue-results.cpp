@@ -133,7 +133,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::PlayMovie;cmd.index=14;
       in>>std::ws;if(in.peek()!='"'||!(in>>std::quoted(cmd.expression))||!fo3movie::ValidPath(cmd.expression)){error="invalid quoted Bink filename";return false;}
       for(unsigned n=0;n<4;++n){if(!(in>>a)){in.clear();break;}if(a!="0"&&a!="1"){error="invalid Bink flag";return false;}if(a=="1")cmd.index|=1u<<n;else cmd.index&=~(1u<<n);}
-    }else if(op=="showracemenu")cmd.type=CommandType::DeferredAppearanceMenu;
+    }else if(op=="showracemenu")cmd.type=CommandType::AppearanceMenu;
     else if(op=="showspecialbookmenu"||op=="ssbmp"){
       cmd.type=CommandType::SpecialBook;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<7||cmd.value>70||std::floor(cmd.value)!=cmd.value){error="invalid SPECIAL point total";return false;}

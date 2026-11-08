@@ -1,5 +1,7 @@
 #include "fo3-install-paths.h"
 #include "fo3-npc.h"
+#include <mutex>
+#include <memory>
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
 #include "fo3-esm-reader.h"
@@ -80,6 +82,9 @@ struct Linked {
     std::vector<float> faceSymmetric;
     std::vector<float> faceAsymmetric;
     std::vector<float> faceTextureSymmetric;
+    std::vector<uint32_t> extraParts;
+    uint32_t alternateTexture=0;
+    uint8_t partFlags=0;
 };
 
 void FloatArray(const uint8_t* p, uint32_t n, std::vector<float>& out) {
@@ -125,7 +130,7 @@ bool ScanIndexAndActors(
         FILE* f,
         std::vector<RawActor>& actors,
         std::unordered_map<uint32_t,Locator>& locators, uint32_t cell,
-        const std::unordered_set<uint32_t>* relocatedRefs) {
+        const std::unordered_set<uint32_t>* relocatedRefs,bool indexOnly=false) {
     const int64_t fileSize=fo3esm::FileSize(f);
     if(fileSize<static_cast<int64_t>(fo3esm::HEADER_SIZE)) return false;
 
@@ -155,7 +160,7 @@ bool ScanIndexAndActors(
         // Keep only actor-assembly record classes; this is tiny compared with a
         // full FormID index and lets later linked-record reads seek directly.
         if(type=="NPC_" || type=="CREA" || type=="LVLN" || type=="LVLC" || type=="RACE" || type=="HAIR" ||
-           type=="HDPT" || type=="ARMO" || type=="LVLI" || type=="EYES"){
+           type=="HDPT" || type=="ARMO" || type=="LVLI" || type=="EYES" || type=="TXST"){
             locators[formId]={payloadOffset,size,flags,type};
         }
 
@@ -173,7 +178,7 @@ bool ScanIndexAndActors(
         }
         pos=end;
     }
-    return !actors.empty();
+    return indexOnly?!locators.empty():!actors.empty();
 }
 
 bool ParseNpc(FILE* f, const Locator& loc,
@@ -303,6 +308,15 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out, bool female) {
            std::memcmp(type,"BMDT",4u)==0 && n>=4u){
             out.bipedMask=fo3esm::ReadU32(p);
         }
+        if(loc.type=="HDPT"){
+            if(std::memcmp(type,"HNAM",4)==0&&n==4)out.extraParts.push_back(fo3esm::ReadU32(p));
+            if(std::memcmp(type,"DATA",4)==0&&n==1)out.partFlags=p[0];
+            if(std::memcmp(type,"MODS",4)==0&&n>=16&&fo3esm::ReadU32(p)==1){
+                const uint32_t length=fo3esm::ReadU32(p+4);
+                if(length==n-16&&fo3esm::ReadU32(p+12+length)==0)out.alternateTexture=fo3esm::ReadU32(p+8+length);
+            }
+        }
+        if(loc.type=="TXST"&&std::memcmp(type,"TX00",4)==0)out.icon=fo3esm::ZString(p,n);
 
         if(loc.type=="RACE"){
             // FO3 RACE DATA: seven skill/boost pairs, two padding bytes,
@@ -422,6 +436,21 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out, bool female) {
         }
     });
     return true;
+}
+
+
+void ApplyRaceAppearance(const Linked& race,Fo3NpcActorQ230& actor) {
+    actor.scale*=race.height;
+    actor.raceEditorId=race.editorId;
+    actor.raceHeadModel=race.headModels.empty()?std::string{}:race.headModels[0];
+    actor.raceHeadModels=race.headModels;
+    actor.raceHeadTextures=race.headTextures;
+    actor.raceBodyModels=race.bodyModels;
+    actor.raceBodyTextures=race.bodyTextures;
+    if(race.bodyModels.size()>3)actor.raceBodyTextureModel=race.bodyModels[3];
+    actor.raceFaceGenGeometrySymmetric=race.faceSymmetric;
+    actor.raceFaceGenGeometryAsymmetric=race.faceAsymmetric;
+    actor.raceFaceGenTextureSymmetric=race.faceTextureSymmetric;
 }
 
 
@@ -585,20 +614,7 @@ bool LoadFo3CellActors(
         };
 
         Linked race;
-        if(npc.race!=0u && resolve(npc.race,race)){
-            actor.scale*=race.height;
-            actor.raceEditorId=race.editorId;
-            actor.raceHeadModel=race.headModels.empty()?std::string{}:race.headModels[0];
-            actor.raceHeadModels=race.headModels;
-            actor.raceHeadTextures=race.headTextures;
-            actor.raceBodyModels=race.bodyModels;
-            actor.raceBodyTextures=race.bodyTextures;
-            if(race.bodyModels.size()>3u)
-                actor.raceBodyTextureModel=race.bodyModels[3u];
-            actor.raceFaceGenGeometrySymmetric=race.faceSymmetric;
-            actor.raceFaceGenGeometryAsymmetric=race.faceAsymmetric;
-            actor.raceFaceGenTextureSymmetric=race.faceTextureSymmetric;
-        }
+        if(npc.race!=0u && resolve(npc.race,race))ApplyRaceAppearance(race,actor);
 
         Linked hair;
         if(npc.hair!=0u && resolve(npc.hair,hair)){
@@ -1046,4 +1062,84 @@ bool LoadFo3FaceGenTextureQ234(
 
 bool LoadFo3MegatonExteriorActorsQ230(std::vector<Fo3NpcActorQ230>& actors) {
     return LoadFo3CellActors(0x00000A96u, actors);
+}
+
+
+bool LoadFo3CharacterHead(const fo3character::Appearance& appearance,bool female,
+    const fo3character::Race& limits,const std::vector<fo3character::Control>& controls,
+    Fo3NpcActorQ230& out,const std::string& esmPath) {
+    out={};
+    const auto path=esmPath.empty()?fo3assets::FalloutMasterPath():esmPath;
+    const auto close=[](FILE* f){std::fclose(f);};
+    std::unique_ptr<FILE,decltype(close)> file(std::fopen(path.c_str(),"rb"),close);
+    if(!file)return false;
+    // Scrubbing a slider only seeks the small linked-record set after the
+    // initial scan. Independent FILE handles keep actor loading thread-safe.
+    using Index=std::unordered_map<uint32_t,Locator>;
+    static std::mutex indexMutex;
+    static std::string indexedPath;
+    static std::shared_ptr<const Index> indexed;
+    std::shared_ptr<const Index> index;
+    {
+        std::lock_guard<std::mutex> lock(indexMutex);
+        if(!indexed||indexedPath!=path){
+            auto next=std::make_shared<Index>();
+            std::vector<RawActor> unused;
+            if(!ScanIndexAndActors(file.get(),unused,*next,0,nullptr,true))return false;
+            indexed=std::move(next);indexedPath=path;
+        }
+        index=indexed;
+    }
+    const auto resolve=[&](uint32_t id,const char* type,Linked& linked){
+        const auto entry=index->find(id);
+        return entry!=index->end()&&entry->second.type==type&&
+            ParseLinked(file.get(),entry->second,linked,female);
+    };
+    NpcBase preset;
+    std::unordered_set<uint32_t> visited;
+    if(!ResolveNpc(file.get(),appearance.preset,*index,visited,preset,0,{})||
+       preset.race!=appearance.race||bool(preset.baseFlags&1)!=female)return false;
+    Linked race,hair,eyes;
+    if(!resolve(appearance.race,"RACE",race)||!resolve(appearance.hair,"HAIR",hair)||
+       !resolve(appearance.eyes,"EYES",eyes)||preset.skeleton.empty()||
+       race.headModels.empty()||race.headModels[0].empty())return false;
+    out.baseFormId=appearance.preset;
+    out.raceFormId=appearance.race;
+    out.hairFormId=appearance.hair;out.eyesFormId=appearance.eyes;
+    out.female=female;out.skeletonModel=preset.skeleton;
+    out.editorId=preset.editorId;
+    ApplyRaceAppearance(race,out);
+    out.hairModel=hair.model;out.hairTexturePath=hair.icon;out.eyeTexturePath=eyes.icon;
+    out.faceGenGeometrySymmetric=std::move(preset.faceSymmetric);
+    out.faceGenGeometryAsymmetric=std::move(preset.faceAsymmetric);
+    out.faceGenTextureSymmetric=std::move(preset.faceTextureSymmetric);
+    std::copy(appearance.color.begin(),appearance.color.end(),out.hairColor);
+    std::array<std::vector<float>*,3> coordinates{&out.faceGenGeometrySymmetric,
+        &out.faceGenGeometryAsymmetric,&out.faceGenTextureSymmetric};
+    for(size_t i=0;i<controls.size()&&i<appearance.adjustments.size();++i){
+        if(!appearance.adjustments[i]||controls[i].basis>=coordinates.size())continue;
+        const auto& control=controls[i];
+        auto& values=*coordinates[control.basis];
+        values.resize(control.weights.size());
+        const float limit=control.basis==2?limits.textureClamp:limits.shapeClamp;
+        const float amount=appearance.adjustments[i]*.1f*(std::isfinite(limit)&&limit>0?limit:1.f);
+        for(size_t j=0;j<values.size();++j)values[j]+=control.weights[j]*amount;
+    }
+
+    const auto addPart=[&](uint32_t id,bool selected,auto&& self)->void {
+        if(visited.size()>=32||!visited.insert(id).second)return;
+        Linked part;
+        if(!resolve(id,"HDPT",part)||(!selected&&(part.partFlags&1)))return;
+        if(!part.model.empty()){
+            out.headPartModels.push_back(part.model);
+            Linked texture;
+            if(part.alternateTexture&&resolve(part.alternateTexture,"TXST",texture)&&!texture.icon.empty())
+                out.headPartDiffuse.emplace(part.model,texture.icon);
+        }
+        for(uint32_t child:part.extraParts)self(child,selected,self);
+    };
+    visited.clear();
+    for(uint32_t part:preset.headParts)addPart(part,false,addPart);
+    if(appearance.beard)addPart(appearance.beard,true,addPart);
+    return true;
 }

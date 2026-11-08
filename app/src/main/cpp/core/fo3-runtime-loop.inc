@@ -1968,6 +1968,8 @@ private:
                     }
                     if(!Fo3ResidentFrameBlocked()){
                         fo3worldscript::Actions();
+                        if(Fo3AppearanceFocus())if(const auto* screen=fo3chargen::Screen())
+                            fo3worldscript::AdvanceMenuDisplay(screen->refFormId,scriptMenu?seconds:0);
                         if(!Fo3ResidentFrameBlocked())fo3worldscript::Animate();
                     }
                     // Fast scene timers must not write the entire save every frame.
@@ -2071,7 +2073,9 @@ private:
                         gPipActivation.Reset();gPipMenu.dirty=true;
                         Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
-                    const bool nameControls=movieControls||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus();
+                    const bool nameControls=movieControls||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||Fo3AppearanceFocus();
+                    UpdateFo3AppearanceMenu(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
+                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3TagSkills(gameplaySeconds,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3SpecialBook(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
@@ -2667,12 +2671,17 @@ private:
             }
 
             // UI system colours are display colours, never world image-space inputs.
-            if((Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
-                const auto& panel=Fo3TagSkillsFocus()?gTagSkillsPanel:Fo3SpecialBookFocus()?gSpecialBookPanel:gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
+            if((Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||Fo3AppearanceFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
+                const bool appearance=Fo3AppearanceFocus();
+                const auto& panel=appearance?fo3chargen::panel:Fo3TagSkillsFocus()?gTagSkillsPanel:Fo3SpecialBookFocus()?gSpecialBookPanel:gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
-                const auto keyboard=Multiply(viewProjection,model);fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
+                const auto keyboard=Multiply(viewProjection,model);
+                if(appearance){
+                    if(panel.visible)fo3menuui::Appearance(keyboard.m,panel,gPlayerSession->player,
+                        gFo3AppearanceScreenRef?0:gFo3AppearanceTexture);
+                }else fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
                 if(Fo3PlayerNameFocus()){
                     model.m[13]+=.65f;
                     const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);

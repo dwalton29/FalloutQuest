@@ -197,7 +197,8 @@ struct State {
   uint8_t playerSex=2; // 2 inherits the original NPC_ player record.
   std::string playerName,nameDraft;
   uint32_t nameMenuOwner=0;
-  uint32_t deferredAppearanceOwner=0,specialMenuOwner=0,specialMenuTotal=0;
+  uint32_t appearanceMenuOwner=0,specialMenuOwner=0,specialMenuTotal=0;
+  fo3character::Appearance appearance,appearanceDraft;
   std::array<uint8_t,7> specialDraft{};
   std::array<uint8_t,4> taggedSkills{{255,255,255,255}}; // DNAM skill indices, 255 empty.
   std::array<uint8_t,14> tagBonuses{}; // Applied grant, retained across capped/replaced tags.
@@ -463,7 +464,10 @@ public:
   bool OpenPlayerNameMenu(uint32_t owner);
   bool EditPlayerName(const std::string& draft);
   bool ConfirmPlayerName();
-  bool DeferAppearanceMenu(uint32_t owner);
+  bool OpenAppearanceMenu(uint32_t owner);
+  fo3character::Appearance AppearanceDraft() const;
+  bool EditAppearance(const fo3character::Appearance& draft);
+  bool ConfirmAppearance();
   bool OpenSpecialBook(uint32_t owner,uint32_t total);
   bool AdjustSpecialBook(unsigned attribute,int delta);
   bool ConfirmSpecialBook();
@@ -623,6 +627,7 @@ public:
   void SetScriptAnimationRegistry(std::shared_ptr<const fo3script::AnimationRegistry> registry);
   bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
+  void FinishScriptAnimation(uint32_t reference,const std::string& group);
   bool QueueScriptAction(fo3script::Action action);
   bool QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon);
   std::unique_ptr<ScriptTransactionPlan> PrepareWeaponHitTransaction(uint32_t reference,uint32_t attacker,uint32_t weapon,

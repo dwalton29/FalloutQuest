@@ -217,6 +217,19 @@ int main(int argc, char **argv) {
   assert(navigation[0].external[0].navMeshFormId==201&&navigation[0].external[0].triangle==7);
   std::filesystem::remove(path);
   if (argc > 1) {
+    fo3character::Appearance appearance;
+    appearance.race=0x19;appearance.preset=0x309f4;
+    appearance.hair=0x5dc6b;appearance.eyes=0x4253;
+    Fo3NpcActorQ230 preview;
+    fo3character::Race limits;
+    assert(LoadFo3CharacterHead(appearance,true,limits,{},preview,argv[1]));
+    assert(preview.female&&preview.raceHeadModels.size()==8&&
+           !preview.hairModel.empty()&&!preview.eyeTexturePath.empty()&&preview.faceGenGeometrySymmetric.size()==50);
+    const auto original=preview.faceGenGeometrySymmetric;
+    fo3character::Control brow; brow.weights.resize(50);brow.weights[0]=1.f;
+    appearance.adjustments[0]=5;
+    assert(LoadFo3CharacterHead(appearance,true,limits,{brow},preview,argv[1]));
+    assert(std::abs(preview.faceGenGeometrySymmetric[0]-original[0]-.5f)<.0001f);
     assert(LoadFo3CellActors(0xa96, actors, argv[1]));
     assert(actors.size() >= 3);
     bool lucas = false;

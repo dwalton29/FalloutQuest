@@ -3,6 +3,7 @@
 #include "scripting/fo3-script-master-match.h"
 #include "world/fo3-resident-authored-admission.h"
 #include "ui/chargen/fo3-name-entry.h"
+#include "ui/chargen/fo3-appearance-menu.h"
 #include "ui/chargen/fo3-special-book.h"
 #include "ui/chargen/fo3-tag-skills.h"
 #include "player/fo3-vr-body.h"
@@ -286,7 +287,7 @@ static void Lifecycle(){
   Check(p.ExecuteDialogueResult(result,error,101),error);
   assert(p.Snapshot().playerToddler&&p.Snapshot().autoDisplayObjectives&&p.Snapshot().pipboy.selectedQuest==101&&p.PlayerTrackingScale()==.4f);
   assert(p.Snapshot().movie.path=="1 year later.bik"&&p.Snapshot().movie.flags==4&&p.Snapshot().movie.owner==101);
-  assert(!p.OpenPlayerNameMenu(101)&&!p.OpenSpecialBook(101,40)&&!p.DeferAppearanceMenu(101));
+  assert(!p.OpenPlayerNameMenu(101)&&!p.OpenSpecialBook(101,40)&&!p.OpenAppearanceMenu(101));
   const auto path="/tmp/fq-lifecycle-"+std::to_string(getpid());Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);unlink(path.c_str());
   assert(restored.Snapshot().playerToddler&&restored.Snapshot().movie.path=="1 year later.bik"&&restored.PlayerTrackingScale()==.4f);
   assert(!restored.CompleteMovie(restored.Snapshot().movie.serial+1));assert(restored.CompleteMovie(restored.Snapshot().movie.serial));
@@ -317,19 +318,40 @@ static void CharacterMenus(){
   c.pipboy.quests[102].script=202;c.pipboy.quests[102].flags=1;c.pipboy.quests[102].scriptDelay=.01f;
   c.pipboy.scripts[202].variables={{1,"ticks"}};c.pipboy.scripts[202].source="short ticks\nBegin GameMode\nset ticks to ticks + 1\nEnd";
   c.eventPrograms[202]=fo3script::ParseEvents(c.pipboy.scripts[202]);
+  auto& appearance=c.pipboy.appearance;
+  appearance.races[1].hair={2};appearance.races[1].eyes={3};
+  appearance.hair[2]={"Hair",1};appearance.eyes[3]={"Eyes",1};
+  appearance.presets[4].appearance={1,4,2,3};
+  c.pipboy.raceAges[1]={0,0};
   Player p(c);auto reserve=[&](auto plan){return p.CommitScriptTransaction(*plan);};
-  p.PumpWorldAwareGameMode(.1,{},reserve);assert(p.Snapshot().deferredAppearanceOwner==101);
+  p.PumpWorldAwareGameMode(.1,{},reserve);assert(p.Snapshot().appearanceMenuOwner==101);
   assert(!p.Snapshot().pipboy.dialogueVariables.count((uint64_t(102)<<32)|1));
+  auto draft=p.AppearanceDraft();assert(draft.preset==4);draft.adjustments[0]=7;
+  assert(p.EditAppearance(draft)&&p.Snapshot().appearance.race==0);
   const auto save="/tmp/fq-character-menus-"+std::to_string(getpid());std::string error;Check(p.Save(save,error),error);
-  Player restored(c);Check(restored.Restore(save,error),error);assert(restored.Snapshot().deferredAppearanceOwner==101);
+  Player restored(c);Check(restored.Restore(save,error),error);assert(restored.Snapshot().appearanceMenuOwner==101);
   restored.PumpWorldAwareGameMode(.1,{},[&](auto plan){return restored.CommitScriptTransaction(*plan);});
-  assert(!restored.Snapshot().deferredAppearanceOwner&&restored.Snapshot().pipboy.dialogueVariables.at((uint64_t(101)<<32)|2)==1);
+  assert(restored.Snapshot().appearanceMenuOwner==101&&restored.AppearanceDraft()==draft);
+  assert(restored.Snapshot().pipboy.dialogueVariables.at((uint64_t(101)<<32)|2)==1);
   assert(!restored.Snapshot().pipboy.dialogueVariables.count((uint64_t(102)<<32)|1));
+  fo3chargen::Menu creator;
+  const std::vector<fo3character::Control> faceControls;
+  creator.Step(restored,faceControls,1,0,0,true,false,true,true);
+  creator.Step(restored,faceControls,2,0,0,true,false,true,true);
+  assert(restored.Snapshot().appearanceMenuOwner==101);
+  creator.Step(restored,faceControls,3,0,0,false,false,true,true);
+  const auto rows=creator.Rows(restored,faceControls);
+  creator.cursor.Target(101,rows.size());creator.cursor.selected=rows.size()-1;
+  creator.Step(restored,faceControls,4,0,0,true,false,true,false);
+  assert(restored.Snapshot().appearanceMenuOwner==101);
+  creator.Step(restored,faceControls,5,0,0,false,false,true,true);
+  assert(creator.Step(restored,faceControls,6,0,0,true,false,true,true)==fo3chargen::Menu::Result::Confirmed);
+  assert(restored.Snapshot().appearance==draft&&restored.PlayerRace()==draft.race);
   restored.PumpWorldAwareGameMode(.1,{},[&](auto plan){return restored.CommitScriptTransaction(*plan);});
   assert(restored.Snapshot().pipboy.dialogueVariables.at((uint64_t(102)<<32)|1)==1);
   Player book(c);fo3pipdata::ResultScript request;request.source="ssbmp 40";
   Check(book.ExecuteDialogueResult(request,error,101),error);assert(book.SpecialBookRemaining()==5&&!book.ConfirmSpecialBook());
-  assert(!book.OpenPlayerNameMenu(101)&&!book.DeferAppearanceMenu(101));
+  assert(!book.OpenPlayerNameMenu(101)&&!book.OpenAppearanceMenu(101));
   assert(book.AdjustSpecialBook(0,1)&&book.AdjustSpecialBook(0,1)&&book.AdjustSpecialBook(2,1)&&book.AdjustSpecialBook(5,1)&&book.AdjustSpecialBook(6,1));
   assert(book.SpecialBookRemaining()==0&&!book.AdjustSpecialBook(0,1)&&book.Snapshot().special[0]==5);
   Check(book.Save(save,error),error);Player resumed(c);Check(resumed.Restore(save,error),error);unlink(save.c_str());
@@ -556,6 +578,16 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
       if(modalTicks++<20){const auto stage=p.Snapshot().pipboy.quests.at(quest).stage;p.PumpWorldAwareGameMode(.25,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);},true);assert(p.Snapshot().pipboy.quests.at(quest).stage==stage);continue;}
       assert(p.EditPlayerName(female?"Catherine":"James")&&p.ConfirmPlayerName());enteredName=true;
     }
+    if(p.Snapshot().appearanceMenuOwner){
+      p.PumpWorldAwareGameMode(.25,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);},true);
+      assert(p.Snapshot().appearanceMenuOwner==quest&&p.Snapshot().pipboy.quests.at(quest).stage==61);
+      const auto& appearance=d.appearance;
+      assert(appearance.races.size()==4&&appearance.presets.size()==80);
+      auto draft=appearance.Default(d.formNames.at("hispanic"),female);
+      assert(draft.race==d.formNames.at("hispanic")&&appearance.Presets(draft.race,female).size()==10);
+      draft.adjustments[0]=2;
+      assert(p.EditAppearance(draft)&&p.ConfirmAppearance()&&p.PlayerRace()==draft.race);
+    }
     p.SetScriptRuntimeClock(frame*.1,.1);p.PumpWorldAwareGameMode(.1,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);});
     fo3player::ScriptMessage message;
     while(p.PollScriptMessage(message))if(message.owner==quest){
@@ -606,7 +638,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
       else {const auto done=p.DispatchReferenceEvent(action.reference,"SayToDone",action.form,error);Check(done==fo3player::ScriptEventResult::Executed||done==fo3player::ScriptEventResult::NoHandler,error);}
     }
   }
-  assert(chose&&genderLine&&enteredName&&p.PlayerFemale()==female&&!p.Snapshot().deferredAppearanceOwner);
+  assert(chose&&genderLine&&enteredName&&p.PlayerFemale()==female&&!p.Snapshot().appearanceMenuOwner);
   const auto& birth=p.Snapshot().pipboy.quests.at(quest);
   if(birth.stage!=100)std::cerr<<"Birth stopped at "<<birth.stage<<'\n';
   assert(birth.stage==100&&!birth.running&&birth.stages.count(61)&&birth.stages.count(62)&&birth.stages.count(65)&&birth.stages.count(80));
@@ -617,7 +649,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   assert(!p.PlayerControlDisabled(0)&&!p.PlayerControlDisabled(5)&&p.PlayerControlDisabled(2));
   assert(!fo3player::EarlyFirstPerson(p));
   assert(p.Snapshot().gameYear==2268&&p.Snapshot().gameMonth==6&&p.Snapshot().gameDay==13);
-  const auto adult=fo3pipdata::ActorCategory(d,fo3player::PlayerBase,1)->race;
+  const auto adult=p.Snapshot().appearance.race;
   assert(p.PlayerRace()==d.raceAges.at(adult)[0]&&p.ItemCount(d.formNames.at("pipboy"))>=1);
   assert(p.Snapshot().pipboy.quests.at(birthday).stage>=12&&!p.Snapshot().autoDisplayObjectives&&p.Snapshot().pipboy.quests.at(baby).stages.count(50));
   // Continue through the actual party choices, not direct stage commands.

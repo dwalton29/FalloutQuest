@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include "fo3-character-appearance.h"
 
 struct Fo3NpcVisualItemQ230 {
     uint32_t formId = 0u;
@@ -42,6 +43,7 @@ struct Fo3NpcActorQ230 {
 
     std::vector<uint32_t> headPartFormIds;
     std::vector<std::string> headPartModels;
+    std::unordered_map<std::string,std::string> headPartDiffuse;
     std::vector<Fo3NpcVisualItemQ230> inventory;
     std::vector<float> faceGenGeometrySymmetric;
     std::vector<float> faceGenGeometryAsymmetric;
@@ -73,6 +75,10 @@ bool LoadFo3CellActors(uint32_t cellFormId,
 
 bool LoadFo3MegatonExteriorActorsQ230(
     std::vector<Fo3NpcActorQ230>& outActors);
+
+bool LoadFo3CharacterHead(const fo3character::Appearance& appearance,bool female,
+    const fo3character::Race& race,const std::vector<fo3character::Control>& controls,
+    Fo3NpcActorQ230& out,const std::string& esmPath={});
 
 struct Fo3NpcNavTriangleQ240 {
     uint16_t vertex[3]{0u,0u,0u};
