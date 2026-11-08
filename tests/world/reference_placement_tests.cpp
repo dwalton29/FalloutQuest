@@ -30,9 +30,10 @@ void synthetic(const std::string& path){
  Bytes base;sub(base,"EDID",str("OriginalFormatFixture"));sub(base,"MODL",str("architecture\\fixture.nif"));
  Bytes refs;add(refs,rec("REFR",400,ref()));add(refs,rec("REFR",401,ref(),0x800));add(refs,rec("REFR",402,ref(999)));add(refs,rec("REFR",403,ref(),0x20));add(refs,rec("REFR",404,ref(0,999),0x800));
  add(refs,rec("REFR",405,ref(0,301),0x800));
+ Bytes transmitter=ref(0,302);sub(transmitter,"XRDO",Bytes(16));add(refs,rec("REFR",406,transmitter,0x800));
  Bytes cell;sub(cell,"EDID",str("FixturePersistent"));Bytes children;add(children,rec("CELL",200,cell));add(children,group(200,6,group(200,8,refs)));
  Bytes grid;sub(grid,"EDID",str("FixtureGrid"));sub(grid,"XCLC",Bytes(8));add(children,rec("CELL",201,grid));
- Bytes world;sub(world,"EDID",str("FixtureWorld"));Bytes esm=rec("TES4",0,{});add(esm,rec("STAT",300,base));Bytes armour;sub(armour,"MODL",str("armor/worn.nif"));sub(armour,"MOD2",str("armor/world.nif"));add(esm,rec("ARMO",301,armour));add(esm,rec("WRLD",100,world));add(esm,group(100,1,children));
+ Bytes world;sub(world,"EDID",str("FixtureWorld"));Bytes esm=rec("TES4",0,{});add(esm,rec("STAT",300,base));Bytes armour;sub(armour,"MODL",str("armor/worn.nif"));sub(armour,"MOD2",str("armor/world.nif"));add(esm,rec("ARMO",301,armour));add(esm,rec("TACT",302,base));add(esm,rec("WRLD",100,world));add(esm,group(100,1,children));
  {std::ofstream f(path,std::ios::binary);f.write(reinterpret_cast<const char*>(esm.data()),esm.size());assert(f);}
  std::vector<Fo3WorldPlacement> before,after;
  assert(LoadFo3WorldspacePlacements({100,200,100,100,0},before));
@@ -65,6 +66,11 @@ void synthetic(const std::string& path){
  assert(LoadFo3WorldspacePlacements({100,200,100,100,1,true},after,&state)&&after.empty());
  assert(!LoadFo3WorldspacePlacements({100,200,100,100,1},after,&state));
  assert(!LoadFo3InteriorCellPlacementsQ1700(999999,after,&state,true));
+ assert(LoadFo3InteriorCellPlacementsQ1700(200,before,&state,true,true));
+ const auto* retained=find(before,406);assert(retained&&retained->retainedRadio&&retained->baseRecordType=="TACT");
+ auto broadcast=state;broadcast.states[406]=fo3world::ReferenceEnableState::Enabled;
+ assert(LoadFo3InteriorCellPlacementsQ1700(200,after,&broadcast,true,true));
+ assert(find(after,406)&&fo3scene::SameResidentPlacement(*retained,*find(after,406)));
  state.states[400]=fo3world::ReferenceEnableState::Enabled;
  state.states[404]=fo3world::ReferenceEnableState::Enabled;
  assert(LoadFo3InteriorCellPlacementsQ1700(200,after,&state)&&find(after,400));

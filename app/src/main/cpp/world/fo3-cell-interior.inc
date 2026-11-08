@@ -277,7 +277,7 @@ void ConvertBethesdaRotation(float rx, float ry, float rz,
 bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
                                         std::vector<Fo3WorldPlacement>& outPlacements,
                                         const fo3world::ReferenceStateSnapshot* referenceState,
-                                        bool candidateSelection, bool retainRadios) {
+                                        bool candidateSelection = false, bool retainRadios = false) {
     outPlacements.clear();
     std::vector<Q1700Interior::RawPlacement> raw;
     if (!Q1700Interior::CollectCellReferences(cellFormId, raw)) {
