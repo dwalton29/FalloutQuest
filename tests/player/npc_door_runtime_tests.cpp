@@ -4,25 +4,31 @@
 #undef main
 #include "world/fo3-cell-traversal.h"
 #include "world/interaction/fo3-interaction-ray.h"
+struct Fo3WorldSurfaceHit {uint32_t reference=0;float distance=0;};
 struct Q2400InteriorDoorState {bool targetOpen=false,q2401NifAnimation=true,q2401Moving=false;float progress=0;uint64_t collisionSceneSerial=0;};
 std::unordered_map<uint32_t,Q2400InteriorDoorState> gQ2400InteriorDoors;
 uint64_t gQ2400DoorSceneSerial=1;
 struct DoorObject {bool q2400SwingDoor=true;Fo3DoorTeleport teleport;uint32_t refFormId=20;float minX=.14f,maxX=.16f,minY=-1,maxY=2,minZ=-4,maxZ=0;};
 std::vector<DoorObject> gObjects;
-bool stepBlocked=true,wallBlocked=false,doorAvailable=true,loadDoor=false;int toggles=0,queries=0,openSounds=0;
+bool stepBlocked=true,wallBlocked=false,doorAvailable=true,loadDoor=false,hasChest=true;int toggles=0,queries=0,openSounds=0;
 void Q230UpdateActor(Q230ActorVisual&){}
-bool Q230LiveBone(const Q230ActorVisual& actor,int,std::array<float,3>& out){out=actor.runtime.position;out[1]+=1;return true;}
-bool HasFo3InteractionOccluder(float,float,float,float,float,float,float,uint32_t ignored){return ignored==20?wallBlocked:stepBlocked;}
-static bool Q230QueryPathDoor(float,float,float,float,float,float,Fo3DoorAimQ1700* aim){++queries;aim->valid=doorAvailable;aim->sourceDoorRef=20;aim->localSwing=!loadDoor;aim->distance=.04f;return doorAvailable;}
+bool Q230LiveBone(const Q230ActorVisual& actor,int,std::array<float,3>& out){out=actor.runtime.position;out[1]+=1;return hasChest;}
+bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi){lo=hi=actor.runtime.position;hi[1]+=.2f;return true;}
+bool TraceFo3WorldSurface(float,float,float,float,float,float,float,uint32_t,uint32_t,Fo3WorldSurfaceHit* hit){
+  if(!stepBlocked)return false;
+  ++queries;*hit={wallBlocked?21u:20u,.004f};return true;
+}
+const DoorObject* Q2400FindSwingDoorObject(uint32_t id){return id==20&&doorAvailable&&!loadDoor?&gObjects.front():nullptr;}
 bool Q2400ToggleInteriorDoor(uint32_t id,float,float){++toggles;auto& d=gQ2400InteriorDoors[id];d.targetOpen=!d.targetOpen;d.q2401Moving=true;d.collisionSceneSerial=gQ2400DoorSceneSerial;return true;}
 namespace fo3audio {void Open(uint32_t){++openSounds;}}
 #include "npc/fo3-npc-door-runtime.inc"
 static Q230ActorVisual Prepare(bool locked=false,bool npcKey=false){
+  gExteriorWorldspaceQ1890=0;
   auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();c.references[42].base=43;c.references[20].base=200;c.references[20].locked=locked;c.references[20].key=300;
   fo3player::Item key;key.formId=300;key.kind=fo3player::ItemKind::Key;c.items[300]=key;
   c.actorInventories[43].entries.clear();if(npcKey)c.actorInventories[43].entries.push_back({300,0,1,1,1,false});
   gPlayerSession=std::make_unique<Session>(std::move(c));assert(gPlayerSession->player.PrepareActorInventory(42));
-  gQ2400InteriorDoors.clear();++gQ2400DoorSceneSerial;gObjects={DoorObject{}};stepBlocked=true;wallBlocked=false;doorAvailable=true;loadDoor=false;toggles=queries=openSounds=0;
+  gQ2400InteriorDoors.clear();++gQ2400DoorSceneSerial;gObjects={DoorObject{}};stepBlocked=true;wallBlocked=false;doorAvailable=true;loadDoor=false;hasChest=true;toggles=queries=openSounds=0;
   actor.aiPathGame={{1015,2010,20}};actor.aiPathSurfaces={{0,0}};actor.aiPathIndex=0;
   return actor;
 }
@@ -40,6 +46,8 @@ static void OriginalDoors(const char* path){
     if(checked>=3)break;
   }
   assert(checked>0);
+  const auto dad=c.pipboy.formNames.at("cg01dadref"),door=c.pipboy.formNames.at("cg01playroomdoor");
+  assert(player.GetLock(door).locked&&!player.CanOpenDoor(door)&&player.CanActorOpenDoor(dad,door));
 }
 int main(int argc,char** argv){
   auto a=Prepare();auto before=a.runtime.position;Q240AdvancePath(a,.1f,1);
@@ -50,8 +58,8 @@ int main(int argc,char** argv){
   for(int i=1;i<20&&a.aiPathIndex<a.aiPathGame.size();++i)Q240AdvancePath(a,.1f,3+i*.1);
   assert(a.aiPathIndex==1&&a.runtime.navigationDoor==0&&toggles==1); // Short waypoint cannot bypass closed door.
   a=Prepare();wallBlocked=true;a.aiLastUpdate=1;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0);
-  a.aiLastUpdate=1.1;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&queries==1);
-  a.aiLastUpdate=1.6;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&queries==2); // Wall before door.
+  a.aiLastUpdate=1.1;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0);
+  a.aiLastUpdate=1.6;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0); // Wall before door.
   a=Prepare();loadDoor=true;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0&&a.runtime.navigationDoor==0); // No player transition API exists in this fixture.
   a=Prepare(true);assert(gPlayerSession->player.Add(300,1));assert(gPlayerSession->player.CanOpenDoor(20));
   assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0); // Player key is not NPC ownership.
@@ -64,17 +72,22 @@ int main(int argc,char** argv){
   before=a.runtime.position;Q240AdvancePath(a,.1f,4);assert(a.runtime.position==before&&toggles==0&&queries==0); // Another activator's closing door still blocks absent world collision.
   a=Prepare();Q240AdvancePath(a,.1f,5);stepBlocked=false;a.runtime.navigationDoor=0;a.runtime.speed=1.05f;before=a.runtime.position;Q240AdvancePath(a,.1f,6);assert(a.runtime.position==before&&toggles==1); // Replanning cannot bypass an opening animation.
   a=Prepare();gQ2400InteriorDoors[20].targetOpen=false;gQ2400InteriorDoors[20].q2401Moving=true;
+  gQ2400InteriorDoors[20].collisionSceneSerial=gQ2400DoorSceneSerial;
   assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0); // Closing sequence is never reversed mid-flight.
   a=Prepare();wallBlocked=true;a.aiPackage=50;a.aiSequence=1;
   Q240AdvancePath(a,.1f,10);assert(a.runtime.procedure==fo3npc::Procedure::Blocked);
   Q240AdvancePath(a,.1f,13.1);assert(a.runtime.procedure==fo3npc::Procedure::RouteFailed&&a.aiPathGame.empty()&&a.aiSequence==0);
-  wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,14.2);assert(!a.aiPathGame.empty());
+  gExteriorWorldspaceQ1890=2;wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,14.2);assert(!a.aiPathGame.empty());
   a=Prepare();c=gPlayerSession->player.Definitions();c.pipboy.packages[50].type=7;c.pipboy.packages[50].location={};c.pipboy.packages[50].target={0,60,20,true};c.weapons.actors[61].health=100;c.pipboy.targets[60].base=61;gPlayerSession=std::make_unique<Session>(c);
+  gExteriorWorldspaceQ1890=2;
   Q230ActorVisual accompanied;accompanied.source.refFormId=60;accompanied.source.baseFormId=61;accompanied.runtime.position=Q240ScenePosition({1100,2010,20});packageTargets.push_back(accompanied);a.runtime.yaw=-1.5707963f;wallBlocked=true;
   for(int i=0;i<40;++i)Q240UpdateNpcPackage(a,i*.1);assert(a.runtime.packageRetryAfter.count(50)&&a.aiPathGame.empty());
   wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,6);assert(a.aiPackage==50&&!a.aiPathGame.empty()); // Accompany uses the same obstruction backoff and recovery.
   a=Prepare();auto& open=gQ2400InteriorDoors[20];open.targetOpen=true;open.progress=1;open.q2401NifAnimation=true;open.q2401Moving=false;open.collisionSceneSerial=gQ2400DoorSceneSerial;
   assert(Q230DoorSettledOpen(20));--open.collisionSceneSerial;assert(!Q230DoorSettledOpen(20));open.collisionSceneSerial=gQ2400DoorSceneSerial;open.q2401Moving=true;assert(!Q230DoorSettledOpen(20));
+  a=Prepare();hasChest=false;stepBlocked=false;before=a.runtime.position;
+  Q240AdvancePath(a,.014f,1);assert(a.runtime.position!=before); // Creature bounds, no humanoid chest.
+  stepBlocked=true;assert(Q230PathBlocked(a,1,0,0,.009f,1)&&toggles==1); // Sub-centimetre movement still finds the door.
   if(argc>1)OriginalDoors(argv[1]);
   std::cout<<"NPC local door animation wait, collision, keys, script rejection and XTEL isolation passed\n";
 }

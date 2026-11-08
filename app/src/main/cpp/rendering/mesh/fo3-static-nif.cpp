@@ -1855,6 +1855,26 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
 
 } // namespace
 
+static std::string RootAttachmentBone(const std::vector<uint8_t>& bytes,
+                                      const NifHeader& header,uint32_t root) {
+    Cursor node(BlockData(bytes,header,root),header.blockSizes[root]);
+    uint32_t name=0,count=0;
+    if(!node.U32(name)||!node.U32(count)||count>node.remaining()/4)return {};
+    std::string bone;
+    for(uint32_t i=0;i<count;++i) {
+        uint32_t block=0;
+        if(!node.U32(block)||block>=header.numBlocks)continue;
+        if(BlockType(header,block)!="NiStringExtraData"||header.blockSizes[block]!=8)continue;
+        Cursor extra(BlockData(bytes,header,block),8);
+        uint32_t key=0,value=0;
+        if(!extra.U32(key)||!extra.U32(value)||key>=header.strings.size()||
+           value>=header.strings.size()||header.strings[key]!="Prn")continue;
+        if(!bone.empty()&&bone!=header.strings[value])return {};
+        bone=header.strings[value];
+    }
+    return bone;
+}
+
 bool LoadFo3StaticNifMeshes(const std::string& modelPath,
                             std::vector<Fo3StaticNifMesh>& outMeshes,
                             bool requireComplete, bool referenceRoot, bool includeHidden,bool includeEditor) {
@@ -1887,6 +1907,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
     NifTransform rootTransform;
     std::vector<uint32_t> rootChildren;
     bool haveRoot = false;
+    std::string attachmentBone;
     for (uint32_t block = 0; block < header.numBlocks; ++block) {
         const std::string& type = BlockType(header, block);
         if (type != "NiNode" && type != "BSFadeNode") continue;
@@ -1897,6 +1918,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
             rootTransform = transform;
             rootChildren = std::move(children);
             haveRoot = true;
+            if(!referenceRoot)attachmentBone=RootAttachmentBone(nif,header,block);
             break;
         }
     }
@@ -1963,6 +1985,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
         }
         candidate.shapeBlock = block;
         candidate.modelPath = resolved;
+        candidate.attachmentBone=attachmentBone;
         std::string q1100Properties;
         for (uint32_t q1100Ref : shape.properties) {
             if (!q1100Properties.empty()) q1100Properties += ",";

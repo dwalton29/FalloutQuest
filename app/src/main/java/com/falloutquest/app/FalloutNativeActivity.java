@@ -4,6 +4,7 @@ import android.app.NativeActivity;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.AudioManager;
+import android.media.audiofx.Equalizer;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -21,63 +22,89 @@ public final class FalloutNativeActivity extends NativeActivity {
     private final List<MediaPlayer> effects = new ArrayList<>();
     private final List<String> tracks = new ArrayList<>();
     private int track;
-    private MediaPlayer music, ambience, dialogue;
-    private int dialogueToken;
+    private MediaPlayer music, ambience;
+    private static final class DialogueVoice {
+        MediaPlayer player;
+        Equalizer filter;
+        int token;
+    }
+    private final DialogueVoice[] voices = {new DialogueVoice(), new DialogueVoice()};
     private float dialogueGain=1;
     public native void audioDialogueDone(int token,boolean success);
     public native void audioDialoguePosition(int token,int milliseconds);
-    private void publishDialoguePosition(MediaPlayer player,int token) {
-        if(dialogue!=player||dialogueToken!=token)return;
+
+    private void publishDialoguePosition(DialogueVoice voice,MediaPlayer player,int token) {
+        if(voice.player!=player||voice.token!=token)return;
         try {if(player.isPlaying())audioDialoguePosition(token,player.getCurrentPosition());}
         catch(IllegalStateException ignored) {}
-        audio.postDelayed(() -> publishDialoguePosition(player,token),33);
+        audio.postDelayed(() -> publishDialoguePosition(voice,player,token),33);
     }
-    public void audioDialogue(String path,int token) {
-        audio.post(() -> {
-            releaseDialogue(false);dialogueToken=token;
-            if(destroyed || !enabled() || path.isEmpty()) {
-                Log.w("FalloutQuest", "DIALOGUE rejected token="+token+" path="+path+" resumed="+resumed+" focused="+focused+" destroyed="+destroyed);
-                if(token!=0 && !path.isEmpty())audioDialogueDone(token,false);return;
+
+    private Equalizer intercomFilter(MediaPlayer player) {
+        Equalizer filter=null;
+        try {
+            filter=new Equalizer(0,player.getAudioSessionId());
+            short[] limits=filter.getBandLevelRange();
+            for(short band=0;band<filter.getNumberOfBands();++band) {
+                int frequency=filter.getCenterFreq(band);
+                int gain=frequency<350000||frequency>3400000?-1400:0;
+                filter.setBandLevel(band,(short)Math.max(limits[0],Math.min(limits[1],gain)));
             }
-            Log.i("FalloutQuest", "DIALOGUE preparing token="+token+" path="+path);
-            MediaPlayer player=new MediaPlayer();dialogue=player;
+            filter.setEnabled(true);
+            return filter;
+        } catch(RuntimeException unavailable) {
+            if(filter!=null)filter.release();
+            Log.w("FalloutQuest","Intercom filter unavailable",unavailable);
+            return null;
+        }
+    }
+
+    public void audioDialogue(String path,int token,int lane,boolean intercom) {
+        audio.post(() -> {
+            if(lane<0||lane>=voices.length)return;
+            DialogueVoice voice=voices[lane];
+            releaseDialogue(voice,false);
+            voice.token=token;
+            if(destroyed||!enabled()||path.isEmpty()) {
+                if(token!=0&&!path.isEmpty())audioDialogueDone(token,false);
+                return;
+            }
+            MediaPlayer player=new MediaPlayer();
+            voice.player=player;
+            if(intercom)voice.filter=intercomFilter(player);
+            Log.i("FalloutQuest","DIALOGUE preparing token="+token+" lane="+lane+" path="+path);
             prepare(player,path,dialogueGain,false,() -> {
-                if(dialogue==player) {
-                    // Some Android decoders have already left PlaybackCompleted
-                    // when delivering this callback. Diagnostics must never abort
-                    // the UI thread before the native choice transition.
-                    try {
-                        Log.i("FalloutQuest", "DIALOGUE completed token="+token+" positionMs="+player.getCurrentPosition()+" durationMs="+player.getDuration());
-                    } catch (IllegalStateException e) {
-                        Log.w("FalloutQuest", "DIALOGUE completed token="+token+" timing unavailable",e);
-                    }
-                    // Leave MediaPlayer's completion callback before crossing
-                    // into JNI. This removes callback/release/native re-entrancy
-                    // from the exact headset failure boundary.
-                    dialogue=null;
-                    try { player.release(); } catch (RuntimeException e) {
-                        Log.w("FalloutQuest", "DIALOGUE release token="+token+" failed",e);
-                    }
-                    duckSpeech();
-                    audio.post(() -> {
-                        Log.i("FalloutQuest", "DIALOGUE native-dispatch token="+token);
-                        audioDialogueDone(token,true);
-                        Log.i("FalloutQuest", "DIALOGUE native-return token="+token);
-                    });
-                }
-            },() -> dialogue==player);
-            audio.postDelayed(() -> publishDialoguePosition(player,token),33);
+                if(voice.player!=player||voice.token!=token)return;
+                releaseDialogue(voice,false);
+                // Deliver completion outside the platform callback.
+                audio.post(() -> audioDialogueDone(token,true));
+            },() -> voice.player==player&&voice.token==token);
+            audio.postDelayed(() -> publishDialoguePosition(voice,player,token),33);
             duckSpeech();
         });
     }
     public void audioDialogueGain(float gain) {
-        audio.post(() -> { dialogueGain=Math.max(0,Math.min(1,gain));if(dialogue!=null)try{volume(dialogue,dialogueGain);}catch(IllegalStateException ignored){} });
+        audio.post(() -> {
+            dialogueGain=Math.max(0,Math.min(1,gain));
+            for(DialogueVoice voice:voices)if(voice.player!=null)
+                try{volume(voice.player,dialogueGain);}catch(IllegalStateException ignored){}
+        });
+    }
+    private boolean speechActive() {return voices[0].player!=null||voices[1].player!=null;}
+    private boolean dialoguePlayer(MediaPlayer player) {
+        return player!=null&&(voices[0].player==player||voices[1].player==player);
     }
     private void duckSpeech() {
-        for(Broadcast b:broadcasts)if(b.player!=null)try{float gain=dialogue==null?1:.25f;volume(b.player,gain);}catch(IllegalStateException ignored){}
+        for(Broadcast b:broadcasts)if(b.player!=null)
+            try{volume(b.player,speechActive()?.25f:1f);}catch(IllegalStateException ignored){}
     }
-    private void releaseDialogue(boolean failed) {
-        if(dialogue!=null) {dialogue.release();dialogue=null;if(failed)audioDialogueDone(dialogueToken,false);}
+    private void releaseDialogue(DialogueVoice voice,boolean failed) {
+        if(voice.filter!=null){voice.filter.release();voice.filter=null;}
+        if(voice.player!=null) {
+            voice.player.release();
+            voice.player=null;
+            if(failed)audioDialogueDone(voice.token,false);
+        }
         duckSpeech();
     }
     private final Broadcast[] broadcasts = {new Broadcast(),new Broadcast()};
@@ -101,14 +128,14 @@ public final class FalloutNativeActivity extends NativeActivity {
         Broadcast b = broadcasts[channel];
         if (b.player != null || b.index >= b.paths.size()) return;
         MediaPlayer player = new MediaPlayer(); b.player = player;
-        prepare(player,b.paths.get(b.index),dialogue==null?1:.25f,false,() -> {
+        prepare(player,b.paths.get(b.index),speechActive()?.25f:1f,false,() -> {
             b.release(); ++b.index;
             if (b.index >= b.paths.size()) { b.paths.clear(); b.index = 0; audioBroadcastDone(channel,b.generation); }
             else refreshBroadcast(channel);
         },() -> b.player == player);
     }
     private boolean failBroadcast(MediaPlayer player) {
-        if(player==dialogue){releaseDialogue(true);return true;}
+        for(DialogueVoice voice:voices)if(player==voice.player){releaseDialogue(voice,true);return true;}
         for (int channel = 0; channel < broadcasts.length; ++channel) {
             Broadcast b = broadcasts[channel];
             if (b.player == player) { b.release(); b.paths.clear(); b.index = 0;
@@ -124,7 +151,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private final java.util.Map<MediaPlayer,Float> baseGains=new java.util.WeakHashMap<>();
     private float scaled(MediaPlayer player,float gain) {
         if(player!=music&&movieMuteWorld)return 0;
-        float channel=player==music?musicVolume:(player==dialogue||player==broadcasts[0].player||player==broadcasts[1].player)?voiceVolume:effectsVolume;
+        float channel=player==music?musicVolume:(dialoguePlayer(player)||player==broadcasts[0].player||player==broadcasts[1].player)?voiceVolume:effectsVolume;
         return Math.max(0,Math.min(1,gain*masterVolume*channel));
     }
     private void volume(MediaPlayer player,float gain) {
@@ -240,7 +267,7 @@ public final class FalloutNativeActivity extends NativeActivity {
             player.setOnPreparedListener(p -> {
                 if (enabled() && current.check()) {
                     volume(p,gain); p.setLooping(loop); if(p!=music||!moviePauseMusic)p.start();
-                    if(p==dialogue)Log.i("FalloutQuest", "DIALOGUE started token="+dialogueToken+" durationMs="+p.getDuration());
+                    if(dialoguePlayer(p))Log.i("FalloutQuest","DIALOGUE started durationMs="+p.getDuration());
                     Log.i("FalloutQuest", "AUDIO playing: " + path + " gain=" + gain + " loop=" + loop);
                 }
             });
@@ -271,7 +298,8 @@ public final class FalloutNativeActivity extends NativeActivity {
     private void releaseAmbience() { if (ambience != null) { ambience.release(); ambience = null; } }
     private void stopAll() {
         if (menuLoop != null) { menuLoop.release(); menuLoop = null; }
-        releaseDialogue(true);releaseMusic(); releaseAmbience();
+        for(DialogueVoice voice:voices)releaseDialogue(voice,true);
+        releaseMusic(); releaseAmbience();
         for (Broadcast b : broadcasts) b.release();
         for (MediaPlayer player : effects) player.release();
         effects.clear();

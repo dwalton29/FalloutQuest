@@ -11,6 +11,9 @@ namespace fo3audio {
 // Token-isolated actor speech. Completion includes asset/decode failures; no timers.
 void Dialogue(const std::string& request,uint32_t token);
 void DialogueStop();
+void ScriptDialogue(const std::string& request,uint32_t token,unsigned lane,bool intercom);
+void StopDialogueLane(unsigned lane);
+uint64_t TakeDialogueLane(unsigned lane);
 void DialogueGain(float gain);
 uint64_t DialogueCompletion();
 void DialogueDone(uint32_t token,bool success);

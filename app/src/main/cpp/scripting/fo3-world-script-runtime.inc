@@ -18,14 +18,25 @@ static std::unordered_set<uint32_t> loaded;
 static std::unordered_map<uint32_t,uint32_t> lookTargets;
 static fo3script::ImageStack modifiers;
 static double seconds=0;
-static fo3dialogue::Session speech;
+struct SpeechLane {
+    fo3dialogue::Session dialogue;
+    uint32_t reference=0,identity=0,target=0,listener=0,topic=0,token=0;
+    uint32_t package=0,packageOwner=0;
+    std::pair<uint32_t,uint32_t> pendingPackageDone{};
+    double began=0;
+    bool subtitle=false;
+};
+static std::array<SpeechLane,2> speechLanes;
 static fo3dialogue::Panel scriptSubtitle;
 static std::vector<fo3script::Action> speechPending,hitPending;
-static uint32_t speechReference=0,speechIdentity=0,speechListenerIdentity=0,speechPackageOwner=0;
-static uint32_t speechTopic=0,speechTarget=0,speechToken=0,speechSerial=0,speechPackage=0;
-static std::pair<uint32_t,uint32_t> pendingPackageDone{};
-static double speechBegan=0;
+static uint32_t speechSerial=0;
 static uint64_t speechGeneration=~uint64_t{0};
+bool OwnsSpeechResultAdmission(bool admitting,uint64_t ticket){
+    return std::any_of(speechLanes.begin(),speechLanes.end(),[&](const auto& lane){
+        return lane.dialogue.phase==fo3dialogue::Phase::Results&&
+            (admitting||(ticket&&lane.dialogue.resultTicket==ticket));
+    });
+}
 static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
     auto& player=gPlayerSession->player;
     fo3dialogue::Context ctx;ctx.player=&player;ctx.talking=true;
@@ -44,12 +55,18 @@ static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
     }
     return ctx;
 }
-static void SpeechStop(){
-    scriptSubtitle.visible=false;scriptSubtitle.subtitle.clear();++scriptSubtitle.revision;
-    if(gPlayerSession){if(speechReference)gPlayerSession->player.SetScriptActorTalking(speechReference,false);if(speechIdentity)gPlayerSession->player.SetScriptActorTalking(speechIdentity,false);}
-    if(auto* actor=DialogueActor(speechReference)){actor->runtime.speaking=false;actor->runtime.scriptSpeechToken=0;actor->lastFrame=UINT64_MAX;}
-    if(speech.Active()&&!gDialogue.Active())fo3audio::DialogueStop();
-    speech.End("scripted speech stopped");speechToken=0;speechReference=0;speechPackage=0;speechIdentity=0;speechListenerIdentity=0;speechPackageOwner=0;
+static void SpeechStop(SpeechLane& lane,unsigned index){
+    if(gPlayerSession){
+        gPlayerSession->player.SetScriptActorTalking(lane.reference,false);
+        gPlayerSession->player.SetScriptActorTalking(lane.identity,false);
+    }
+    if(auto* actor=DialogueActor(lane.reference)){
+        actor->runtime.speaking=false;actor->runtime.scriptSpeechToken=0;actor->lastFrame=UINT64_MAX;
+    }
+    if(lane.dialogue.Active()&&(index||!gDialogue.Active()))fo3audio::StopDialogueLane(index);
+    lane.dialogue.End("scripted speech stopped");
+    lane.reference=lane.identity=lane.target=lane.listener=lane.topic=lane.token=0;
+    lane.package=lane.packageOwner=0;lane.subtitle=false;
 }
 
 static uint64_t runtimeGeneration=~uint64_t{0};
@@ -81,74 +98,156 @@ bool Event(uint32_t reference,const char* event,uint32_t activator,bool persist=
     }else if(persist)FlushFo3PlayerState();
     return committed||invalidProgram;
 }
+static void SpeechPlay(SpeechLane& lane,unsigned index,fo3player::Player& player){
+    lane.began=seconds;
+    lane.token=0x30000000u|(++speechSerial&0xffffffu);
+    if(auto* actor=lane.dialogue.proxy?nullptr:DialogueActor(lane.reference)){
+        actor->runtime.speaking=true;actor->runtime.scriptSpeechToken=lane.token;
+        actor->lastFrame=UINT64_MAX;
+    }
+    fo3audio::ScriptDialogue(lane.dialogue.Audio(player.Definitions().pipboy),
+        lane.token,index,lane.dialogue.proxy!=0);
+}
+static void AdvanceSpeech(SpeechLane& lane,unsigned index,fo3player::Player& player){
+    if(lane.pendingPackageDone.first){
+        if(!PackageEvent(lane.pendingPackageDone.first,lane.pendingPackageDone.second,true))return;
+        lane.pendingPackageDone={};
+    }
+    auto& speech=lane.dialogue;
+    if(!speech.Active())return;
+    if(auto* actor=speech.proxy?nullptr:DialogueActor(lane.reference))
+        Q230DialogueResponseAnimation(*actor,speech);
+    bool disabled=true;
+    std::string error;
+    if(gDialogue.Active()||IsFo3LoadingVisible()||
+       !player.ReferenceDisabled(lane.reference,disabled,error)||disabled||
+       (lane.identity!=lane.reference&&(player.TalkingActivatorActor(lane.reference)!=lane.identity||player.ActorHealth(lane.identity)<=0))||
+       (lane.listener!=lane.target&&(player.TalkingActivatorActor(lane.target)!=lane.listener||player.ActorHealth(lane.listener)<=0))||
+       seconds-lane.began>60){
+        SpeechStop(lane,index);
+        return;
+    }
+
+    const uint32_t actor=speech.actor,topic=lane.topic;
+    bool advanced=false;
+    if(speech.phase==fo3dialogue::Phase::Results){
+        advanced=speech.ResumeResults(SpeechContext(lane.reference,lane.target),player);
+    }else{
+        const auto done=fo3audio::TakeDialogueLane(index);
+        if(!done||uint32_t(done>>1)!=lane.token)return;
+        const bool heard=(done&1u)!=0;
+        if(!heard)Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);
+        advanced=speech.AudioDone(speech.audioToken,heard,SpeechContext(lane.reference,lane.target),player);
+    }
+    if(speech.phase==fo3dialogue::Phase::Results)return;
+    if(advanced){
+        const uint32_t endpoint=speech.proxy?speech.proxy:speech.actor;
+        if(endpoint!=lane.reference||speech.actor!=lane.identity){
+            player.SetScriptActorTalking(lane.reference,false);
+            player.SetScriptActorTalking(lane.identity,false);
+            if(auto* previous=DialogueActor(lane.reference)){
+                previous->runtime.speaking=false;previous->runtime.scriptSpeechToken=0;
+            }
+            lane.target=lane.reference;lane.listener=lane.identity;
+            lane.reference=endpoint;lane.identity=speech.actor;
+            player.SetScriptActorTalking(lane.reference,true);
+            player.SetScriptActorTalking(lane.identity,true);
+        }
+        SpeechPlay(lane,index,player);
+        return;
+    }
+    const bool completed=speech.infoCompleted;
+    const auto package=lane.package,owner=lane.packageOwner;
+    SpeechStop(lane,index);
+    if(!completed)return;
+    if(package){
+        if(!PackageEvent(owner,package,true))lane.pendingPackageDone={owner,package};
+    }else Event(actor,"SayToDone",topic);
+    FlushFo3PlayerState();
+}
+static void StartSpeech(SpeechLane& lane,unsigned index,const fo3script::Action& action,
+                        fo3player::Player& player){
+    bool disabled=true;
+    std::string error;
+    if(!player.ReferenceDisabled(action.reference,disabled,error)||disabled)return;
+    const auto admission=SpeechContext(action.reference,action.flags);
+    if((action.sourceActor&&admission.speaker.reference!=action.sourceActor)||
+       (action.targetActor&&admission.target.reference!=action.targetActor))return;
+    const bool conversation=action.kind==fo3script::ActionKind::Conversation;
+    if(const auto* actor=admission.speaker.proxy?nullptr:DialogueActor(action.reference)){
+        if(actor->runtime.offScene||!actor->runtime.Alive()||
+           (conversation&&!actor->runtime.CanTalk()))return;
+    }
+    auto& speech=lane.dialogue;
+    ConfigureFo3DialogueSession(speech);
+    const bool started=action.info?
+        speech.StartSelectedTopic(action.form,action.info,admission,player,conversation):
+        speech.StartTopic(action.form,admission,player);
+    if(!started){
+        Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);
+        return;
+    }
+    lane.reference=action.reference;lane.identity=speech.actor;lane.target=action.flags;
+    lane.listener=admission.target.reference;lane.topic=action.form;
+    lane.package=action.package;lane.packageOwner=action.reference;lane.subtitle=action.forceSubtitle;
+    player.SetScriptActorTalking(lane.reference,true);
+    player.SetScriptActorTalking(lane.identity,true);
+    fo3audio::DialogueGain(.7f);
+    SpeechPlay(lane,index,player);
+}
+static void UpdateSpeechSubtitle(const fo3pipdata::Definitions& definitions){
+    std::string text;
+    for(const auto& lane:speechLanes)if(lane.subtitle&&lane.dialogue.Active()){
+        const auto line=lane.dialogue.Subtitle(definitions);
+        if(!line.empty()){
+            if(!text.empty())text+="\n";
+            text+=line;
+        }
+    }
+    if(!text.empty()&&!scriptSubtitle.visible){
+        const float yaw=gQ210Head[3];
+        scriptSubtitle.yaw=yaw;
+        scriptSubtitle.anchor={gQ210Head[0]-std::sin(yaw)*1.5f,gQ210Head[1]-.25f,
+                               gQ210Head[2]-std::cos(yaw)*1.5f};
+    }
+    scriptSubtitle.visible=!text.empty();
+    if(text!=scriptSubtitle.subtitle){scriptSubtitle.subtitle=std::move(text);++scriptSubtitle.revision;}
+}
 void SpeechTick(){
     if(!gPlayerSession)return;
     auto& player=gPlayerSession->player;
     if(speechGeneration!=player.ScriptRuntimeGeneration()){
-        SpeechStop();speechPending.clear();pendingPackageDone={};speechGeneration=player.ScriptRuntimeGeneration();
-    }
-    if(pendingPackageDone.first){if(!PackageEvent(pendingPackageDone.first,pendingPackageDone.second,true))return;pendingPackageDone={};}
-    if(speech.Active()){
-        if(scriptSubtitle.visible){const auto text=speech.Subtitle(player.Definitions().pipboy);if(text!=scriptSubtitle.subtitle){scriptSubtitle.subtitle=text;++scriptSubtitle.revision;}}
-        if(auto* actor=DialogueActor(speechReference))Q230DialogueResponseAnimation(*actor,speech);
-        bool disabled=true;std::string error;
-        if(gDialogue.Active()||IsFo3LoadingVisible()||!player.ReferenceDisabled(speechReference,disabled,error)||disabled||
-           (speechIdentity!=speechReference&&(player.TalkingActivatorActor(speechReference)!=speechIdentity||player.ActorHealth(speechIdentity)<=0))||
-           (speechListenerIdentity!=speechTarget&&(player.TalkingActivatorActor(speechTarget)!=speechListenerIdentity||player.ActorHealth(speechListenerIdentity)<=0))||seconds-speechBegan>60){SpeechStop();return;}
-        const uint32_t actor=speech.actor,topic=speechTopic;
-        bool advanced=false;
-        if(speech.phase==fo3dialogue::Phase::Results){
-            advanced=speech.ResumeResults(SpeechContext(speechReference,speechTarget),player);
-            if(speech.phase==fo3dialogue::Phase::Results)return;
-        }else{
-            const auto done=fo3audio::DialogueCompletion();
-            if(!done||uint32_t(done>>1)!=speechToken)return;
-            if(!(done&1u)){Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);SpeechStop();return;}
-            advanced=speech.AudioDone(speech.audioToken,true,SpeechContext(speechReference,speechTarget),player);
-            if(speech.phase==fo3dialogue::Phase::Results)return;
+        for(unsigned i=0;i<speechLanes.size();++i){
+            SpeechStop(speechLanes[i],i);
+            speechLanes[i].pendingPackageDone={};
         }
-        if(advanced){
-            const uint32_t endpoint=speech.proxy?speech.proxy:speech.actor;
-            if(endpoint!=speechReference||speech.actor!=speechIdentity){
-                player.SetScriptActorTalking(speechReference,false);player.SetScriptActorTalking(speechIdentity,false);
-                if(auto* previous=DialogueActor(speechReference)){previous->runtime.speaking=false;previous->runtime.scriptSpeechToken=0;}
-                speechTarget=speechReference;speechListenerIdentity=speechIdentity;speechReference=endpoint;speechIdentity=speech.actor;player.SetScriptActorTalking(speechReference,true);player.SetScriptActorTalking(speechIdentity,true);
-                if(auto* next=DialogueActor(speechReference))next->runtime.speaking=true;
+        speechPending.clear();speechGeneration=player.ScriptRuntimeGeneration();
+    }
+    for(unsigned i=0;i<speechLanes.size();++i) {
+        AdvanceSpeech(speechLanes[i],i,player);
+        if(speechLanes[i].dialogue.resultTicket)break;
+    }
+    if(!speechPending.empty()&&!gDialogue.Active()&&!gQ230NpcChat.Active()&&
+       !IsFo3LoadingVisible()&&CanDeferFo3DialogueResult()){
+        const auto& next=speechPending.front();
+        const bool occupied=std::any_of(speechLanes.begin(),speechLanes.end(),
+            [](const auto& lane){return lane.dialogue.Active();});
+        const bool linked=std::any_of(speechLanes.begin(),speechLanes.end(),
+            [](const auto& lane){return lane.dialogue.Active()&&lane.dialogue.linkedConversation;});
+        if(!linked&&(!occupied||next.kind!=fo3script::ActionKind::Conversation)&&
+           !player.ScriptActorTalking(next.reference)&&
+           (!next.sourceActor||!player.ScriptActorTalking(next.sourceActor))){
+            for(unsigned i=0;i<speechLanes.size();++i){
+                auto& lane=speechLanes[i];
+                if(lane.dialogue.Active()||lane.pendingPackageDone.first)continue;
+                const auto action=next;
+                speechPending.erase(speechPending.begin());
+                StartSpeech(lane,i,action,player);
+                break;
             }
-            speechBegan=seconds;
-            speechToken=0x30000000u|(++speechSerial&0xffffffu);
-            if(auto* live=DialogueActor(speechReference))live->runtime.scriptSpeechToken=speechToken;
-            fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);return;
         }
-        if(!speech.infoCompleted){SpeechStop();return;}
-        const auto package=speechPackage,packageOwner=speechPackageOwner;SpeechStop();
-        if(package){pendingPackageDone={packageOwner,package};if(PackageEvent(packageOwner,package,true))pendingPackageDone={};}
-        else Event(actor,"SayToDone",topic);
-        FlushFo3PlayerState();
     }
-    if(speechPending.empty()||gDialogue.Active()||gQ230NpcChat.Active()||IsFo3LoadingVisible())return;
-    if(!CanDeferFo3DialogueResult())return; // Keep selected speech queued while resource work owns admission.
-    const auto action=speechPending.front();speechPending.erase(speechPending.begin());
-    bool disabled=true;std::string enabledError;
-    if(!player.ReferenceDisabled(action.reference,disabled,enabledError)||disabled)return;
-    const auto admission=SpeechContext(action.reference,action.flags);
-    if((action.sourceActor&&admission.speaker.reference!=action.sourceActor)||(action.targetActor&&admission.target.reference!=action.targetActor))return;
-    auto* actor=DialogueActor(action.reference);
-    if(actor&&(actor->runtime.offScene||!actor->runtime.CanTalk()))return;
-    ConfigureFo3DialogueSession(speech);
-    if(!(action.info?speech.StartSelectedTopic(action.form,action.info,SpeechContext(action.reference,action.flags),player,action.kind==fo3script::ActionKind::Conversation):speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player))){
-        Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);return;
-    }
-    speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;speechPackage=action.package;speechPackageOwner=action.reference;speechIdentity=speech.actor;speechListenerIdentity=admission.target.reference;
-    if(action.forceSubtitle){
-        scriptSubtitle={};scriptSubtitle.visible=true;scriptSubtitle.yaw=gQ210Head[3];
-        scriptSubtitle.anchor={gQ210Head[0]-std::sin(scriptSubtitle.yaw)*1.5f,gQ210Head[1]-.25f,gQ210Head[2]-std::cos(scriptSubtitle.yaw)*1.5f};
-        scriptSubtitle.subtitle=speech.Subtitle(player.Definitions().pipboy);++scriptSubtitle.revision;
-    }
-    player.SetScriptActorTalking(action.reference,true);player.SetScriptActorTalking(speechIdentity,true);if(actor){actor->runtime.speaking=true;actor->lastFrame=UINT64_MAX;}
-    speechToken=0x30000000u|(++speechSerial&0xffffffu);
-    if(actor)actor->runtime.scriptSpeechToken=speechToken;
-    fo3audio::DialogueGain(.7f);fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);
+    UpdateSpeechSubtitle(player.Definitions().pipboy);
 }
 void Register(){
     auto& player=gPlayerSession->player;

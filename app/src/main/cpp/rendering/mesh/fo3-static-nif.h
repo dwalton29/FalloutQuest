@@ -31,7 +31,8 @@ struct Fo3StaticNifMesh {
 
     uint32_t shapeBlock = UINT32_MAX; // original block ID for rigid UI animation
     std::string modelPath;
-    std::string shapeName; // authored Hat/NoHat hair variant selector
+    std::string shapeName; // authored appearance variant selector
+    std::string attachmentBone; // root NiStringExtraData Prn
     std::string diffuseTexturePath;
     std::string normalTexturePath;
     std::string glowTexturePath;

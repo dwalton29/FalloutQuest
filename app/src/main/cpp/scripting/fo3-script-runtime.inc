@@ -561,7 +561,21 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Disable:ok=StageReferenceEnable(c.form,false,error);break;
     case C::Enable:ok=StageReferenceEnable(c.form,true,error);break;
     case C::TalkingActivator:ok=SetTalkingActivatorActor(c.form,c.index);break;
-    case C::StopCombat:ok=StopActorCombat(c.form,c.index!=0);break;
+    case C::StartCombat:{
+      bool callerDisabled=true,targetDisabled=false;
+      ok=c.form!=c.index&&catalog_->actorPlacements.count(c.form)&&
+         (c.index==PlayerRef||catalog_->actorPlacements.count(c.index))&&
+         ActorHealth(c.form)>0&&ActorHealth(c.index)>0&&
+         ReferenceDisabled(c.form,callerDisabled,error)&&!callerDisabled&&
+         (c.index==PlayerRef||(ReferenceDisabled(c.index,targetDisabled,error)&&!targetDisabled))&&
+         SetActorHostile(c.form,c.index);
+      break;
+    }
+    case C::StopCombat:{
+      const auto actor=state_.actors.find(c.form);
+      if(c.variable&&actor!=state_.actors.end()&&actor->second.hostile&&actor->second.hostile!=c.variable)break;
+      ok=StopActorCombat(c.form,c.index!=0);break;
+    }
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);

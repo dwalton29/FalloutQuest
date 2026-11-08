@@ -459,7 +459,8 @@ add_test(NAME title_menu_tests COMMAND title_menu_tests)
 
 get_target_property(new_game_sources mq01_scene_tests SOURCES)
 list(REMOVE_ITEM new_game_sources mq01_scene_tests.cpp)
-add_executable(new_game_tests new_game_tests.cpp ${new_game_sources})
+add_executable(new_game_tests new_game_tests.cpp ${new_game_sources}
+    ../../app/src/main/cpp/world/fo3-resident-authored-admission.cpp)
 target_compile_features(new_game_tests PRIVATE cxx_std_17)
 target_compile_options(new_game_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
 target_include_directories(new_game_tests PRIVATE ../../app/src/main/cpp)

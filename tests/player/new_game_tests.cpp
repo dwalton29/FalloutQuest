@@ -1,6 +1,7 @@
 #include "player/fo3-new-game.h"
 #include "player/fo3-player-presentation.h"
 #include "scripting/fo3-script-master-match.h"
+#include "world/fo3-resident-authored-admission.h"
 #include "ui/chargen/fo3-name-entry.h"
 #include "ui/chargen/fo3-special-book.h"
 #include "ui/chargen/fo3-tag-skills.h"
@@ -479,7 +480,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   auto registry=std::make_shared<fo3script::AnimationRegistry>();
   // Renderer-capability fixture, not a claim that the original NIF was loaded.
   (*registry)[d.formNames.at("cg00geneprojectorref")]={{"forward",1,false},{"backward",1,false}};p.SetScriptAnimationRegistry(registry);
-  bool chose=false,genderLine=false,enteredName=false,sawMovie=false,sawBirthday=false;const auto baby=d.formNames.at("cg01"),birthday=d.formNames.at("cg02");
+  bool chose=false,genderLine=false,enteredName=false,sawMovie=false,sawBirthday=false,radioPrepared=false;const auto baby=d.formNames.at("cg01"),birthday=d.formNames.at("cg02");
   for(const char* name:{"cg02amataref","cg02beatriceref","cg02dadref","cg02oldladypalmerref","cg02stanleyref","cg02paulhannonref","cg02vault101security04ref","cg02overseerref"})residents.push_back(d.formNames.at(name));
   const auto scriptedReference=[&](const char* name){
     const auto script=d.formNames.at(name);
@@ -577,7 +578,20 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
       Check(fo3dialogue::ReferenceContext(p,action.flags,ctx.target),"birth listener context");
       fo3dialogue::Session voice;
       voice.previewReferences=[](const auto&,const auto&,auto&){return true;};
-      voice.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};
+      voice.publishReferences=[&](auto& player,auto& plan,auto&){
+        const auto radio=d.formNames.at("radiovault101ref");
+        const auto& changed=plan.AffectedReferences();
+        if(changed.size()==1&&changed.front()==radio&&
+           !player.Snapshot().pipboy.quests.at(birthday).stages.count(12)){
+          const auto cell=d.transmitters.at(radio).cell;
+          std::atomic<bool> cancel{false};
+          fo3script::ScriptMasterMatch proof;fo3scene::ResidentAuthoredAdmission admission;
+          Check(fo3script::MatchScriptProgramsToMaster(master,plan.ExecutedScripts(),proof,cancel,error),error);
+          Check(fo3scene::PrepareResidentAuthoredAdmission(master,cell,changed,admission,cancel,error),error);
+          radioPrepared=true;
+        }
+        return player.CommitScriptTransaction(plan);
+      };
       voice.diagnostic=[&](const std::string& message){error=message;};
       const bool selected=voice.StartSelectedTopic(action.form,action.info,ctx,p);
       Check(selected,"original birth INFO "+std::to_string(action.info)+" stage "+std::to_string(p.Snapshot().pipboy.quests.at(quest).stage)+": "+error);
@@ -598,7 +612,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   assert(birth.stage==100&&!birth.running&&birth.stages.count(61)&&birth.stages.count(62)&&birth.stages.count(65)&&birth.stages.count(80));
   if(!p.Snapshot().pipboy.quests.count(birthday)||p.Snapshot().pipboy.quests.at(birthday).stage<12)std::cerr<<"Birthday stopped; toddler "<<p.Snapshot().pipboy.quests.at(baby).stage<<" birthday "<<(p.Snapshot().pipboy.quests.count(birthday)?p.Snapshot().pipboy.quests.at(birthday).stage:0)<<"\n";
   assert(sawMovie&&sawBirthday&&allocated&&followed&&p.Snapshot().pipboy.quests.at(baby).stage==100&&!p.Snapshot().playerToddler&&p.Snapshot().playerScale==1);
-  assert(packageGreeting&&resetSeen&&radioSeen);
+  assert(packageGreeting&&resetSeen&&radioSeen&&radioPrepared);
   bool radioDisabled=true;Check(p.ReferenceDisabled(d.formNames.at("radiovault101ref"),radioDisabled,error),error);assert(!radioDisabled);
   assert(!p.PlayerControlDisabled(0)&&!p.PlayerControlDisabled(5)&&p.PlayerControlDisabled(2));
   assert(!fo3player::EarlyFirstPerson(p));
@@ -611,6 +625,19 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   auto finish=[&](fo3dialogue::Session& voice,fo3dialogue::Context& ctx){unsigned n=0;while(voice.phase==fo3dialogue::Phase::Speaking){assert(++n<32);voice.AudioDone(voice.audioToken,true,ctx,p);if(voice.phase==fo3dialogue::Phase::Speaking&&(voice.actor!=ctx.speaker.reference||voice.proxy!=ctx.speaker.proxy))std::swap(ctx.speaker,ctx.target);}};
   auto configure=[&](fo3dialogue::Session& voice){voice.previewReferences=[](const auto&,const auto&,auto&){return true;};voice.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};voice.diagnostic=[&](const std::string& e){error=e;};};
   auto talk=[&](const char* ref,std::initializer_list<const char*> topics){auto ctx=context(d.formNames.at(ref));fo3dialogue::Session voice;configure(voice);Check(voice.Start(ctx,p),std::string("party greeting ")+ref+": "+error);finish(voice,ctx);
+    if(std::string(ref)=="cg02butchref"){
+      for(const char* name:{"cg02butcha5","cg02butcha6"}){
+        const auto topic=d.formNames.at(name);
+        const auto choice=std::find_if(voice.choices.begin(),voice.choices.end(),[&](const auto& v){return v.topic==topic;});
+        Check(choice!=voice.choices.end(),"original Butch provocation choice");
+        auto fight=p.PrepareDialogueInfoTransaction(topic,choice->info,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
+        Check(bool(fight)&&p.CommitScriptTransaction(*fight),error);
+        assert(p.Snapshot().actors.at(ctx.speaker.reference).hostile==fo3player::PlayerRef);
+        auto reaction=p.PrepareReferenceEventTransaction(ctx.speaker.reference,"OnStartCombat",fo3player::PlayerRef,error);
+        Check(bool(reaction),error);
+        Check(p.RollbackScriptTransaction(*fight), "restore the pre-fight state for the peaceful route");
+      }
+    }
     for(const char* name:topics){auto choice=std::find_if(voice.choices.begin(),voice.choices.end(),[&](const auto& v){return v.topic==d.formNames.at(name);});
       if(choice==voice.choices.end()){std::cerr<<"Missing party choice "<<name<<" available:";for(const auto& c:voice.choices)std::cerr<<" "<<c.text;std::cerr<<"\n";}
       Check(choice!=voice.choices.end(),std::string("party choice ")+name+": "+error);Check(voice.Choose(size_t(choice-voice.choices.begin()),ctx,p),error);finish(voice,ctx);}

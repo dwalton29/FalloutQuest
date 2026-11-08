@@ -18,6 +18,7 @@ struct Session {
   Diagnostic diagnostic;
   std::function<bool(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&)> previewReferences;
   std::function<bool(fo3player::Player&,fo3player::ScriptTransactionPlan&,std::string&)> publishReferences;
+  decltype(publishReferences) recoverEndResult;
   // Deferred world results own their original transaction until publication.
   std::function<uint64_t(std::unique_ptr<fo3player::ScriptTransactionPlan>,std::string&)> deferEndResult;
   std::function<int(uint64_t)> endResultStatus; // -1 failed, 0 pending, 1 finalized commit.

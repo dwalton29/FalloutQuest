@@ -433,7 +433,13 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       if(policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue&&!Q240AdoptPackage(actor,policyId,*policy,policyAnchor))return;
       if(s.dialogue)EndFo3Dialogue("combat threat");
       if(s.activity!=fo3npc::Activity::Combat)Q240SuspendPackageWait(actor,now);
+      const bool starting=s.activity!=fo3npc::Activity::Combat;
       s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;
+#if !defined(FO3_NPC_COMBAT_HOST_TEST)
+      if(starting&&!fo3worldscript::Event(actor.source.refFormId,"OnStartCombat",acquire,true))return;
+#else
+      (void)starting;
+#endif
       Q6H_LOGI("NPC COMBAT START actor=%08X target=%08X confidence=%u assets=%zu",
         actor.source.refFormId,acquire,unsigned(ai.confidence),actor.combatWeapons.size());
     }

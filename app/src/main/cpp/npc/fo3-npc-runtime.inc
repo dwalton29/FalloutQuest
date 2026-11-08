@@ -34,7 +34,11 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
     paths[size_t(fo3npc::Animation::StepBack)]=Fo3ActorClipPath(actor.source.skeletonModel,"mtbackward",true);
   }
   for(size_t i=1;i<paths.size();++i){std::vector<uint8_t> bytes;
-    const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
+    bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
+    if(!ready&&actor.source.creature&&i==size_t(fo3npc::Animation::Walk)){
+      paths[i]=Fo3ActorClipPath(actor.source.skeletonModel,"mtforward",true);
+      ready=LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
+    }
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
   }
   if(d){
@@ -413,8 +417,10 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
       rig.bones.push_back(fo3anim::FindBone(actor.skeleton, bone.name));
     if (!part.mesh.skinned) {
       const bool headPart = fo3appearance::HeadPart(actor.source, part.placement.modelPath);
-      if (headPart)
-        rig.rigidBone = fo3anim::FindBone(actor.skeleton, "Bip01 Head");
+      if(!part.mesh.attachmentBone.empty())
+        rig.rigidBone=fo3anim::FindBone(actor.skeleton,part.mesh.attachmentBone);
+      else if(headPart)
+        rig.rigidBone=fo3anim::FindBone(actor.skeleton,"Bip01 Head");
     }
   }
   const bool deform =

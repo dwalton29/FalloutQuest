@@ -52,6 +52,55 @@ int main(int argc,char** argv){
     }
     std::cout<<"Original generic door editor branch hidden; ruined/metro/GNR activation geometry retained\n";return 0;
   }
+  if(argc==3&&std::string(argv[1])=="--vault"){
+    const std::string root=argv[2];
+    std::vector<uint8_t> bytes;
+    assert(LoadFalloutMeshFile(root+"/vdoorsliding01.nif",bytes,nullptr));
+    fo3anim::Skeleton hierarchy;std::vector<int> blocks;std::vector<fo3anim::Clip> clips;
+    assert(fo3anim::DecodeUiAnimation(bytes,hierarchy,blocks,clips));
+    fo3dooranim::Asset door;
+    assert(fo3dooranim::Configure(std::move(hierarchy),std::move(blocks),std::move(clips),door,true));
+    fo3anim::Pose open,closed;
+    assert(fo3dooranim::Sample(door,true,fo3dooranim::Duration(door,true),open));
+    assert(fo3dooranim::Sample(door,false,fo3dooranim::Duration(door,false),closed));
+    const auto top=fo3anim::FindBone(door.hierarchy,"VDoorTop01");
+    const auto bottom=fo3anim::FindBone(door.hierarchy,"VDoorBottom01");
+    assert(top>=0&&bottom>=0&&open.delta[top][14]>0&&open.delta[bottom][14]<0);
+    assert(std::abs(closed.delta[top][14])<.01f&&std::abs(closed.delta[bottom][14])<.01f);
+    assert(LoadFalloutMeshFile(root+"/vdoor01.nif",bytes,nullptr));
+    fo3anim::Skeleton hingedHierarchy;std::vector<int> hingedBlocks;std::vector<fo3anim::Clip> hingedClips;
+    assert(fo3anim::DecodeUiAnimation(bytes,hingedHierarchy,hingedBlocks,hingedClips));
+    fo3dooranim::Asset hinged;
+    assert(fo3dooranim::Configure(std::move(hingedHierarchy),std::move(hingedBlocks),std::move(hingedClips),hinged,true));
+    const auto* opening=fo3dooranim::Sequence(hinged,true);
+    assert(opening&&opening->tracks.size()==13);
+    assert(std::any_of(opening->tracks.begin(),opening->tracks.end(),[](const auto& track){return track.rotation.interpolation==3;}));
+    fo3anim::Pose hingeStart,hingeMiddle,hingeEnd;
+    const auto duration=fo3dooranim::Duration(hinged,true);
+    assert(fo3dooranim::Sample(hinged,true,0,hingeStart));
+    assert(fo3dooranim::Sample(hinged,true,duration*.5,hingeMiddle));
+    assert(fo3dooranim::Sample(hinged,true,duration,hingeEnd));
+    const auto hinge=fo3anim::FindBone(hinged.hierarchy,"VDoorHinge02");
+    assert(hinge>=0&&hingeStart.global[hinge]!=hingeMiddle.global[hinge]&&
+           hingeStart.global[hinge]!=hingeEnd.global[hinge]);
+    std::vector<Fo3StaticNifMesh> parts;
+    for(const auto& model:{"pipboyarmnpc.nif","pipboyarmfemalenpc.nif"}){
+        assert(LoadFo3StaticNifMeshes(root+"/"+model,parts));
+        assert(!parts.empty());
+        for(const auto& mesh:parts)assert(!mesh.skinned&&mesh.attachmentBone=="Bip01 L ForeTwist");
+    }
+    for(const auto& model:{"vaultsuitboy.nif","vaultsuitgirl.nif"}){
+        assert(LoadFo3StaticNifMeshes(root+"/"+model,parts));
+        bool on=false,off=false;
+        for(const auto& mesh:parts){on|=mesh.shapeName=="pipboyon";off|=mesh.shapeName=="pipboyoff";}
+        assert(on&&off);
+    }
+    assert(LoadFo3StaticNifMeshes(root+"/hairchildf03.nif",parts)&&parts.size()==2);
+    assert(LoadFo3StaticNifMeshes(root+"/teethlowerhumanchild.nif",parts));
+    assert(!parts.empty()&&parts.front().attachmentBone=="Bip01 Head");
+    std::cout<<"Original Vault sliding panels, sleeve variants and rigid attachments passed\n";
+    return 0;
+  }
   using namespace fo3anim;
   Skeleton s;Bone root;root.name="root";s.bones.push_back(root);assert(FinalizeSkeleton(s));
   Clip c;c.stop=2;c.cycle=2;PropertyTrack property;property.bone="root";property.kind=PropertyKind::Visibility;

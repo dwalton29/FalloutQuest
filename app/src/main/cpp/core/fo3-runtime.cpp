@@ -24,6 +24,8 @@ void ShutdownFo3Movie();
 namespace fo3worldscript {
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
+bool Event(uint32_t reference,const char* event,uint32_t activator,bool persist);
+bool OwnsSpeechResultAdmission(bool admitting,uint64_t ticket);
 }
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
@@ -1019,7 +1021,7 @@ bool gPipAnchorReady=false,gPipSolved=false;
 bool gPipEquipmentChanged=false;
 uint64_t gPipAppearanceRevision=UINT64_MAX;
 std::string gPipAppearanceModel;
-bool gPipAppearanceFemale=false;uint32_t gPipAppearanceRace=0;
+bool gPipAppearanceFemale=false,gPipAppearanceWorn=true;uint32_t gPipAppearanceRace=0;
 Vec3 gPipShoulder{},gPipHand{};
 double gPipUpdateUs=0,gPipScreenDrawUs=0;
 uint64_t gPipScreenQueries=0;
@@ -5579,10 +5581,13 @@ bool RayAabbQ7(float ox, float oy, float oz,
 }
 
 const GpuObject* Q2400FindSwingDoorObject(uint32_t refFormId) {
-    for(const GpuObject& object:gObjects)
-        if(object.q2400SwingDoor&&object.baseRecordType=="DOOR"&&
-           object.refFormId==refFormId) return &object;
-    return nullptr;
+    const GpuObject* first=nullptr;
+    for(const GpuObject& object:gObjects) {
+        if(!object.q2400SwingDoor||object.baseRecordType!="DOOR"||object.refFormId!=refFormId)continue;
+        if(object.q2401DoorAnimation)return &object;
+        if(!first)first=&object;
+    }
+    return first;
 }
 void Q2401Identity(float out[16]) {
     std::fill(out,out+16,0.0f);
@@ -5617,13 +5622,23 @@ bool Q2401ApplyNifDoorVisual(uint32_t refFormId,
     }
     return true;
 }
-bool Q2401DoorCollisionTransform(const GpuObject& object,
-                                 const Q2400InteriorDoorState& state,
-                                 float out[16]) {
-    if(!object.q2401DoorAnimation) return false;
-    const auto* delta=fo3dooranim::CollisionDelta(
-        *object.q2401DoorAnimation,state.q2401Pose);
-    return delta&&Q2401ModelDeltaToScene(object,*delta,out);
+bool Q2401PublishDoorCollision(const GpuObject& object,
+                               const Q2400InteriorDoorState& state) {
+    if(!object.q2401DoorAnimation)return false;
+    const auto& asset=*object.q2401DoorAnimation;
+    Fo3DoorCollisionPose collision;
+    const auto targets=GetFo3ScriptCollisionTargets(object.refFormId);
+    for(const auto block:targets) {
+        const auto* delta=fo3dooranim::ShapeDelta(asset,state.q2401Pose,fo3dooranim::ShapeBone(asset,block));
+        fo3anim::Matrix transform;
+        if(delta&&Q2401ModelDeltaToScene(object,*delta,transform.data()))
+            collision.nodeTransforms.emplace(block,transform);
+    }
+    if(!collision.nodeTransforms.empty())return SetFo3ScriptCollisionPose(object.refFormId,collision);
+    const auto* delta=fo3dooranim::CollisionDelta(asset,state.q2401Pose);
+    if(delta&&Q2401ModelDeltaToScene(object,*delta,collision.transform.data()))
+        return SetFo3ScriptCollisionPose(object.refFormId,collision);
+    return !state.targetOpen&&SetFo3ScriptCollisionPose(object.refFormId,collision);
 }
 
 // Q24.0 compatibility fallback for rigid DOOR NIFs with no embedded Open/Close
@@ -5771,24 +5786,15 @@ void UpdateFo3InteriorDoorsQ2400() {
             state.q2401Moving=false;
 
             if(state.collisionDisabled) {
-                float transform[16]{};
-                bool haveTransform=Q2401DoorCollisionTransform(
-                    *first,state,transform);
-                if(!state.targetOpen&&!haveTransform) {
-                    Q2401Identity(transform);
-                    haveTransform=true;
-                }
-                if(haveTransform&&SetFo3DoorCollisionTransformQ2400(
-                        ref,transform,true)) {
+                if(Q2401PublishDoorCollision(*first,state)) {
                     state.collisionDisabled=false;
                     state.collisionSceneSerial=gQ2400DoorSceneSerial;
                     Q6H_LOGI("Q24.1 INTERIOR DOOR SETTLED: ref=%08X state=%s duration=%.4fs collision=authored-bhk+nif-node-delta",
                              ref,state.targetOpen?"open":"closed",duration);
                 } else if(state.targetOpen) {
-                    // Safer than moving unrelated frame collision when a rare
-                    // multi-track door has no single collision node.
+                    // Keep the open passage clear when the asset has no supported collision target.
                     state.collisionDisabled=false;
-                    Q6H_LOGW("Q24.1 INTERIOR DOOR SETTLED: ref=%08X state=open collision=disabled reason=multi-track-no-single-bhk-node",
+                    Q6H_LOGW("Q24.1 INTERIOR DOOR SETTLED: ref=%08X state=open collision=disabled reason=authored-target-unavailable",
                              ref);
                 }
             }
@@ -11685,6 +11691,16 @@ bool Q211FindAvatarHeadAnchor(Vec3& out) {
     return valid;
 }
 
+bool PlayerWearsFo3Pipboy(const fo3player::Player& player) {
+    if(!player.Snapshot().inCharGen)return true;
+    for(const auto& stack:player.Snapshot().inventory) {
+        const auto item=player.Definitions().items.find(stack.formId);
+        if(stack.equipped&&item!=player.Definitions().items.end()&&
+           item->second.kind==fo3player::ItemKind::Armour&&
+           (item->second.bipedMask&fo3appearance::PipboySlot))return true;
+    }
+    return false;
+}
 void SynchronizeFo3PipboyEquipment() {
   auto *session = GetFo3PlayerSession();
   if (!session)
@@ -11700,17 +11716,21 @@ void SynchronizeFo3PipboyEquipment() {
         (item->second.bipedMask & 4u))
       model = player.PlayerFemale()&&!item->second.femaleModel.empty()?item->second.femaleModel:item->second.model;
   }
-  if (gPipAppearanceRevision != UINT64_MAX && (model != gPipAppearanceModel||gPipAppearanceFemale!=player.PlayerFemale()||gPipAppearanceRace!=player.PlayerRace())) {
+  const bool worn=PlayerWearsFo3Pipboy(player);
+  if (gPipAppearanceRevision != UINT64_MAX && (model != gPipAppearanceModel||
+      gPipAppearanceFemale!=player.PlayerFemale()||gPipAppearanceRace!=player.PlayerRace()||
+      gPipAppearanceWorn!=worn)) {
     gPipEquipmentChanged = true;
     gQ210PlayerBodyAttempted = false;
     gQ210PlayerBodyReady = false;
   }
   gPipAppearanceModel = model;gPipAppearanceFemale=player.PlayerFemale();gPipAppearanceRace=player.PlayerRace();
+  gPipAppearanceWorn=worn;
   gPipAppearanceRevision = player.Revision();
 }
 void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
   gPipSolved = false;
-  if (!gPipAnchorReady || !gPipSurface.valid || !pose.solved)
+  if (!gPipAppearanceWorn || !gPipAnchorReady || !gPipSurface.valid || !pose.solved)
     return;
   gPipShoulder = pose.shoulder;
   gPipHand = pose.hand;
@@ -12160,7 +12180,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     } else {
         addFaceGenModel(npc->raceHeadModel);
     }
-    if((q236EquippedMask & 2u)==0u) addFaceGenModel(npc->hairModel);
+    if((q236EquippedMask & 2u)==0u||(q236EquippedMask & 0x400u)) addFaceGenModel(npc->hairModel);
     for(const std::string& path:npc->headPartModels)
         addFaceGenModel(path);
 
@@ -12410,13 +12430,15 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         return true;
     };
 
-    auto q237AttachRigidHeadPart=[&](CpuObject& part){
-        if(part.mesh.skinned) return false;
+    auto attachRigidPart=[&](CpuObject& part){
+        if(part.mesh.skinned)return false;
+        const std::string bone=part.mesh.attachmentBone.empty()?"Bip01 Head":part.mesh.attachmentBone;
+        const bool head=fo3appearance::SameModel(bone,"Bip01 Head");
+        const bool boneLocal=!head||fo3appearance::BoneLocalFacePart(*npc,part.placement.modelPath);
         fo3anim::Matrix transform;
-        if(!fo3appearance::HeadBindTransform(visual.skeleton,
-                Q230PlacementMatrix(part.placement),transform,
-                fo3appearance::BoneLocalFacePart(*npc,part.placement.modelPath))) return false;
-        q237HeadAnchorReady=true;
+        if(!fo3appearance::AttachmentBindTransform(visual.skeleton,
+                Q230PlacementMatrix(part.placement),bone,transform,boneLocal))return false;
+        if(head)q237HeadAnchorReady=true;
         auto apply=[&](Vec3 value,bool direction){
             const auto v=fo3anim::Point(transform,{value.x,value.y,value.z},direction);
             return Vec3{v[0],v[1],v[2]};
@@ -12467,6 +12489,8 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         if(haveMorph) ++faceGenEgmAssets;
 
         for(CpuObject& part:parts){
+            if(!fo3appearance::PipboySleeveShape(part.mesh.shapeName,q236EquippedMask&fo3appearance::PipboySlot))
+                continue;
             const bool hair = samePath(path,npc->hairModel);
             if(hair && !fo3appearance::RenderHairShape(part.mesh.shapeName,q236EquippedMask))
                 continue;
@@ -12483,10 +12507,12 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
                 faceGenMorphedVertices+=part.positionsGame.size();
             }
 
-            // Rigid face parts, hair and worn headgear retain their authored
-            // actor axes and are translated to the head origin before animation.
-            if(fo3appearance::HeadPart(*npc,path) && q237AttachRigidHeadPart(part))
-                ++q237RigidHeadAttachedShapes;
+            if(!part.mesh.skinned&&(fo3appearance::HeadPart(*npc,path)||!part.mesh.attachmentBone.empty())) {
+                if(attachRigidPart(part)){
+                    if(part.mesh.attachmentBone.empty()||fo3appearance::SameModel(part.mesh.attachmentBone,"Bip01 Head"))
+                        ++q237RigidHeadAttachedShapes;
+                }else if(!part.mesh.attachmentBone.empty())continue;
+            }
 
             const std::string q235RaceTexture=
                 q235RaceTextureForPart(path,part.q2016ShapeIndex);
@@ -12782,6 +12808,7 @@ bool Q210EnsurePlayerBody() {
 
         size_t q215CapsRemovedForModel = 0u;
         for (CpuObject& part : parts) {
+            if(!fo3appearance::PipboySleeveShape(part.mesh.shapeName,gPipAppearanceWorn))continue;
             const bool pipboy=Q210EndsWithInsensitive(path,"pipboy3000\\pipboyarm.nif");
             const bool screen=pipboy&&fo3pip::Screen(part.mesh);
             if(screen){gPipSurface=fo3pip::Inspect(part.mesh);fo3pip::ScreenUvs(part.mesh,gPipSurface);
@@ -12884,7 +12911,7 @@ void Q210RenderPlayerBody(bool alphaPass) {
     const auto drawStarted=fqopaque::Clock::now();
     for (const GpuObject& object : gQ210PlayerBody) {
         if (object.q215IkReferenceOnly) continue;
-        if(object.pipboy && (!gPipAnchorReady||!gPipSurface.valid))continue;
+        if(object.pipboy && (!gPipAppearanceWorn||!gPipAnchorReady||!gPipSurface.valid))continue;
         if(object.pipEffect)continue; // authored light cone requires engine animation; no fake world light
         if(object.pipButton>=0&&(!Fo3PipboyFocus()||object.pipButton!=int(gPipMenu.tab)))continue;
         if (object.alphaBlend != alphaPass) continue;
@@ -15442,8 +15469,9 @@ int Fo3DialogueResultStatus(uint64_t ticket){
 #include "dialogue/fo3-dialogue-scene-refresh.inc"
 #include "dialogue/fo3-dialogue-runtime.inc"
 bool Fo3DialogueResultOwnsAdmission(){
-    return gDialogue.phase==fo3dialogue::Phase::Results&&
-      (gFo3DialogueResultAdmission||(gFo3DialogueResultTicket&&gDialogue.resultTicket==gFo3DialogueResultTicket));
+    return (gDialogue.phase==fo3dialogue::Phase::Results&&
+      (gFo3DialogueResultAdmission||(gFo3DialogueResultTicket&&gDialogue.resultTicket==gFo3DialogueResultTicket)))||
+      fo3worldscript::OwnsSpeechResultAdmission(gFo3DialogueResultAdmission,gFo3DialogueResultTicket);
 }
 #undef FO3_NPC_CHAT_RUNTIME
 #include "npc/fo3-npc-chat-runtime.inc"

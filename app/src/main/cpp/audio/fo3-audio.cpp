@@ -34,6 +34,8 @@ struct Event {
   fo3pipdata::SessionState state;
   std::vector<std::string> paths;
   std::array<float,4> volumes{1,.3f,1,1};
+  unsigned dialogueLane=0;
+  bool intercom=false;
 };
 struct Runtime {
   JavaVM *vm = nullptr;
@@ -49,8 +51,8 @@ struct Runtime {
   uint32_t lastCell = UINT32_MAX;
   bool lastActive = false;
   std::atomic<uint32_t> playingNote{0};
-  DialogueCompletionMailbox dialogueCompletion;
-  DialogueFaceMailbox dialogueFace;
+  std::array<DialogueCompletionMailbox,2> dialogueCompletion;
+  std::array<DialogueFaceMailbox,2> dialogueFace;
 } runtime;
 
 void JNICALL DialogueDoneNative(JNIEnv*, jobject, jint token, jboolean success) {
@@ -60,7 +62,7 @@ void JNICALL BroadcastDoneNative(JNIEnv*, jobject, jint channel, jint generation
   BroadcastDone(channel, uint32_t(generation));
 }
 void JNICALL DialoguePositionNative(JNIEnv*, jobject, jint token,jint milliseconds) {
-  runtime.dialogueFace.Position(uint32_t(token),milliseconds);
+  for(auto& lane:runtime.dialogueFace)lane.Position(uint32_t(token),milliseconds);
 }
 bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
   if (!env || !activity) return false;
@@ -121,7 +123,7 @@ void Push(Event e) {
     runtime.events.erase(
         std::remove_if(runtime.events.begin(),runtime.events.end(),
                        [&](const Event& old){
-                         return old.kind==13 && (e.id==0 || old.id!=0);
+                         return old.kind==13 && old.dialogueLane==e.dialogueLane && (e.id==0 || old.id!=0);
                        }),runtime.events.end());
     if(runtime.events.size()>=32)runtime.events.pop_front(); // preserve voice dispatch
   }
@@ -148,7 +150,7 @@ void Worker() {
        broadcast =
            env->GetMethodID(cls, "audioBroadcast", "(Ljava/lang/String;II)V"),
        active = env->GetMethodID(cls, "audioActive", "(Z)V"),
-       dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;I)V"),
+       dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;IIZ)V"),
        dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
       !broadcast || !dialogue || !dialogueGain || !menuLoop || !volumes || !movie) {
@@ -206,7 +208,8 @@ void Worker() {
   std::unordered_map<std::string, size_t> extractedSizes;
   std::deque<std::string> recentFiles;
   std::vector<std::string> broadcastFiles[2];
-  std::string ambientFile,dialogueFile;
+  std::string ambientFile;
+  std::array<std::string,2> dialogueFiles;
   size_t cacheBytes = 0;
   const auto archives = SoundArchives(fo3assets::FalloutDataPath(""));
   const auto voiceArchive=FindAudioFile(fo3assets::FalloutDataPath(""),"Fallout - Voices.bsa");
@@ -315,7 +318,7 @@ void Worker() {
       path.c_str(),sourceArchive.c_str(),bytes.size(),bytes.size()>=4&&std::memcmp(bytes.data(),"OggS",4)==0);
 
     auto protectedFile = [&](const std::string &target) {
-      if (target == dialogueFile || target == ambientFile ||
+      if (target == dialogueFiles[0] || target == dialogueFiles[1] || target == ambientFile ||
           std::find(recentFiles.begin(), recentFiles.end(), target) !=
               recentFiles.end())
         return true;
@@ -435,13 +438,14 @@ void Worker() {
         auto lip=std::make_shared<fo3face::Lip>();std::string error;
         if(fo3face::DecodeLip(bytes,*lip,error)) {
           __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","NPC LIP START token=%u frames=%zu firstFrame=%d path=%s",e.id,lip->frames.size(),lip->firstFrame,path.c_str());
-          runtime.dialogueFace.Asset(e.id,std::move(lip));
+          runtime.dialogueFace[e.dialogueLane].Asset(e.id,std::move(lip));
         }else __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","NPC LIP MISSING token=%u path=%s reason=%s",e.id,path.c_str(),error.c_str());
       }
+      auto& dialogueFile=dialogueFiles[e.dialogueLane];
       dialogueFile=e.name.empty()?"":resolve(e.name);
       if(!e.name.empty()&&dialogueFile.empty())DialogueDone(e.id,false);
       auto str=env->NewStringUTF(dialogueFile.c_str());
-      env->CallVoidMethod(runtime.activity,dialogue,str,jint(e.id));env->DeleteLocalRef(str);
+      env->CallVoidMethod(runtime.activity,dialogue,str,jint(e.id),jint(e.dialogueLane),jboolean(e.intercom));env->DeleteLocalRef(str);
       if(env->ExceptionCheck()){env->ExceptionClear();DialogueDone(e.id,false);}
       continue;
     }
@@ -621,12 +625,28 @@ void Context(uint32_t cell, bool active) {
   runtime.events.push_front({0, cell, active});
   runtime.cv.notify_one();
 }
-void Dialogue(const std::string& request,uint32_t token){runtime.dialogueCompletion.Start(token);runtime.dialogueFace.Start(token);Push({13,token,true,request});}
-void DialogueStop(){runtime.dialogueCompletion.Stop();runtime.dialogueFace.Start(0);Push({13,0,false,{}});}
-DialogueFaceSample DialogueFace(uint32_t token){return runtime.dialogueFace.Read(token);}
+void ScriptDialogue(const std::string& request,uint32_t token,unsigned lane,bool intercom) {
+  if(lane>=runtime.dialogueFace.size())return;
+  runtime.dialogueCompletion[lane].Start(token);
+  runtime.dialogueFace[lane].Start(token);
+  Event event{13,token,true,request};
+  event.dialogueLane=lane;event.intercom=intercom;
+  Push(std::move(event));
+}
+void Dialogue(const std::string& request,uint32_t token){ScriptDialogue(request,token,0,false);}
+void StopDialogueLane(unsigned lane){ScriptDialogue({},0,lane,false);}
+void DialogueStop(){StopDialogueLane(0);}
+DialogueFaceSample DialogueFace(uint32_t token){
+  auto primary=runtime.dialogueFace[0].Read(token);
+  return primary.lip||primary.seconds>=0?primary:runtime.dialogueFace[1].Read(token);
+}
 void DialogueGain(float gain){gain=std::clamp(gain,0.f,1.f);uint32_t bits;std::memcpy(&bits,&gain,4);Push({14,bits,true});}
-uint64_t DialogueCompletion(){return runtime.dialogueCompletion.Take();}
-void DialogueDone(uint32_t token,bool success){__android_log_print(ANDROID_LOG_INFO,"FalloutQuest","NPC LIP END token=%u audioSuccess=%d",token,int(success));runtime.dialogueCompletion.Done(token,success);}
+uint64_t TakeDialogueLane(unsigned lane){return lane<runtime.dialogueCompletion.size()?runtime.dialogueCompletion[lane].Take():0;}
+uint64_t DialogueCompletion(){return TakeDialogueLane(0);}
+void DialogueDone(uint32_t token,bool success){
+  __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","NPC LIP END token=%u audioSuccess=%d",token,int(success));
+  for(auto& lane:runtime.dialogueCompletion)if(lane.Done(token,success))break;
+}
 void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
            const fo3pipdata::SessionState &state) {
   Event e{6, transmitter, true};

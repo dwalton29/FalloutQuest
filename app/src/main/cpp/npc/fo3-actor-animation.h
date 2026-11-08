@@ -32,6 +32,8 @@ struct Channel {
   std::vector<Key> keys;
   std::vector<float> controls; // expanded signed-short or float control points
 };
+// Resolve Tension/Bias/Continuity keys into cubic control points at load.
+void PrepareTcbKeys(Channel&,const std::vector<std::array<float,3>>&,bool quaternion);
 struct Track {
   std::string bone;
   uint8_t priority = 0; // NiControllerSequence controlled-block priority.

@@ -47,27 +47,28 @@ bool ActorKeys(Cursor &c, fo3anim::Channel &channel, int dimensions,
     return true;
   if (!c.U32(channel.interpolation))
     return false;
-  // TBC channels need their own evaluator; reject instead of silently
-  // substituting a different interpolation. Supplied idle/walk use 1 and 2.
   if (quat && channel.interpolation == 4 && axes) {
     for (auto &axis : *axes)
       if (!ActorKeys(c, axis, 1))
         return false;
     return true;
   }
-  if (channel.interpolation != 1 && channel.interpolation != 2)
-    return false;
-  if (quat && channel.interpolation != 1)
-    return false;
+  const bool tcb=channel.interpolation==3;
+  if(channel.interpolation!=1&&!tcb&&(quat||channel.interpolation!=2))return false;
+  std::vector<std::array<float,3>> parameters;
+  if(tcb)parameters.resize(count);
   channel.keys.resize(count);
   float last = -1e30f;
-  for (auto &key : channel.keys) {
+  for(size_t index=0;index<channel.keys.size();++index) {
+    auto& key=channel.keys[index];
     if (!c.F32(key.time) || !ActorValid(key.time) || key.time < last)
       return false;
     last = key.time;
     for (int i = 0; i < dimensions; ++i)
       if (!c.F32(key.value[i]) || !ActorValid(key.value[i]))
         return false;
+    if(tcb)for(float& value:parameters[index])
+      if(!c.F32(value)||!ActorValid(value)||std::fabs(value)>1.0001f)return false;
     if (channel.interpolation == 2 && !quat) {
       for (int i = 0; i < dimensions; ++i)
         if (!c.F32(key.forward[i]) || !ActorValid(key.forward[i]))
@@ -77,6 +78,7 @@ bool ActorKeys(Cursor &c, fo3anim::Channel &channel, int dimensions,
           return false;
     }
   }
+  if(tcb)fo3anim::PrepareTcbKeys(channel,parameters,quat);
   return true;
 }
 bool ActorSplineChannel(const std::vector<uint8_t> &bytes, const NifHeader &h,

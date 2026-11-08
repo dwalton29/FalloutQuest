@@ -58,11 +58,25 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
   return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error)||
     fo3script::InventoryReferenceRemoval(player,plan,CanRemoveFo3DialogueInventory,error);
 }
+static bool Fo3RadioOnlyResult(const fo3player::Player& player,
+                               const fo3player::ScriptTransactionPlan& plan){
+    const auto& defs=player.Definitions().pipboy;
+    const auto& changed=plan.AffectedReferences();
+    return !changed.empty()&&std::all_of(changed.begin(),changed.end(),[&](uint32_t ref){
+        const auto transmitter=defs.transmitters.find(ref);
+        return transmitter!=defs.transmitters.end()&&transmitter->second.cell==gCurrentCellFormId&&
+            !transmitter->second.world&&defs.stations.count(transmitter->second.base);
+    });
+}
 bool PublishFo3DialogueReferences(fo3player::Player& player,
     fo3player::ScriptTransactionPlan& plan,std::string& error) {
   // Single render-thread turn; validate and allocate before logical publication.
   if(!player.CanCommitScriptTransaction(plan))return false;
-  if(!PreviewFo3DialogueReferences(player,plan,error))return PublishFo3DialogueSceneRefresh(player,plan,error);
+  if(!PreviewFo3DialogueReferences(player,plan,error)){
+    // Transmitters can publish through the resident resource exchange.
+    if(!gExteriorWorldspaceQ1890&&Fo3RadioOnlyResult(player,plan))return false;
+    return PublishFo3DialogueSceneRefresh(player,plan,error);
+  }
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890)){
     const auto snapshot=plan.CandidateReferences();
     if(!fo3script::CommitCellHandoff(player,plan,[](const fo3player::PlayerMove& move){
@@ -96,6 +110,9 @@ void ConfigureFo3DialogueSession(fo3dialogue::Session& session){
     return false;
   };
   session.publishReferences=PublishFo3DialogueReferences;
+  session.recoverEndResult=[](auto& player,auto& plan,auto& error){
+    return Fo3RadioOnlyResult(player,plan)&&PublishFo3DialogueSceneRefresh(player,plan,error);
+  };
   session.deferEndResult=DeferFo3DialogueResult;session.endResultStatus=Fo3DialogueResultStatus;
   session.readyForEndResult=CanDeferFo3DialogueResult;
 }

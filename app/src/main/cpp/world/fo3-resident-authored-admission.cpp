@@ -81,7 +81,7 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     const std::unordered_set<uint32_t> authenticatedOwners(
         executingSourceScripts.begin(),executingSourceScripts.end());
     std::unordered_map<uint32_t,uint32_t> bases;
-    std::unordered_set<uint32_t> found;
+    std::unordered_set<uint32_t> found,radioReferences;
     std::unordered_set<uint32_t> packageValues;
     // Confirm actual original XMarker base records, not just a guessed FormID.
     // These are nonvisual in Q74ShouldSkipPlacement and do not acquire GPU parts.
@@ -143,7 +143,7 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
         if(wanted.count(r.id)){
             if(!found.insert(r.id).second||r.location.type!="REFR"||r.cell!=cell||r.world||
                 (r.location.flags&(0x20u|0x8000u))||!payload())return false;
-            bool valid=true,position=false;uint32_t base=0;std::unordered_set<std::string> tags;
+            bool valid=true,position=false,radio=false;uint32_t base=0;std::unordered_set<std::string> tags;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
                 if(!tags.insert(std::string(t,4)).second){valid=false;return;}
                 if(Is(t,"NAME")){if(n!=4)valid=false;else base=fo3esm::ReadU32(p);}
@@ -152,10 +152,16 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
                 else if(Is(t,"XSCL")){if(n!=4||!std::isfinite(fo3esm::ReadF32(p))||fo3esm::ReadF32(p)<=0)valid=false;}
                 else if(Is(t,"XESP")){if(n!=8||!fo3esm::ReadU32(p)||(p[4]&~3u))valid=false;}
                 else if(Is(t,"XOWN")||Is(t,"XRNK")||Is(t,"XGLB")){if(n!=4)valid=false;}
+                else if(Is(t,"XRDO")){
+                    radio=n==16&&std::isfinite(fo3esm::ReadF32(p))&&
+                        std::isfinite(fo3esm::ReadF32(p+8));
+                    if(!radio)valid=false;
+                }
                 else if(!Is(t,"EDID"))valid=false; // Includes XTEL, rooms, portals, emittance and unknown attachments.
             });
             if(!valid||!position||!base||base==cell||wanted.count(base))return false;
             bases.emplace(r.id,base);
+            if(radio)radioReferences.insert(r.id);
         }
         if(r.location.type=="NAVM"&&!(r.location.flags&0x20u)){
             if(!payload())return false;
@@ -192,11 +198,18 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     std::unordered_set<uint32_t> baseIds;for(const auto& r:bases)baseIds.insert(r.second);
     for(uint32_t value:packageValues)if(baseIds.count(value))
         return fail("affected base has package navigation dependency");
+    std::unordered_set<uint32_t> radioBases;
+    for(const auto reference:radioReferences)radioBases.insert(bases.at(reference));
+    for(const auto& reference:bases)
+        if(radioBases.count(reference.second)&&!radioReferences.count(reference.first))
+            return fail("radio base requires an authored transmitter placement");
     std::unordered_set<uint32_t> seenBases;bool geometry=false;
     const bool second=Scan(f.get(),cancel,[&](const Record& r){
         scanning=r.location.type+" "+std::to_string(r.id);
         const bool base=baseIds.count(r.id)!=0;
-        if(base&&(!seenBases.insert(r.id).second||(r.location.type!="STAT"&&r.location.type!="LIGH")||
+        const bool radioBase=radioBases.count(r.id)!=0;
+        if(radioBase&&(r.location.type!="TACT"||!(r.location.flags&0x20000u)))return false;
+        if(base&&(!seenBases.insert(r.id).second||(r.location.type!="STAT"&&r.location.type!="LIGH"&&!radioBase)||
             (r.location.flags&(0x20u|0x8000u))))return false;
         if(r.location.flags&0x20u)return true;
         // No record-type allowlist: dependencies also live in nonresident
@@ -228,14 +241,17 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
                     // the master before this scan. Its direct REFR operand is
                     // the operation's intended target, not an unowned inbound
                     // dependency. Every OTHER incoming SCRO remains rejected.
-                    if(!(r.location.type=="SCPT"&&authenticatedOwners.count(r.id)&&wanted.count(id)))
+                    if(!radioReferences.count(id)&&
+                       !(r.location.type=="SCPT"&&authenticatedOwners.count(r.id)&&wanted.count(id)))
                         target(id,"SCRO");
                 }
             }else if(Is(t,"CTDA")){
                 if(n!=20&&n!=24&&n!=28){malformed("CTDA");return;}
                 // Conservative operand matching, not a function-arity table:
                 // numeric/unconsumed operands can intentionally false-positive.
-                target(fo3esm::ReadU32(p+12),"CTDA +12");
+                const auto operand=fo3esm::ReadU32(p+12);
+                const bool radioIdentity=fo3esm::ReadU16(p+8)==72&&radioBases.count(operand);
+                if(!radioIdentity)target(operand,"CTDA +12");
                 target(fo3esm::ReadU32(p+16),"CTDA +16");
                 if(n==28)target(fo3esm::ReadU32(p+24),"CTDA +24");
                 if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global");
@@ -254,11 +270,14 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
             if(!tags.insert(std::string(t,4)).second)valid=false;
             if(Is(t,"MODL")){if(!n||p[n-1]!=0||fo3esm::ZString(p,n).empty())valid=false;else model=true;}
             else if(Is(t,"SNAM")){if(n!=4||fo3esm::ReadU32(p))valid=false;}
+            else if(radioBase&&(Is(t,"FULL")||(Is(t,"VNAM")&&n==4))){}
             else if(!Is(t,"EDID")&&!Is(t,"OBND")&&!Is(t,"MODT")&&!Is(t,"MODS")&&
                 !(r.location.type=="LIGH"&&(Is(t,"DATA")||Is(t,"FNAM")||Is(t,"FULL")||Is(t,"ICON")||Is(t,"MICO"))))valid=false;
         });
         // A model-bearing light can also change collision/grounding geometry.
-        geometry=geometry||(model&&!nonvisualMarkerBases.count(r.id));
+        // A transmitter's wall prop is exchanged with its collision under
+        // the same publication. PACK and link checks above still guard routes.
+        geometry=geometry||(model&&!radioBase&&!nonvisualMarkerBases.count(r.id));
         if(r.location.type=="STAT"&&!model)valid=false;
         return valid;
     });

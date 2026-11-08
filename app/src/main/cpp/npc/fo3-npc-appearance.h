@@ -33,10 +33,16 @@ inline bool BoneLocalFacePart(const Fo3NpcActorQ230& actor, const std::string& m
         if (SameModel(actor.raceHeadModels[slot], model)) return true;
     return false;
 }
-inline bool RenderHairShape(const std::string& name, uint32_t equipment) {
-    if (SameModel(name, "NoHat")) return (equipment & 0x400u) == 0u;
-    if (SameModel(name, "Hat")) return (equipment & 0x400u) != 0u;
+constexpr uint32_t PipboySlot = 0x40u;
+inline bool PipboySleeveShape(const std::string& shape, bool worn) {
+    if (SameModel(shape, "PipboyOn")) return worn;
+    if (SameModel(shape, "PipboyOff")) return !worn;
     return true;
+}
+inline bool RenderHairShape(const std::string& name, uint32_t equipment) {
+    if (SameModel(name, "NoHat")) return (equipment & 0x402u) == 0u;
+    if (SameModel(name, "Hat")) return (equipment & 0x400u) != 0u;
+    return (equipment & 2u) == 0u;
 }
 inline std::string HairMorphModel(std::string model, const std::string& shape) {
     const auto dot = model.find_last_of('.');
@@ -49,21 +55,27 @@ inline bool SkinMaterial(uint32_t type, uint32_t flags) {
     // Fallout 3 SHADER_SKIN / F3SF1_FaceGen, not Skyrim's tint flags.
     return type == 14u || (flags & 0x00000400u) != 0u;
 }
+inline bool AttachmentBindTransform(const fo3anim::Skeleton& skeleton,
+                                    const fo3anim::Matrix& placement,
+                                    const std::string& boneName,
+                                    fo3anim::Matrix& gameTransform,
+                                    bool boneLocal) {
+    const int bone = fo3anim::FindBone(skeleton, boneName);
+    fo3anim::Matrix inverse;
+    if (bone < 0 || static_cast<size_t>(bone) >= skeleton.bindGlobal.size() ||
+        !fo3anim::Inverse(placement, inverse)) return false;
+    // Some face/hair meshes already encode the actor axes in their NIF root.
+    auto anchor = boneLocal ? skeleton.bindGlobal[bone] : fo3anim::Identity();
+    for (int axis = 0; axis < 3; ++axis)
+        anchor[12 + axis] = skeleton.bindGlobal[bone][12 + axis];
+    gameTransform = fo3anim::Multiply(placement,
+        fo3anim::Multiply(anchor, inverse));
+    return true;
+}
 inline bool HeadBindTransform(const fo3anim::Skeleton& skeleton,
                               const fo3anim::Matrix& placement,
                               fo3anim::Matrix& gameTransform,
                               bool boneLocal = false) {
-    const int head = fo3anim::FindBone(skeleton, "Bip01 Head");
-    fo3anim::Matrix inverse;
-    if (head < 0 || static_cast<size_t>(head) >= skeleton.bindGlobal.size() ||
-        !fo3anim::Inverse(placement, inverse)) return false;
-    // FO3 rigid face/hair/headwear NIFs are already in actor axes,
-    // with the head origin removed. Keep their authored orientation.
-    auto anchor = boneLocal ? skeleton.bindGlobal[head] : fo3anim::Identity();
-    for (int axis = 0; axis < 3; ++axis)
-        anchor[12 + axis] = skeleton.bindGlobal[head][12 + axis];
-    gameTransform = fo3anim::Multiply(placement,
-        fo3anim::Multiply(anchor, inverse));
-    return true;
+    return AttachmentBindTransform(skeleton,placement,"Bip01 Head",gameTransform,boneLocal);
 }
 } // namespace fo3appearance

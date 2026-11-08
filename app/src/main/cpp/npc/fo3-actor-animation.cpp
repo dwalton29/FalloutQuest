@@ -167,6 +167,70 @@ static std::array<float, 4> Slerp(std::array<float, 4> a,
     a[i] = a[i] * x + b[i] * y;
   return Normalize(a);
 }
+static std::array<float,4> QuaternionProduct(const std::array<float,4>& a,
+                                            const std::array<float,4>& b) {
+  return {a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+          a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+          a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+          a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]};
+}
+static std::array<float,3> RotationLog(std::array<float,4> from,
+                                      std::array<float,4> to) {
+  from=Normalize(from);
+  for(size_t axis=1;axis<from.size();++axis)from[axis]=-from[axis];
+  auto relative=QuaternionProduct(from,Normalize(to));
+  if(relative[0]<0)for(auto& value:relative)value=-value;
+  const float length=std::hypot(relative[1],relative[2],relative[3]);
+  if(length<1e-7f)return {relative[1],relative[2],relative[3]};
+  const float scale=std::atan2(length,relative[0])/length;
+  return {scale*relative[1],scale*relative[2],scale*relative[3]};
+}
+static std::array<float,4> RotationControl(const std::array<float,4>& value,
+                                          const std::array<float,3>& tangent) {
+  const float length=std::hypot(tangent[0],tangent[1],tangent[2]);
+  const float scale=length<1e-7f?1.f:std::sin(length)/length;
+  return Normalize(QuaternionProduct(Normalize(value),
+      {std::cos(length),scale*tangent[0],scale*tangent[1],scale*tangent[2]}));
+}
+void PrepareTcbKeys(Channel& channel,const std::vector<std::array<float,3>>& parameters,
+                    bool quaternion) {
+  for(size_t index=0;index<channel.keys.size();++index) {
+    auto& key=channel.keys[index];
+    const auto& previous=index?channel.keys[index-1]:key;
+    const auto& next=index+1<channel.keys.size()?channel.keys[index+1]:key;
+    const float before=key.time-previous.time,after=next.time-key.time;
+    const auto [tension,bias,continuity]=parameters[index];
+    const float factor=.5f*(1-tension);
+    const auto back=quaternion?RotationLog(key.value,previous.value):std::array<float,3>{};
+    const auto forward=quaternion?RotationLog(key.value,next.value):std::array<float,3>{};
+    std::array<float,3> outControl{},inControl{};
+    const int axes=quaternion?3:channel.dimensions;
+    for(int axis=0;axis<axes;++axis) {
+      const float outgoing=quaternion?forward[axis]:next.value[axis]-key.value[axis];
+      const float incoming=quaternion?-back[axis]:key.value[axis]-previous.value[axis];
+      // Adjacent time intervals can differ. Convert both secants to the
+      // interval of the segment that will use this endpoint.
+      const float left=before>0?incoming:outgoing;
+      const float right=after>0?outgoing:incoming;
+      const float out=factor*((1+continuity)*(1+bias)*(before>0?left*after/before:right)+
+                              (1-continuity)*(1-bias)*right);
+      const float in=factor*((1-continuity)*(1+bias)*left+
+                             (1+continuity)*(1-bias)*(after>0?right*before/after:left));
+      if(quaternion) {
+        outControl[axis]=(out-outgoing)*.5f;
+        inControl[axis]=(incoming-in)*.5f;
+      } else {
+        key.forward[axis]=out;
+        key.backward[axis]=in;
+      }
+    }
+    if(quaternion){
+      key.forward=RotationControl(key.value,outControl);
+      key.backward=RotationControl(key.value,inControl);
+    }
+  }
+  if(!quaternion)channel.interpolation=2; // Numeric tangents use the existing Hermite path.
+}
 // de Boor for an open, uniform cubic spline. Only four control points
 // contribute.
 static std::array<float, 4> Spline(const Channel &c, float u) {
@@ -209,8 +273,12 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
                              [](float t, const Key &k) { return t < k.time; });
   const Key &b = *hi, &a = *(hi - 1);
   float u = (time - a.time) / (b.time - a.time);
-  if (quaternion)
-    return Slerp(a.value, b.value, u);
+  if(quaternion) {
+    const auto linear=Slerp(a.value,b.value,u);
+    if(c.interpolation!=3)return linear;
+    const auto controls=Slerp(a.forward,b.backward,u);
+    return Slerp(linear,controls,2*u*(1-u));
+  }
   std::array<float, 4> v{};
   for (int i = 0; i < c.dimensions; ++i) {
     if (c.interpolation == 2) {
@@ -386,14 +454,8 @@ bool ApplyAimDelta(Pose& weapon,const Pose& neutral,const Pose& direction,float 
     if(channels&2){
       auto inverse=Normalize(neutral.local[i].rotation);
       for(int j=1;j<4;++j)inverse[j]=-inverse[j];
-      const auto product=[](const std::array<float,4>& a,const std::array<float,4>& b){
-        return std::array<float,4>{a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
-          a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
-          a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
-          a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]};
-      };
-      const auto delta=Slerp({1,0,0,0},product(direction.local[i].rotation,inverse),std::clamp(weight,0.f,1.f));
-      weapon.local[i].rotation=Normalize(product(delta,weapon.local[i].rotation));
+      const auto delta=Slerp({1,0,0,0},QuaternionProduct(direction.local[i].rotation,inverse),std::clamp(weight,0.f,1.f));
+      weapon.local[i].rotation=Normalize(QuaternionProduct(delta,weapon.local[i].rotation));
     }
   }
   return true;

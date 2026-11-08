@@ -596,7 +596,8 @@ print('Detached script provenance records exact entered bodies and typed origins
 dialogue_session=Path('app/src/main/cpp/dialogue/fo3-dialogue-session.cpp').read_text()
 player_source=Path('app/src/main/cpp/player/fo3-player-state.cpp').read_text()
 assert 'PrepareDialogueTransaction(' not in dialogue_session
-assert dialogue_session.count('PrepareDialogueInfoTransaction(')==3
+assert dialogue_session.count('PrepareDialogueInfoTransaction(')==4
+assert 'line->topic,line->id,fo3player::DialogueScriptPhase::End' in dialogue_session
 assert 'DialogueScriptPhase::Both,error,ctx.speaker.reference' in dialogue_session
 assert 'phase,error,actor,fo3player::ScriptProgramCapture::EnteredPrograms' in dialogue_session
 assert 'Execute(i,fo3player::DialogueScriptPhase::Begin' in dialogue_session
@@ -706,7 +707,9 @@ assert 'target(id,"SCRO")' in second
 assert 'executedScriptOwners.push_back(execution.origin.record);' in s
 assert s.index('MatchScriptProgramsToMaster(') < s.index('executedScriptOwners.push_back(')
 assert 'if(n!=20&&n!=24&&n!=28)' in second
-for offset in (12,16,24):assert f'target(fo3esm::ReadU32(p+{offset}),"CTDA +{offset}")' in second
+assert 'const auto operand=fo3esm::ReadU32(p+12);' in second
+assert 'if(!radioIdentity)target(operand,"CTDA +12");' in second
+for offset in (16,24):assert f'target(fo3esm::ReadU32(p+{offset}),"CTDA +{offset}")' in second
 assert 'if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global")' in second
 assert 'ScriptMasterMatch' not in authored and 'ExecutedScripts' not in authored
 print('Incoming SCRO/CTDA still scan every nondeleted record; only authenticated executing SCPT self-edges are admitted')

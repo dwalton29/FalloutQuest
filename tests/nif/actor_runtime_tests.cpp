@@ -333,6 +333,9 @@ int main(int argc,char** argv) {
     assert(!fo3appearance::RenderHairShape("NoHat",0x600));
     assert(fo3appearance::RenderHairShape("NoHat",0));
     assert(!fo3appearance::RenderHairShape("Hat",0));
+    assert(fo3appearance::RenderHairShape("Hat",0x602)&&!fo3appearance::RenderHairShape("NoHat",0x602));
+    assert(fo3appearance::PipboySleeveShape("pipboyon",true)&&!fo3appearance::PipboySleeveShape("pipboyoff",true));
+    assert(fo3appearance::PipboySleeveShape("pipboyoff",false)&&!fo3appearance::PipboySleeveShape("pipboyon",false));
     assert(fo3appearance::HairMorphModel("HairBase.NIF","Hat")=="HairBasehat.NIF");
     assert(fo3appearance::HairMorphModel("HairBase.NIF","NoHat")=="HairBasenohat.NIF");
     assert(fo3appearance::SkinMaterial(14, 2));
@@ -505,6 +508,7 @@ int main(int argc,char** argv) {
   fo3anim::BindClip(creature.skeleton,creature.clip,creature.pose);
   assert(!creature.pose.delta.empty());
   Q230CacheDialogueAnimations(creature,nullptr);
+  assert(!creature.animations[size_t(fo3npc::Animation::Walk)].tracks.empty());
   std::vector<Fo3StaticNifMesh> meshes;assert(LoadFo3StaticNifMeshes(argv[2],meshes));
   size_t originalTriangles=0;
   for(auto& mesh:meshes){CpuObject part;part.mesh=std::move(mesh);part.placement.modelPath=argv[2];

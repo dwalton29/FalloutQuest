@@ -64,12 +64,17 @@ void ConfigureFo3DialogueSession(fo3dialogue::Session& s){
  s.endResultStatus=[](uint64_t ticket){return ticket==worldResultTicket?worldResult:-1;};
 }
 namespace fo3audio {
-uint32_t token=0;uint64_t completion=0;std::string path;std::vector<uint32_t> sounds;
+uint32_t token=0,secondToken=0;uint64_t completion=0,secondCompletion=0;bool intercom=false;std::string path;std::vector<uint32_t> sounds;
 void SoundEvent(uint32_t id){sounds.push_back(id);}
-void DialogueStop(){token=0;}
+void StopDialogueLane(unsigned lane){(lane?secondToken:token)=0;}
 void DialogueGain(float){}
-void Dialogue(const std::string& p,uint32_t t){path=p;token=t;completion=0;}
-uint64_t DialogueCompletion(){return completion;}
+void ScriptDialogue(const std::string& p,uint32_t t,unsigned lane,bool filtered){
+    path=p;intercom=filtered;(lane?secondToken:token)=t;(lane?secondCompletion:completion)=0;
+}
+uint64_t TakeDialogueLane(unsigned lane){
+    auto& value=lane?secondCompletion:completion;
+    const auto out=value;value=0;return out;
+}
 }
 namespace fo3bloodui {unsigned triggered=0;void Clear(){triggered=0;}void Trigger(uint32_t count,double,const fo3player::Catalog&){triggered+=count;}}
 unsigned pipboyResets=0,radioRefreshes=0;void ResetFo3Pipboy(){++pipboyResets;}void RefreshFo3PipboyRadio(){++radioRefreshes;}
@@ -93,8 +98,8 @@ static void OriginalIntercom(const char* path){
  fo3worldscript::SpeechTick();Check(fo3worldscript::PackageEvent(dad,package,false),"original intercom package start");
  Check(p.QueueScriptSpeech(dad,c.pipboy.packages.at(package).dialogueTopic,intercom,true,false,package),"original intercom selected topic");
  fo3worldscript::Actions();fo3worldscript::SpeechTick();std::unordered_set<uint32_t> infos;unsigned responses=0;
- while(fo3worldscript::speech.Active()){
-  const auto* info=fo3worldscript::speech.Current(c.pipboy);Check(info!=nullptr,"original intercom INFO");infos.insert(info->id);Check(!fo3audio::path.empty(),"original intercom voice path");Check(++responses<=16,"bounded original intercom chain");
+ while(fo3worldscript::speechLanes[0].dialogue.Active()){
+  const auto* info=fo3worldscript::speechLanes[0].dialogue.Current(c.pipboy);Check(info!=nullptr,"original intercom INFO");infos.insert(info->id);Check(!fo3audio::path.empty(),"original intercom voice path");Check(++responses<=16,"bounded original intercom chain");
   fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  }
  Check(infos.size()>=3&&p.Snapshot().pipboy.quests.at(q).stage==38&&!p.TalkingActivatorActor(intercom),"original linked greeting, reply and goodbye clear assignment");
@@ -117,7 +122,7 @@ static void OriginalPrayer(const char* path){
  Check(p.ScriptActorTalking(ref),"original StartConversation begins prayer");
  std::unordered_set<uint32_t> spoken;unsigned gestures=0;
  while(p.ScriptActorTalking(ref)){
-  const auto* info=fo3worldscript::speech.Current(catalog.pipboy);Check(info&&spoken.insert(info->id).second,"authored prayer line does not repeat");
+  const auto* info=fo3worldscript::speechLanes[0].dialogue.Current(catalog.pipboy);Check(info&&spoken.insert(info->id).second,"authored prayer line does not repeat");
   for(const auto& r:info->responses)if(r.speakerAnimation){Check(catalog.pipboy.idleModels.count(r.speakerAnimation),"original preaching IDLE bound");++gestures;}
   Check(spoken.size()<=32,"bounded original prayer chain");
   fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
@@ -261,14 +266,14 @@ int main(int argc,char** argv){try{
   Check(!p.ScriptActorTalking(40)&&!fo3worldscript::speechPending.empty(),"busy admission preserves queued speech");
   worldBusy=false;fo3worldscript::SpeechTick();
   worldBusy=true;fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
-  Check(fo3worldscript::speech.phase==fo3dialogue::Phase::Results&&!worldResultPlan,"busy world work retains the closing INFO");
+  Check(fo3worldscript::speechLanes[0].dialogue.phase==fo3dialogue::Phase::Results&&!worldResultPlan,"busy world work retains the closing INFO");
   fo3worldscript::SpeechTick();Check(p.Snapshot().karma==before&&!worldResultPlan,"busy retry does not publish results");
   worldBusy=false;fo3worldscript::SpeechTick();
-  Check(fo3worldscript::speech.phase==fo3dialogue::Phase::Results&&bool(worldResultPlan),"EOF waits for resident result transaction");
+  Check(fo3worldscript::speechLanes[0].dialogue.phase==fo3dialogue::Phase::Results&&bool(worldResultPlan),"EOF waits for resident result transaction");
   fo3worldscript::SpeechTick();Check(p.ScriptActorTalking(40)&&p.Snapshot().karma==before&&p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(852),false),"pending result cannot complete package or replay EOF");
   if(success)Check(p.CommitScriptTransaction(*worldResultPlan),"resident result commit");
   worldResultPlan.reset();worldResult=success?1:-1;fo3worldscript::SpeechTick();
-  Check(!p.ScriptActorTalking(40)&&!fo3worldscript::speech.Active(),"settled result releases speech");
+  Check(!p.ScriptActorTalking(40)&&!fo3worldscript::speechLanes[0].dialogue.Active(),"settled result releases speech");
   Check(p.Snapshot().karma==before+(success?3:0)&&p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(852),success),"only finalized results can complete their package");
   worldDefer=false;
  }
@@ -292,11 +297,22 @@ int main(int argc,char** argv){try{
  Check(p.ScriptActorTalking(41),"initiating actor speaks first");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(41)&&p.ScriptActorTalking(40)&&p.ScriptActorTalking(81),"linked response owns actor identity and physical intercom");
- Check(fo3worldscript::speech.actor==40&&fo3worldscript::speech.proxy==81&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"proxy voice does not animate remote NPC mesh");
+ Check(fo3audio::intercom&&fo3worldscript::speechLanes[0].dialogue.actor==40&&fo3worldscript::speechLanes[0].dialogue.proxy==81&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"proxy voice does not animate remote NPC mesh");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(40)&&!p.ScriptActorTalking(81)&&p.Snapshot().karma==oldKarma+2,"proxy end results publish once and both speech flags release");
  Check(p.Snapshot().actorPackageEvents.at(41)==std::make_pair(uint32_t(851),true),"completion belongs to initiating package actor");
  Check(p.SetTalkingActivatorActor(81,0),"restore ordinary activator voice");
+ Check(p.QueueScriptSpeech(40,500,fo3player::PlayerRef,false,true),"queue first overlapping Say");
+ Check(p.QueueScriptSpeech(41,910,fo3player::PlayerRef,false,true),"queue independent overlapping Say");
+ fo3worldscript::Actions();fo3worldscript::SpeechTick();fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(40)&&p.ScriptActorTalking(41)&&fo3audio::token!=fo3audio::secondToken,
+       "authored speech from different actors occupies independent lanes");
+ fo3audio::secondCompletion=(uint64_t(fo3audio::secondToken)<<1)|1;
+ fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(40)&&!p.ScriptActorTalking(41),"secondary EOF leaves primary voice active");
+ fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;
+ fo3worldscript::SpeechTick();
+ Check(!p.AnyScriptActorTalking(),"independent EOFs release both speech owners");
  auto& fighter=gQ230NpcActors.back();fighter.runtime.BeginCombat(fo3player::PlayerRef);fighter.runtime.pendingAttack=true;
  Check(p.SetActorHostile(40,fo3player::PlayerRef),"canonical combat fixture");
  fo3pipdata::ResultScript stop,unsupported;stop.source="speaker.StopCombat";unsupported.source="UnsupportedStopStep";std::string stopError;

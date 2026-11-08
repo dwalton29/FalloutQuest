@@ -1093,6 +1093,13 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
   if(actor!=PlayerRef&&ActorHealth(actor)<=0)return false;
   if (!GetLock(id).locked)
     return true;
+  // Personal NPC doors can be locked against the player even when the
+  // authored owner has no key item. Leave the canonical lock in place.
+  if(actor!=PlayerRef&&ref.owner){
+    const auto placement=catalog_->actorPlacements.find(actor);
+    if(placement!=catalog_->actorPlacements.end()&&
+       (ref.owner==actor||ref.owner==placement->second.base))return true;
+  }
   if (!ref.key)
     return false;
   const auto* inventory=actor==PlayerRef?&state_.inventory:ContainerContents(actor);

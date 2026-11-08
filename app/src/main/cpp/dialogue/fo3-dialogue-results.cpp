@@ -327,12 +327,25 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::TalkingActivator;const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved talking activator";return false;}
       if(in>>a){cmd.index=form(a);if(!cmd.index){error="unresolved talking actor";return false;}}else in.clear();
+    } else if(op=="startcombat"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="startcombat")) {
+      cmd.type=CommandType::StartCombat;
+      const auto dot=op.find('.');
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){
+        error="StartCombat requires a caller and target actor";return false;
+      }
     } else if(op=="stopcombat"||op=="scaonactor"||op=="stopcombatalarmonactor"||
         (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="stopcombat"||op.substr(op.find('.')+1)=="scaonactor"||op.substr(op.find('.')+1)=="stopcombatalarmonactor"))) {
       cmd.type=CommandType::StopCombat;const auto dot=op.find('.');
       const auto verb=dot==std::string::npos?op:op.substr(dot+1);cmd.index=verb!="stopcombat";
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved StopCombat reference";return false;}
+      if(verb=="stopcombat"){
+        if(in>>a){
+          cmd.variable=form(a);
+          if(!cmd.variable){error="unresolved StopCombat target";return false;}
+        }else in.clear();
+      }
     } else if(op=="evp"||op=="evaluatepackage"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="evp"||op.substr(op.find('.')+1)=="evaluatepackage"))) {
       cmd.type=CommandType::EvaluatePackage;const auto dot=op.find('.');
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));

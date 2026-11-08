@@ -42,14 +42,14 @@ static bool ScriptSpeakerAlive(const Context& ctx,const fo3player::Player& p){
       p.ReferenceDisabled(ctx.speaker.reference,disabled,error)&&!disabled;
 }
 bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player& p){
-  if(Active()||!ctx.player||ctx.speaker.combat||!ScriptSpeakerAlive(ctx,p))return false;
+  if(Active()||!ctx.player||!ScriptSpeakerAlive(ctx,p))return false;
   scriptedTopic=true;
   const auto* chosen=Resolve(requested,ctx,true);if(!chosen)return false;
   actor=ctx.speaker.reference;proxy=ctx.speaker.proxy;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
 bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Context& ctx,fo3player::Player& p,bool conversation){
-  if(Active()||!ctx.player||ctx.speaker.combat||!ScriptSpeakerAlive(ctx,p))return false;
+  if(Active()||!ctx.player||(conversation&&ctx.speaker.combat)||!ScriptSpeakerAlive(ctx,p))return false;
   const auto topic=p.Definitions().pipboy.topics.find(requested);if(topic==p.Definitions().pipboy.topics.end())return false;
   const auto chosen=std::find_if(topic->second.begin(),topic->second.end(),[&](const auto& i){return i.id==selected;});
   if(chosen==topic->second.end()||!SupportedInfoStructure(*chosen)||(chosen->speaker&&chosen->speaker!=ctx.speaker.base))return false;
@@ -158,8 +158,13 @@ bool Session::ResumeResults(const Context& ctx,fo3player::Player& p){
   }
   const int status=endResultStatus(resultTicket);if(!status)return false;
   resultTicket=0;
-  if(status<0){End("world result publication failed");return false;}
   const auto* line=Current(p.Definitions().pipboy);if(!line){End("INFO missing after world result");return false;}
+  if(status<0){
+    std::string error;
+    auto plan=recoverEndResult?p.PrepareDialogueInfoTransaction(
+        line->topic,line->id,fo3player::DialogueScriptPhase::End,error,actor):nullptr;
+    if(!plan||!recoverEndResult(p,*plan,error)){End("world result publication failed");return false;}
+  }
   return FinishInfo(*line,ctx,p);
 }
 bool Session::FinishInfo(const fo3pipdata::Info& line,const Context& ctx,fo3player::Player& p){
