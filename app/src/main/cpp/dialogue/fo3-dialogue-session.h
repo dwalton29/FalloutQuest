@@ -44,6 +44,7 @@ private:
   bool Execute(const fo3pipdata::Info&,fo3player::DialogueScriptPhase,fo3player::Player&,std::string&);
   bool Enter(const fo3pipdata::Info&,const Context&,fo3player::Player&);
   bool Eligible(const fo3pipdata::Info&,const Context&)const;
+  const fo3pipdata::Info* ResolveChoice(uint32_t,const Context&,bool draw=false)const;
   bool FinishInfo(const fo3pipdata::Info&,const Context&,fo3player::Player&);
   void BuildChoices(const Context&);
 };

@@ -1898,6 +1898,7 @@ private:
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
                 fo3loadingvr::gSlideshow.sounds.clear();
+                fo3loadingvr::gAudioFrameGeneration=0;
                 UpdatePlayerDeath(frameState.predictedDisplayTime);
                 // All loading work advances once before stereo acquisition.
                 // No scene uploads or preparation are dispatched from an eye.
@@ -1947,14 +1948,14 @@ private:
                     fo3worldscript::Register();
                     if(!scriptMenu)fo3worldscript::seconds+=seconds;
                     scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,scriptMenu?0:seconds);
-                    // Trigger occupancy follows the player capsule while
+                    // Trigger occupancy accounts for the player's width while
                     // heading checks continue to use the tracked view.
                     const float bodyCentreY=(FLOOR_Y+playerPosition_.y+gQ210Head[1])*.5f;
                     scriptPlayer.SetScriptPlayerLocation(
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
                         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
                         gSceneFloorZQ1730+(bodyCentreY-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
-                        gCurrentCellFormId,gExteriorWorldspaceQ1890);
+                        gCurrentCellFormId,gExteriorWorldspaceQ1890,GetFo3PlayerCollisionRadius()*FO3_UNITS_PER_METRE_Q715);
                     scriptPlayer.SetScriptPlayerHeading(gQ210Head[3]);
                     if(!scriptMenu)fo3worldscript::SpeechTick();
                     if(!scriptMenu&&!Fo3PipboyFocus())

@@ -24,6 +24,9 @@ Q230ActorVisual* DialogueActor(uint32_t reference) {
 fo3dialogue::Context DialogueContext(const Q230ActorVisual& actor) {
   fo3dialogue::Context ctx;if(!gPlayerSession)return ctx;
   ctx.player=&gPlayerSession->player;ctx.talking=gDialogue.Active();
+#ifdef FO3_NPC_CHAT_RUNTIME
+  ctx.weaponDrawn=WeaponHeld();
+#endif
   ctx.speaker={actor.source.refFormId,actor.source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,
     actor.runtime.package,
     gSceneCenterXQ1730+actor.runtime.position[0]*FO3_UNITS_PER_METRE,
@@ -154,7 +157,12 @@ void ConfigureFo3Dialogue() {
   gDialogue.diagnostic=DialogueDiagnostic;ConfigureFo3DialogueSession(gDialogue);
 }
 bool DialogueCanStart(Q230ActorVisual& actor) {
-  if((actor.source.creature&&!(actor.source.actorBaseFlags&0x200000))||!gPlayerSession||gPlayerSession->player.AnyScriptActorTalking()||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
+  if((actor.source.creature&&!(actor.source.actorBaseFlags&0x200000))||!gPlayerSession||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
+#ifdef FO3_NPC_CHAT_RUNTIME
+  if(!fo3worldscript::AllowsPlayerDialogue())return false;
+#else
+  if(gPlayerSession->player.AnyScriptActorTalking())return false;
+#endif
   auto& cached=gDialogueEligibility[actor.source.refFormId];
   const auto revision=gPlayerSession->player.Revision();
   if(cached.revision!=revision||cached.until<gDialogueTime) {
@@ -191,7 +199,9 @@ bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0) {
   if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
   auto* actor=DialogueActor(reference);if(!actor)return false;
 #ifdef FO3_NPC_CHAT_RUNTIME
+  if(!actor->runtime.CanTalk()||!fo3worldscript::AllowsPlayerDialogue())return false;
   Q230ChatStop("player interaction takes priority");
+  fo3worldscript::PauseForPlayerDialogue();
 #endif
   ConfigureFo3Dialogue();
   const auto context=DialogueContext(*actor);

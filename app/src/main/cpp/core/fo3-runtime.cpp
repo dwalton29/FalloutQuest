@@ -29,6 +29,8 @@ fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
 bool Event(uint32_t reference,const char* event,uint32_t activator,bool persist);
 bool OwnsSpeechResultAdmission(bool admitting,uint64_t ticket);
+bool AllowsPlayerDialogue();
+void PauseForPlayerDialogue();
 }
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"

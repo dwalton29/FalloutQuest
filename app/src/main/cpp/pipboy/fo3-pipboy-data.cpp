@@ -116,7 +116,10 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     const auto v=Find(s,"DATA");if(!v||v->n!=4)return;
     const float value=editor.empty()?0:editor[0]=='i'?float(int32_t(U(v))):fo3esm::ReadF32(v->p);
     if(!std::isfinite(value))return;
-    if(editor=="fSayOncePerDayInfoTimer"&&value>=0)d.sayOncePerDayHours=value;
+    if(editor.rfind("fSpeech",0)==0||editor.rfind("fDisp",0)==0||
+       editor.rfind("iSpeechChallengeDifficulty",0)==0||editor.rfind("iXPRewardSpeechChallenge",0)==0)
+      d.speechSettings[editor]=value;
+    else if(editor=="fSayOncePerDayInfoTimer"&&value>=0)d.sayOncePerDayHours=value;
     else if(editor=="iXPRewardDiscoverMapMarker"&&value>=0&&value<=1000000)d.discoveryXP=uint32_t(value);
     else if(editor=="iMapMarkerRevealDistance"&&value>0)d.discoveryRadius=value;
     else if(editor=="iMapMarkerVisibleDistance"&&value>0)d.markerVisibleDistance=value;

@@ -332,6 +332,7 @@ struct Definitions {
   uint32_t radioHello = 0;
   // Recovered Fallout3.exe Setting defaults; ESM GMSTs override these.
   float sayOncePerDayHours=12; // Fallout3.exe fSayOncePerDayInfoTimer default.
+  std::unordered_map<std::string,float> speechSettings;
   float discoveryRadius = 1000, markerVisibleDistance=20000;
   float travelWalkSpeed=85,hostileExteriorDistance=3000,hostileInteriorDistance=2000;
   uint32_t discoveryXP=10;

@@ -43,6 +43,7 @@ struct Event {
   bool intercom=false;
   float distance=-1,pan=0;
   uint64_t loadingGeneration=0;
+  uint64_t loadingCueUs=0;
 };
 struct Runtime {
   JavaVM *vm = nullptr;
@@ -575,14 +576,18 @@ void Worker() {
       continue;
     }
     if(e.kind==LoadingEffectEvent){
+      const auto currentCue=[&]{
+        const auto now=Fo3LoadingClockUs();
+        return now-e.loadingCueUs<=Fo3LoadingAudioFrameTimeoutUs&&IsFo3LoadingAudioCurrent(e.loadingGeneration,now);
+      };
       if(e.name.empty()){
         playLoading("",1,0);
-      }else if(IsFo3LoadingAudioCurrent(e.loadingGeneration)){
+      }else if(currentCue()){
         const auto named=catalog.names.find(e.name);
         const auto asset=named==catalog.names.end()?catalog.sounds.end():catalog.sounds.find(named->second);
         if(asset!=catalog.sounds.end()){
           const auto path=resolve(asset->second.path,true);
-          if(!path.empty()&&IsFo3LoadingAudioCurrent(e.loadingGeneration)){
+          if(!path.empty()&&currentCue()){
             __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING AUDIO cue=%s generation=%llu",
                 e.name.c_str(),static_cast<unsigned long long>(e.loadingGeneration));
             playLoading(path,asset->second.gain,e.loadingGeneration);
@@ -781,6 +786,7 @@ void LoadingSound(const std::string& editorId) {
   if(editorId.empty()||editorId.size()>128||!IsFo3LoadingAudioCurrent(generation))return;
   Event event{LoadingEffectEvent,0,true,editorId};
   event.loadingGeneration=generation;
+  event.loadingCueUs=Fo3LoadingClockUs();
   Push(std::move(event));
 }
 void StopLoadingSound(){Push({LoadingEffectEvent,0,false});}

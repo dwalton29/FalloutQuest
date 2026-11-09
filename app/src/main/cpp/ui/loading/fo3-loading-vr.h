@@ -64,6 +64,7 @@ inline std::vector<fo3anim::Clip> gUiClips;
 inline fo3anim::Matrix gUiToPanel=fo3anim::Identity(),gPanelToUi=fo3anim::Identity();
 inline float gUiHalfHeight=0.68f;
 inline fo3slideshow::Player gSlideshow;
+inline uint64_t gAudioFrameGeneration=0;
 inline uint64_t gSlideStarted=0;
 inline std::vector<Matrix> gUiDeltas;
 inline fo3anim::Skeleton gCompassHierarchy;
@@ -517,6 +518,7 @@ inline void AdvanceAssets() {
 }
 inline bool FullyVisible() {return gFrameSeconds>=gMenu.fadeSeconds;}
 inline void SubmitAudioCues() {
+    MarkFo3LoadingAudioFramePresented(gAudioFrameGeneration);
     if(IsFo3LoadingAudioCurrent(gGeneration))
         for(const auto& sound:gSlideshow.sounds)fo3audio::LoadingSound(sound);
     gSlideshow.sounds.clear();
@@ -613,6 +615,8 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
             glDepthMask(GL_FALSE);
             const Matrix overlay=Multiply(panel,Placement(0,0,0.02f,0));
             if(gSlideshow.running) {
+                if(advance&&!gUiDrawOrder.empty()&&gGeneration==GetFo3LoadingGeneration())
+                    gAudioFrameGeneration=gGeneration;
                 glUniform1f(gClipUi,1);glUniform2f(gClipHalf,1.2f,gUiHalfHeight);
                 for(size_t index:gUiDrawOrder) {
                     const auto& shape=gOverlay[index];

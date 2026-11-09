@@ -2955,6 +2955,7 @@ bool gFallGrounded=true;
 }
 void ResetFo3PlayerGravity(){gFallVelocity=0;gFallGrounded=true;}
 bool IsFo3PlayerGrounded(){return gPlayerCollisionReady&&gSafeSpawnResolved&&gFallGrounded;}
+float GetFo3PlayerCollisionRadius(){return CollisionRadiusQ712();}
 bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desiredX,float desiredZ,
     float currentY,float seconds,float* outX,float* outZ,float* outY) {
     if(!outX||!outZ||!outY)return false;

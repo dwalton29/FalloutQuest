@@ -66,9 +66,9 @@ void ConfigureFo3DialogueSession(fo3dialogue::Session& s){
  s.endResultStatus=[](uint64_t ticket){return ticket==worldResultTicket?worldResult:-1;};
 }
 namespace fo3audio {
-uint32_t token=0,secondToken=0;uint64_t completion=0,secondCompletion=0;bool intercom=false;std::string path;std::vector<uint32_t> sounds;
+uint32_t token=0,secondToken=0;uint64_t completion=0,secondCompletion=0;bool intercom=false;std::string path;std::vector<uint32_t> sounds;float soundDistance=0,soundPan=0;
 void SoundEvent(uint32_t id){sounds.push_back(id);}
-void SoundAt(uint32_t id,float,float){sounds.push_back(id);}
+void SoundAt(uint32_t id,float distance,float pan){sounds.push_back(id);soundDistance=distance;soundPan=pan;}
 void RadioConversation(uint32_t,uint32_t,const fo3pipdata::SessionState&){}
 void StopDialogueLane(unsigned lane){(lane?secondToken:token)=0;}
 void DialogueGain(float){}
@@ -145,6 +145,81 @@ static void OriginalPrayer(const char* path){
  const auto before=fo3audio::token;p.PumpReferenceGameMode(.3,{ref});fo3worldscript::Actions();fo3worldscript::SpeechTick();Check(!p.ScriptActorTalking(ref)&&fo3audio::token==before,"source timer prevents immediate repeat");
  std::cout<<"Original Cromwell OnLoad/GameMode, self conversation, 17 linked lines, 15 gestures and final reset passed\n";
 }
+static void OriginalHallwayIntervention(const char* path){
+ fo3player::Catalog catalog;std::string error;
+ Check(fo3player::LoadCatalog(path,catalog,error),"original hallway catalogue");
+ const auto& d=catalog.pipboy;
+ const auto id=[&](const char* name){return d.formNames.at(name);};
+ const auto quest=id("cg03"),amata=id("cg03amataref"),butch=id("cg03butchref"),package=id("cg03amatabutchconv");
+ auto& stage=catalog.initial.pipboy.quests[quest];stage.stage=20;stage.running=true;stage.stages={5,6,10,15,20};
+ for(unsigned route:{0u,1u,2u}){
+  for(const char* name:{"CG02.ButchMad","CG02.ButchFight"})
+    catalog.initial.pipboy.dialogueVariables[fo3dialogue::VariableKey(d,name)]=route==0?1:0;
+  const auto speechSkill=size_t(fo3player::Skill::Speech);
+  catalog.initial.special[3]=route==1?10:1;
+  catalog.initial.skills[speechSkill]=route==1?100:0;
+  catalog.initial.referenceEnabled[catalog.enableParents.at(amata).reference]=true;
+  fo3worldscript::ResetSpeech();
+  gPlayerSession=std::make_unique<fo3player::Session>(catalog);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+  const auto& at=d.targets.at(id("demoamatamarker"));gCurrentCellFormId=at.cell;gExteriorWorldspaceQ1890=at.world;
+  p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);gQ210Head[0]=at.x;gQ210Head[1]=at.z;gQ210Head[2]=-at.y;
+  gQ230NpcActors.clear();
+  const auto wally=id("cg03wallymackref"),paul=id("cg03paulhannonref");
+  for(uint32_t ref:{amata,butch,wally,paul}){
+    ActorVisual actor;actor.source={ref,d.targets.at(ref).base};actor.runtime.position={at.x,at.y,at.z};
+    gQ230NpcActors.push_back(actor);
+  }
+  fo3worldscript::SpeechTick();
+  Check(p.QueueScriptSpeech(amata,d.packages.at(package).dialogueTopic,butch,true,false,package),"original hallway conversation queued");
+  fo3worldscript::Actions();fo3worldscript::SpeechTick();
+  Check(p.ScriptActorTalking(amata)&&fo3worldscript::AllowsPlayerDialogue(),"original NPC conversation permits player interruption");
+  const auto ctx=fo3worldscript::SpeechContext(butch,fo3player::PlayerRef);
+  gDialogue={};ConfigureFo3DialogueSession(gDialogue);
+  Check(gDialogue.CanActivate(ctx),"original Butch dialogue is offered");
+  fo3worldscript::PauseForPlayerDialogue();
+  Check(gDialogue.Start(ctx,p),"original Butch dialogue starts during the interruption");
+  const auto finish=[&](){
+    unsigned lines=0;
+    while(gDialogue.phase==fo3dialogue::Phase::Speaking){
+      Check(++lines<=8,"bounded original Butch response");
+      gDialogue.AudioDone(gDialogue.audioToken,true,ctx,p);
+    }
+  };
+  const auto choose=[&](const char* topic){
+    const auto found=std::find_if(gDialogue.choices.begin(),gDialogue.choices.end(),[&](const auto& c){return c.topic==id(topic);});
+    Check(found!=gDialogue.choices.end()&&gDialogue.Choose(size_t(found-gDialogue.choices.begin()),ctx,p),topic);
+  };
+  finish();choose("cg03butchresponse1");finish();
+  if(route){
+    const auto option=std::find_if(gDialogue.choices.begin(),gDialogue.choices.end(),[&](const auto& choice){
+      return choice.topic==id("cg03butchchoicespeech");
+    });
+    Check(option!=gDialogue.choices.end()&&option->text.find(route==1?"100%":"0%")!=std::string::npos,"original Speech option shows chance");
+    const auto challenge=option->info;
+    choose("cg03butchchoicespeech");
+    Check(p.Snapshot().pipboy.saidInfos.count((uint64_t(butch)<<32)|challenge),"Speech attempt persists");
+    if(route==2)Check(gDialogue.topic==id("speechchallengefailure"),"original Butch failure response");
+  }else choose("cg03butchchoice1");
+  finish();
+  Check(p.Snapshot().pipboy.quests.at(quest).stage==(route==2?20:30),"original intervention outcome");
+  gDialogue.End("hallway fixture");fo3worldscript::SpeechTick();
+  if(route==2){Check(p.ScriptActorTalking(amata),"unresolved confrontation resumes");continue;}
+  Check(!p.AnyScriptActorTalking()&&!fo3worldscript::speechLanes[0].dialogue.Active(),"resolved hallway conversation stays stopped");
+  const auto publish=[&](auto plan){return p.CommitScriptTransaction(*plan);};
+  const auto onWay=[&](const char* name){
+    const auto& vars=p.Snapshot().pipboy.dialogueVariables;
+    const auto found=vars.find(fo3dialogue::VariableKey(d,name));
+    return found!=vars.end()&&found->second==1;
+  };
+  for(unsigned tick=0;tick<100&&!onWay("CG03.WallyHome");++tick){
+    p.SetScriptRuntimeClock(tick*.1,.1);p.PumpWorldAwareGameMode(.1,{butch,wally,paul},publish);
+    fo3worldscript::Actions();fo3worldscript::SpeechTick();
+    if(fo3audio::token)fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;
+  }
+  Check(onWay("CG03.ButchHome")&&onWay("CG03.PaulHome")&&onWay("CG03.WallyHome"),"original parting dialogue sends the Tunnel Snakes to class");
+ }
+ std::cout<<"Original hallway interruption, intimidation, Speech outcomes and departure lines passed\n";
+}
 int main(int argc,char** argv){try{
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
  c.references[10].base=100;c.references[10].cell=1;c.pipboy.targets[10].cell=1;
@@ -195,12 +270,13 @@ int main(int argc,char** argv){try{
  auto& conversation=c.pipboy.packages[851];conversation.type=15;conversation.dialogueValid=true;conversation.dialogueType=0;conversation.dialogueTopic=910;conversation.target.valid=true;conversation.target.value=81;
  c.pipboy.targets[888].base=889;c.pipboy.targets[888].cell=1;c.pipboy.furniture[889].markers=1u<<11;
  gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));auto& p=gPlayerSession->player;
- GpuObject object;object.refFormId=10;object.q2401DoorAnimation=asset;gObjects.push_back(object);
+ GpuObject object;object.refFormId=10;object.q2401DoorAnimation=asset;object.q2016PlacementMatrix[12]=3;gObjects.push_back(object);
  p.SetScriptPlayerLocation(0,0,0,1,0);fo3worldscript::Register();p.SetScriptRuntimeClock(0,.25);fo3worldscript::Events();fo3worldscript::TriggerTick();fo3worldscript::Actions();fo3worldscript::Animate();
  Check(fo3worldscript::animations.at(10).clip==0,"trigger plays authored group");Check(p.ScriptTriggerChanges().empty(),"committed trigger acknowledged");
  fo3worldscript::seconds=1;p.SetScriptRuntimeClock(1,.25);fo3worldscript::Events();fo3worldscript::TriggerTick();fo3worldscript::Animate();
  Check(std::abs(gObjects[0].q2400DoorTransform[12]-2)<1e-5&&gObjects[0].materialAlpha==.5f,"live node transform and alpha");
  Check(fo3audio::sounds==std::vector<uint32_t>{700},"authored lowercase sound key emitted once");
+ Check(fo3audio::soundDistance==3&&fo3audio::soundPan==1,"animation key uses the resident emitter position");
  Check(collision.nodeTransforms.at(1)[12]==2&&collision.nodeTransforms.at(0)[12]==0,"independent collision node transforms");
  fo3worldscript::seconds=2;p.SetScriptRuntimeClock(2,.25);fo3worldscript::Animate();
  bool reserved=p.PumpWorldAwareGameMode(.25,{10},[](auto){return false;});Check(!reserved,"non-world animation transaction");fo3worldscript::Actions();fo3worldscript::Animate();
@@ -266,6 +342,7 @@ int main(int argc,char** argv){try{
  fo3script::Action say;say.kind=fo3script::ActionKind::SayTo;say.reference=40;say.form=500;say.flags=fo3player::PlayerRef;
  Check(p.QueueScriptAction(say),"queue original SayTo");fo3worldscript::Actions();fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(40)&&fo3audio::path=="sound/original.ogg","authored audio owns speech");
+ Check(!fo3worldscript::AllowsPlayerDialogue(),"player-directed speech remains protected");
  const auto token=fo3audio::token;Check(gQ230NpcActors.back().runtime.scriptSpeechToken==token,"script lip owner follows the actual voice token");fo3audio::completion=(uint64_t(token+1)<<1)|1;fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(40)&&!p.Snapshot().pipboy.dialogueVariables.count((uint64_t(40)<<32)|1),"unrelated completion cannot publish INFO results");
  fo3audio::completion=(uint64_t(token)<<1)|1;fo3worldscript::SpeechTick();
@@ -339,6 +416,16 @@ int main(int argc,char** argv){try{
    fo3worldscript::Actions();fo3worldscript::SpeechTick();
    Check(fo3worldscript::SpeechLookTarget(40)==41&&fo3worldscript::SpeechLookTarget(41)==(noTargetLook?0u:40u),
          "scripted speech head-tracks the partner and honors listener opt-out");
+   Check(fo3worldscript::AllowsPlayerDialogue(),"NPC-to-NPC speech permits player interaction");
+   const auto beforePause=fo3audio::token;
+   fo3worldscript::PauseForPlayerDialogue();
+   Check(!fo3audio::token&&!p.ScriptActorTalking(40)&&!fo3worldscript::SpeechLookTarget(40),
+         "interrupting speech releases voice and gaze");
+   gDialogue.phase=fo3dialogue::Phase::Choices;fo3worldscript::SpeechTick();
+   Check(!fo3audio::token,"NPC speech stays paused while player dialogue owns audio");
+   gDialogue.End("player finished");fo3worldscript::SpeechTick();
+   Check(fo3audio::token&&fo3audio::token!=beforePause&&p.ScriptActorTalking(40),
+         "unresolved NPC speech resumes with a fresh token");
    fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
    Check(!fo3worldscript::SpeechLookTarget(40)&&!fo3worldscript::SpeechLookTarget(41),"speech gaze expires with audio");
  }
@@ -372,6 +459,6 @@ int main(int argc,char** argv){try{
  Check(p.CommitScriptTransaction(*savePlan),"autosave commit");
  fo3worldscript::Actions();Check(saves==savedBefore+1,"committed autosave reaches production persistence adapter");
  fo3worldscript::Actions();Check(saves==savedBefore+1,"autosave request consumed once");
- if(argc>1){OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);}
+ if(argc>1){OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);OriginalHallwayIntervention(argv[1]);}
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

@@ -9,6 +9,34 @@ static std::string Id(uint32_t id){char b[16];std::snprintf(b,sizeof(b),"%08X",i
 static bool GoodbyeTopic(const fo3pipdata::Definitions& d,uint32_t topic){
   const auto found=d.dialogueTopics.find(topic);return found!=d.dialogueTopics.end()&&found->second.editor=="GOODBYE";
 }
+static constexpr const char* SpeechDifficulty[]={"VeryEasy","Easy","Average","Hard","VeryHard"};
+static float SpeechSetting(const fo3pipdata::Definitions& d,const std::string& name,float fallback){
+  const auto setting=d.speechSettings.find(name);
+  return setting==d.speechSettings.end()?fallback:setting->second;
+}
+static float SpeechChance(const fo3pipdata::Info& info,const Context& ctx){
+  const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;
+  const auto setting=[&](const char* name,float fallback){return SpeechSetting(d,name,fallback);};
+  const auto* traits=p.ActorCategory(ctx.speaker.reference,1);
+  const auto* ai=p.ActorCategory(ctx.speaker.reference,8);
+  const float responsibility=ai&&ai->aiData.size()>3?ai->aiData[3]:50.f;
+  float disposition=traits?traits->disposition:0.f;
+  if(const auto delta=p.Snapshot().actorDispositionModifiers.find(ctx.speaker.reference);
+     delta!=p.Snapshot().actorDispositionModifiers.end())disposition+=delta->second;
+  const float charisma=(p.EffectiveSpecial(3)-setting("fDispTargetCharOffset",5))*setting("fDispTargetCharMult",10)+setting("fDispTargetCharBase",0);
+  const float karma=(responsibility*setting("fDispActorRespMult",1)+setting("fDispActorRespBase",-50))*
+    (p.Snapshot().karma*setting("fDispTargetKarmaMult",.002f));
+  const float drawn=ctx.weaponDrawn?setting("fDispTargetWeaponBase",-10):0;
+  const float reaction=1+(disposition+charisma+karma+drawn-setting("fSpeechChallengeDispositionBase",30))*
+    setting("fSpeechChallengeDispositionMultiplier",1)/100;
+  const float skill=1+(p.EffectiveSkill(size_t(fo3player::Skill::Speech))-setting("fSpeechChallengeSpeechBase",50))*
+    setting("fSpeechChallengeMultiplier",2)/100;
+  const auto tier=info.challengeValue-1;
+  constexpr float difficulty[]={10,40,55,70,80};
+  const float penalty=SpeechSetting(d,std::string("iSpeechChallengeDifficulty")+SpeechDifficulty[tier],difficulty[tier]);
+  const float chance=std::clamp(std::max(0.f,reaction)*std::max(0.f,skill)*(100-penalty)/100,0.f,1.f);
+  return chance>=setting("fSpeechAutoSuccessThreshold",.9f)?1.f:chance;
+}
 const fo3pipdata::Info* Session::Current(const fo3pipdata::Definitions& d)const {
   auto t=d.topics.find(topic);if(t==d.topics.end())return nullptr;
   for(auto& i:t->second)if(i.id==info)return &i;
@@ -19,6 +47,9 @@ bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
 }
 const fo3pipdata::Info* Session::Resolve(uint32_t id,const Context& ctx,bool draw)const {
   return ResolveTopicInfo(id,ctx,[&](const auto& info){return Eligible(info,ctx);},draw?&random:nullptr);
+}
+const fo3pipdata::Info* Session::ResolveChoice(uint32_t id,const Context& ctx,bool draw)const {
+  return ResolveTopicInfo(id,ctx,[&](const auto& info){return EligibleInfo(info,ctx,diagnostic,previewReferences,true);},draw?&random:nullptr);
 }
 bool Session::CanStart(const Context& ctx)const {
   if(!ctx.player||ctx.speaker.proxy||ctx.player->ActorHealth(ctx.speaker.reference)<=0||ctx.speaker.combat)return false;
@@ -52,7 +83,7 @@ bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Cont
   if(Active()||!ctx.player||(conversation&&ctx.speaker.combat)||!ScriptSpeakerAlive(ctx,p))return false;
   const auto topic=p.Definitions().pipboy.topics.find(requested);if(topic==p.Definitions().pipboy.topics.end())return false;
   const auto chosen=std::find_if(topic->second.begin(),topic->second.end(),[&](const auto& i){return i.id==selected;});
-  if(chosen==topic->second.end()||!SupportedInfoStructure(*chosen)||(chosen->speaker&&chosen->speaker!=ctx.speaker.base))return false;
+  if(chosen==topic->second.end()||!SupportedInfoStructure(*chosen)||(chosen->flags&0x80)||(chosen->speaker&&chosen->speaker!=ctx.speaker.base))return false;
   // Conditions were bound transactionally at the original Say command, before
   // later script assignments. Revalidate result capability at audio admission.
   std::string error;auto plan=p.PrepareDialogueInfoTransaction(requested,selected,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
@@ -108,8 +139,30 @@ bool Session::Enter(const fo3pipdata::Info& i,const Context&,fo3player::Player& 
 }
 bool Session::Choose(size_t index,const Context& ctx,fo3player::Player& p) {
   if(phase!=Phase::Choices||index>=choices.size())return false;
-  auto t=choices[index].topic;auto i=Resolve(t,ctx,true);if(!i)return false;
+  auto t=choices[index].topic;auto i=ResolveChoice(t,ctx,true);if(!i)return false;
   if(diagnostic)diagnostic("DIALOGUE CHOICE actor="+Id(actor)+" topic="+Id(t)+" index="+std::to_string(index));
+  if(i->flags&0x80){
+    const auto& d=p.Definitions().pipboy;
+    const float chance=SpeechChance(*i,ctx);
+    const bool success=std::generate_canonical<float,24>(random)<chance;
+    const auto failure=d.formNames.find("speechchallengefailure");
+    const auto* answer=success?i:nullptr;
+    if(!success&&failure!=d.formNames.end()){
+      answer=ResolveTopicInfo(failure->second,ctx,[&](const auto& candidate){
+        return candidate.quest==i->quest&&Eligible(candidate,ctx);
+      },&random);
+      if(!answer)answer=Resolve(failure->second,ctx,true);
+    }
+    if(answer&&!Enter(*answer,ctx,p))return false;
+    p.RecordDialogue(actor,i->id,{});
+    if(success){
+      constexpr float xp[]={5,10,20,30,50};
+      const auto tier=i->challengeValue-1;
+      const float reward=SpeechSetting(d,std::string("iXPRewardSpeechChallenge")+SpeechDifficulty[tier],xp[tier]);
+      if(reward>0&&reward<=1000000)p.RewardExperience(uint32_t(reward));
+    }else if(!answer)BuildChoices(ctx);
+    return true;
+  }
   return Enter(*i,ctx,p);
 }
 bool Session::RequestGoodbye(const Context& ctx,fo3player::Player& p){
@@ -130,9 +183,14 @@ void Session::BuildChoices(const Context& ctx) {
   std::unordered_set<uint32_t> seen;
   for(auto t:topics) {
     auto td=d.dialogueTopics.find(t);if(td==d.dialogueTopics.end()||td->second.type!=0||!seen.insert(t).second)continue;
-    auto chosen=Resolve(t,ctx);if(!chosen)continue;
+    auto chosen=ResolveChoice(t,ctx);if(!chosen)continue;
     const auto& text=chosen->prompt.empty()?td->second.text:chosen->prompt;
-    if(!text.empty())choices.push_back({t,chosen->id,text});
+    if(text.empty())continue;
+    if(chosen->flags&0x80){
+      const auto chance=int(SpeechChance(*chosen,ctx)*100.f+.5f);
+      const auto& speech=d.skills[size_t(fo3player::Skill::Speech)].name;
+      choices.push_back({t,chosen->id,"["+(speech.empty()?std::string("Speech"):speech)+", "+std::to_string(chance)+"%] "+text});
+    }else choices.push_back({t,chosen->id,text});
   }
   selected=0;
 }

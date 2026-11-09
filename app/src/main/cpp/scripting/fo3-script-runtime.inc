@@ -746,9 +746,9 @@ float Player::QuestScriptDelay(uint32_t quest)const{
 } // namespace fo3player
 
 namespace fo3player {
-void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world){
-  if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return;
-  scriptPlayerPosition_={x,y,z};scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;TouchMerchantCells(cell);
+void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius){
+  if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)||!std::isfinite(triggerRadius)||triggerRadius<0)return;
+  scriptPlayerPosition_={x,y,z};scriptPlayerTriggerRadius_=triggerRadius;scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;TouchMerchantCells(cell);
 }
 void Player::SetScriptPlayerHeading(float yaw){
   scriptPlayerHeadingKnown_=std::isfinite(yaw);
@@ -989,7 +989,7 @@ std::vector<std::pair<uint32_t,bool>> Player::ScriptTriggerChanges() const {
     const auto& p=target->second;
     const bool resident=scriptPlayerWorld_?p.world==scriptPlayerWorld_:p.cell==scriptPlayerCell_;
     bool disabled=true;std::string error;
-    const bool inside=resident&&ReferenceDisabled(entry.first,disabled,error)&&!disabled&&fo3script::Contains(p,entry.second,scriptPlayerPosition_);
+    const bool inside=resident&&ReferenceDisabled(entry.first,disabled,error)&&!disabled&&fo3script::Contains(p,entry.second,scriptPlayerPosition_,scriptPlayerTriggerRadius_);
     if(inside!=bool(scriptInsideTriggers_.count(entry.first)))changes.push_back({entry.first,inside});
   }
   std::sort(changes.begin(),changes.end(),[](const auto& a,const auto& b){return a.first<b.first;});return changes;
@@ -1001,7 +1001,7 @@ std::vector<uint32_t> Player::ScriptOccupiedTriggers() const {
     const auto target=catalog_->pipboy.targets.find(reference);const auto shape=catalog_->pipboy.triggerPrimitives.find(reference);
     if(target==catalog_->pipboy.targets.end()||shape==catalog_->pipboy.triggerPrimitives.end())continue;
     const auto& p=target->second;bool disabled=true;std::string error;
-    if((scriptPlayerWorld_?p.world==scriptPlayerWorld_:p.cell==scriptPlayerCell_)&&ReferenceDisabled(reference,disabled,error)&&!disabled&&fo3script::Contains(p,shape->second,scriptPlayerPosition_))active.push_back(reference);
+    if((scriptPlayerWorld_?p.world==scriptPlayerWorld_:p.cell==scriptPlayerCell_)&&ReferenceDisabled(reference,disabled,error)&&!disabled&&fo3script::Contains(p,shape->second,scriptPlayerPosition_,scriptPlayerTriggerRadius_))active.push_back(reference);
   }
   std::sort(active.begin(),active.end());return active;
 }

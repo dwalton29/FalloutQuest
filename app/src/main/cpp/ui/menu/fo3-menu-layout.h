@@ -326,7 +326,7 @@ class Layout {
         return 2.;
       if (key == "terminal")
         return double(TerminalColour);
-      if (key == "hudmain" || key == "pipboy" || key == "Pipboy")
+      if (key == "hudmain" || key == "HUDMain" || key == "pipboy" || key == "Pipboy")
         return 1.;
       return key;
     }

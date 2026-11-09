@@ -196,10 +196,16 @@ int main(int argc, char **argv) {
         assert(l.S(marker,"filename")=="Interface\\VATS\\vats_head_divider.dds");
         assert(l.S(l.Find("chance_to_hit",head),"string")=="73%");
         assert(l.S(l.Find("limb_name",head),"string")=="Head");
+        assert(Near(l.Bounds(l.Find("chance_to_hit",head)).x,l.Bounds(l.Find("limb_name",head)).x));
+        assert(l.N(l.Find("chance_to_hit",head),"systemcolor")==1);
         assert(Near(l.N(l.Find("meter",head),"_Value"),.6f));
         l.Reset();
         l.width=1280;l.height=900;
         BindVatsChrome(l,"HP 100","AP 58/75",1,1,.23f,"Raider",.7f,{"Shot  Head"},"",true);
+        const auto buttonText=[&](const char* name){return l.Find("button_text",l.Find(name));};
+        assert(Near(l.Bounds(buttonText("Select_button")).x,l.Bounds(buttonText("accept_button")).x));
+        assert(Near(l.Bounds(buttonText("accept_button")).x,l.Bounds(buttonText("return_button")).x));
+        assert(l.N(buttonText("accept_button"),"systemcolor")==1);
         const auto vats=l.Paint();
         for(const auto* art:{"glow_general_button_rt.dds","glow_general_button_a.dds","glow_general_button_b.dds"})
           assert(std::any_of(vats.begin(),vats.end(),[&](const auto& d){

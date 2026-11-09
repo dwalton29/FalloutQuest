@@ -21,6 +21,8 @@ inline std::atomic<uint32_t> gFo3LoadingWorldspace{0u};
 inline std::atomic<uint64_t> gFo3LoadingGeneration{0u};
 inline std::atomic<uint32_t> gFo3LoadingPresentedFrames{0u};
 inline std::atomic<uint64_t> gFo3LoadingStartedUs{0u};
+inline std::atomic<uint64_t> gFo3LoadingAudioFrameUs{0u};
+inline constexpr uint64_t Fo3LoadingAudioFrameTimeoutUs=150000;
 
 inline uint64_t Fo3LoadingClockUs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -38,6 +40,7 @@ inline void BeginFo3Loading(uint32_t cellFormId, uint32_t worldspaceFormId) {
     gFo3LoadingCell.store(cellFormId, std::memory_order_release);
     gFo3LoadingWorldspace.store(worldspaceFormId, std::memory_order_release);
     gFo3LoadingPresentedFrames.store(0u, std::memory_order_release);
+    gFo3LoadingAudioFrameUs.store(0u, std::memory_order_release);
     gFo3LoadingGeneration.fetch_add(1u, std::memory_order_acq_rel);
     gFo3LoadingPhase.store(FO3_LOADING_PRESENT, std::memory_order_release);
 }
@@ -64,11 +67,16 @@ inline uint64_t GetFo3LoadingGeneration() {
 
 // An animation key is audible only after its generation has put a frame
 // on the headset. The final covered frame is already silent.
-inline bool IsFo3LoadingAudioCurrent(uint64_t generation) {
+inline bool IsFo3LoadingAudioCurrent(uint64_t generation,uint64_t now=Fo3LoadingClockUs()) {
     const int phase = gFo3LoadingPhase.load(std::memory_order_acquire);
+    const auto presented=gFo3LoadingAudioFrameUs.load(std::memory_order_acquire);
     return generation != 0 && phase != FO3_LOADING_IDLE && phase != FO3_LOADING_POST &&
         GetFo3LoadingGeneration() == generation &&
-        gFo3LoadingPresentedFrames.load(std::memory_order_acquire) != 0;
+        presented && now>=presented && now-presented<=Fo3LoadingAudioFrameTimeoutUs;
+}
+inline void MarkFo3LoadingAudioFramePresented(uint64_t generation,uint64_t now=Fo3LoadingClockUs()) {
+    if(generation&&generation==GetFo3LoadingGeneration()&&IsFo3LoadingVisible())
+        gFo3LoadingAudioFrameUs.store(now,std::memory_order_release);
 }
 
 inline uint32_t GetFo3LoadingPresentedFrames() {
@@ -106,6 +114,7 @@ inline void NotifyFo3TransitionComplete() {
 inline void CancelFo3Loading() {
     gFo3LoadingPhase.store(FO3_LOADING_IDLE, std::memory_order_release);
     gFo3LoadingPresentedFrames.store(0u, std::memory_order_release);
+    gFo3LoadingAudioFrameUs.store(0u, std::memory_order_release);
 }
 
 // Called only after xrEndFrame succeeds.

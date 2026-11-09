@@ -156,6 +156,7 @@ bool SetFo3ScriptCollisionPose(uint32_t,const Fo3DoorCollisionPose&);
 
 // Read-only canonical support state for fast-travel admission.
 bool IsFo3PlayerGrounded();
+float GetFo3PlayerCollisionRadius();
 
 // Actual authored BHK target blocks only; used by scripted model animation.
 std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t reference);

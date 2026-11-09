@@ -26,14 +26,17 @@ struct SpeechLane {
     std::pair<uint32_t,uint32_t> pendingPackageDone{};
     double began=0;
     bool subtitle=false,noTargetLook=false,noHeadTracking=false;
+    bool paused=false;
+    uint32_t pausedQuest=0;
+    uint16_t pausedStage=0;
 };
 static std::array<SpeechLane,2> speechLanes;
 uint32_t SpeechLookTarget(uint32_t actor){
     for(const auto& lane:speechLanes)
-        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noHeadTracking&&lane.reference==actor&&lane.reference==lane.identity)
+        if(!lane.paused&&lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noHeadTracking&&lane.reference==actor&&lane.reference==lane.identity)
             return lane.target==actor?0:lane.target;
     for(const auto& lane:speechLanes)
-        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noHeadTracking&&!lane.noTargetLook&&lane.target==actor&&lane.target==lane.listener&&lane.reference!=actor)
+        if(!lane.paused&&lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noHeadTracking&&!lane.noTargetLook&&lane.target==actor&&lane.target==lane.listener&&lane.reference!=actor)
             return lane.reference;
     return 0;
 }
@@ -77,6 +80,35 @@ static void SpeechStop(SpeechLane& lane,unsigned index){
     lane.dialogue.End("scripted speech stopped");
     lane.reference=lane.identity=lane.target=lane.listener=lane.topic=lane.token=0;
     lane.package=lane.packageOwner=0;lane.subtitle=lane.noTargetLook=lane.noHeadTracking=false;
+    lane.paused=false;lane.pausedQuest=lane.pausedStage=0;
+}
+bool AllowsPlayerDialogue(){
+    return std::none_of(speechLanes.begin(),speechLanes.end(),[](const auto& lane){
+        return lane.dialogue.Active()&&(lane.target==fo3player::PlayerRef||lane.dialogue.phase==fo3dialogue::Phase::Results);
+    });
+}
+static uint16_t SpeechQuestStage(const fo3player::Player& player,uint32_t quest){
+    const auto found=player.Snapshot().pipboy.quests.find(quest);
+    return found==player.Snapshot().pipboy.quests.end()?0:found->second.stage;
+}
+void PauseForPlayerDialogue(){
+    if(!gPlayerSession)return;
+    auto& player=gPlayerSession->player;
+    for(unsigned index=0;index<speechLanes.size();++index){
+        auto& lane=speechLanes[index];
+        if(lane.paused||lane.dialogue.phase!=fo3dialogue::Phase::Speaking)continue;
+        const auto* info=lane.dialogue.Current(player.Definitions().pipboy);
+        lane.pausedQuest=info?info->quest:0;
+        lane.pausedStage=SpeechQuestStage(player,lane.pausedQuest);
+        lane.paused=true;
+        player.SetScriptActorTalking(lane.reference,false);
+        player.SetScriptActorTalking(lane.identity,false);
+        if(auto* actor=DialogueActor(lane.reference)){
+            actor->runtime.speaking=false;actor->runtime.scriptSpeechToken=0;actor->lastFrame=UINT64_MAX;
+        }
+        fo3audio::StopDialogueLane(index);
+    }
+    scriptSubtitle.visible=false;
 }
 
 static uint64_t runtimeGeneration=~uint64_t{0};
@@ -129,12 +161,25 @@ static void AdvanceSpeech(SpeechLane& lane,unsigned index,fo3player::Player& pla
         Q230DialogueResponseAnimation(*actor,speech);
     bool disabled=true;
     std::string error;
-    if(gDialogue.Active()||IsFo3LoadingVisible()||
+    if(IsFo3LoadingVisible()||
        !player.ReferenceDisabled(lane.reference,disabled,error)||disabled||
        (lane.identity!=lane.reference&&(player.TalkingActivatorActor(lane.reference)!=lane.identity||player.ActorHealth(lane.identity)<=0))||
        (lane.listener!=lane.target&&(player.TalkingActivatorActor(lane.target)!=lane.listener||player.ActorHealth(lane.listener)<=0))||
-       seconds-lane.began>60){
+       (!lane.paused&&seconds-lane.began>60)){
         SpeechStop(lane,index);
+        return;
+    }
+    if(lane.paused){
+        // Player dialogue can resolve the same scene. Do not replay an
+        // interrupted line from a previous stage or execute its old results.
+        if(lane.pausedQuest&&SpeechQuestStage(player,lane.pausedQuest)!=lane.pausedStage){
+            SpeechStop(lane,index);
+            return;
+        }
+        lane.paused=false;
+        player.SetScriptActorTalking(lane.reference,true);
+        player.SetScriptActorTalking(lane.identity,true);
+        SpeechPlay(lane,index,player);
         return;
     }
 
@@ -242,6 +287,7 @@ void SpeechTick(){
         ResetSpeech();
         speechGeneration=player.ScriptRuntimeGeneration();
     }
+    if(gDialogue.Active())return;
     for(unsigned i=0;i<speechLanes.size();++i) {
         AdvanceSpeech(speechLanes[i],i,player);
         if(speechLanes[i].dialogue.resultTicket)break;
@@ -465,10 +511,24 @@ void Animate(){
         if(state.clip<0||state.settled)continue;
         const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started+state.presentationTime);
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
-        fo3animsound::Advance(gPlayerSession->player.Definitions().pipboy,clip,state.lastSound,elapsed,[](uint32_t id){fo3audio::SoundEvent(id);});state.lastSound=elapsed;
+        auto& player=gPlayerSession->player;
+        const auto* first=state.shapes.empty()?nullptr:&gObjects[state.shapes.front()];
+        bool disabled=true;std::string soundError;
+        // A controller sequence can survive a resident visual refresh. Only
+        // the live placed object can emit its keys, from its authored origin.
+        if(first&&!IsFo3LoadingVisible()&&
+           player.ReferenceDisabled(entry.first,disabled,soundError)&&!disabled){
+            const auto* source=first->q2016PlacementMatrix+12;
+            const float dx=source[0]-gQ210Head[0],dy=source[1]-gQ210Head[1],dz=source[2]-gQ210Head[2];
+            const float horizontal=std::hypot(dx,dz),yaw=gQ210Head[3];
+            const float pan=horizontal>0?(dx*std::cos(yaw)-dz*std::sin(yaw))/horizontal:0;
+            fo3animsound::Advance(player.Definitions().pipboy,clip,state.lastSound,elapsed,[&](uint32_t id){
+                fo3audio::SoundAt(id,std::hypot(horizontal,dy)*FO3_UNITS_PER_METRE,pan);
+            });
+        }
+        state.lastSound=elapsed;
         for(const auto& value:state.pose.properties)if(value.kind==fo3anim::PropertyKind::Visibility)state.visible[size_t(value.bone)]=value.value[0]!=0;
-        const GpuObject* first=nullptr;
-        for(size_t shape:state.shapes){auto& object=gObjects[shape];if(!first)first=&object;
+        for(size_t shape:state.shapes){auto& object=gObjects[shape];
             const int bone=object.q2401AnimationBone;
             const auto* delta=fo3dooranim::ShapeDelta(asset,state.pose,bone);
             fo3anim::Matrix scene{};

@@ -7,11 +7,16 @@
 namespace fo3dialogue {
 inline std::string SelectionId(uint32_t id){char b[16];std::snprintf(b,sizeof(b),"%08X",id);return b;}
 inline bool EligibleInfo(const fo3pipdata::Info& i,const Context& ctx,
-  const Diagnostic& diagnostic,const std::function<bool(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&)>& previewReferences) {
+  const Diagnostic& diagnostic,const std::function<bool(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&)>& previewReferences,
+  bool playerChoice=false) {
   const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;
   if(!i.orderValid){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+SelectionId(i.id)+" cyclic Previous INFO order");return false;}
   if(!SupportedInfoStructure(i)||(i.speaker&&i.speaker!=ctx.speaker.base))return false;
-  if((i.flags&4)&&p.Snapshot().pipboy.saidInfos.count((uint64_t(ctx.speaker.reference)<<32)|i.id))return false;
+  if(i.flags&0x80){
+    const auto speech=d.formNames.find("avspeech");
+    if(!playerChoice||ctx.target.reference!=fo3player::PlayerRef||speech==d.formNames.end()||speech->second!=i.challenge)return false;
+  }
+  if((i.flags&0x84)&&p.Snapshot().pipboy.saidInfos.count((uint64_t(ctx.speaker.reference)<<32)|i.id))return false;
   if((i.flags2&1u)&&!p.CanSayDailyInfo(ctx.speaker.reference,i.id))return false;
   std::string error;
   if(!Conditions(i.conditions,ctx,error)){if(!error.empty()&&diagnostic)diagnostic("DIALOGUE UNSUPPORTED CONDITION actor="+SelectionId(ctx.speaker.reference)+" base="+SelectionId(ctx.speaker.base)+" dial="+SelectionId(i.topic)+" info="+SelectionId(i.id)+" "+error);return false;}

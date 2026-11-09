@@ -6,6 +6,7 @@ namespace fo3dialogue {
 // Conditions, ordering, quest state, speaker and voice checks remain separate.
 inline bool SupportedInfoStructure(const fo3pipdata::Info& i) noexcept {
   return (i.type==0||i.type==1||i.type==3)&&!(i.recordFlags&0x20)&&(i.nextSpeaker==0||(i.type==1&&i.nextSpeaker==1))&&
-    !(i.flags2&~1u)&&!(i.flags&0x80)&&!i.responses.empty();
+    !(i.flags2&~1u)&&!i.responses.empty()&&
+    (!(i.flags&0x80)||(i.type==0&&i.challenge&&i.challengeValue>=1&&i.challengeValue<=5));
 }
 }

@@ -590,7 +590,7 @@ public:
   // evaluation to capture provenance.
   bool PumpWorldAwareGameMode(double realSeconds,const std::vector<uint32_t>& resident,
       const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode=false);
-  void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world);
+  void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius=0);
   void SetScriptPlayerHeading(float sceneYaw);
   bool ScriptHeadingAngle(uint32_t reference,uint32_t target,float& degrees) const;
   bool ScriptDistance(float& distance) const;
@@ -882,6 +882,7 @@ private:
   mutable std::vector<uint32_t> q230GameModeQuestIds_;
   uint32_t scriptActivator_=0,scriptReference_=0,scriptPlayerCell_=0,scriptPlayerWorld_=0;
   std::array<float,3> scriptPlayerPosition_{};
+  float scriptPlayerTriggerRadius_=0;
   bool scriptPlayerPositionKnown_=false;
   float scriptPlayerHeading_=0;
   bool scriptPlayerHeadingKnown_=false;

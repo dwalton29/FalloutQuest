@@ -31,6 +31,15 @@ inline int BindVatsLimb(Layout& layout,const VatsReadout& readout) {
   layout.Set(row,"_LimbName",readout.name);
   layout.Set(row,"_LimbNameVisible",double(readout.selected));
   layout.Set(row,"_MeterPercent",double(std::clamp(readout.condition,0.f,1.f)));
+  // Use the authored limb meter as the shared alignment reference for both
+  // text lines. Its position already follows the selected divider variant.
+  const int meter=layout.Find("meter",row);
+  const double justify=layout.N(meter,"justify");
+  const double textX=layout.N(meter,"x")+layout.N(meter,"width")*justify*.5;
+  for(const char* name:{"limb_name","chance_to_hit"}){
+    const int text=layout.Find(name,row);
+    layout.Set(text,"x",textX);layout.Set(text,"justify",justify);
+  }
   return row;
 }
 
@@ -68,10 +77,16 @@ inline void BindVatsChrome(Layout& layout,const std::string& hpLabel,const std::
       {"Select_button","glow_general_button_rt.dds"},
       {"accept_button","glow_general_button_a.dds"},
       {"return_button","glow_general_button_b.dds"}};
+  const double rightEdge=layout.width-70.;
+  double buttonWidth=0;
+  for(const auto& [name,texture]:buttons)
+    buttonWidth=std::max(buttonWidth,double(layout.N(layout.Find(name),"width")));
   for(const auto& [name,texture]:buttons){
     const int button=layout.Find(name);
     layout.Set(button,"visible",double(aiming));
-    layout.Set(button,"_x",layout.width-70.-layout.N(button,"width"));
+    // text_box.xml applies right justification to this anchor itself.
+    layout.Set(button,"_x",rightEdge);
+    layout.Set(button,"_fixedwidth",buttonWidth);
     const int icon=layout.Find("xbox_button",button);
     layout.Set(icon,"visible",1.);
     layout.Set(icon,"filename",texture);
@@ -102,11 +117,11 @@ inline void BindVatsChrome(Layout& layout,const std::string& hpLabel,const std::
   const int list=layout.Find("queued_actions");
   layout.Set(list,"visible",double(!actions.empty()));
   layout.Set(list,"locus",1.);layout.Set(list,"alpha",255.);
-  layout.Set(list,"x",double(layout.width-67));layout.Set(list,"height",double(actions.size()*34));
+  layout.Set(list,"x",rightEdge-15.);layout.Set(list,"height",double(actions.size()*34));
   for(size_t i=0;i<actions.size();++i){
     const int row=layout.Instantiate("queued_action",list);
     layout.Set(row,"listindex",double(i));layout.Set(row,"height",34.);
-    layout.Set(row,"y",double(i*34));layout.Set(row,"string",actions[i]);
+    layout.Set(row,"y",double(i*34));layout.Set(row,"locus",1.);layout.Set(row,"string",actions[i]);
   }
   if(!status.empty()){
     const int text=layout.Instantiate("template_aiming_text",layout.Find("GlowBranch"));

@@ -1004,7 +1004,11 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   const auto wristCount=p.ItemCount(d.formNames.at("pipboy"));
   talk("cg02dadref",{});assert(p.Snapshot().pipboy.quests.at(birthday).stage==80);queuedSpeech();
   const auto photo=scriptedReference("cg02playerpicturetriggerscript");const auto& photoAt=d.targets.at(photo);
-  p.SetScriptPlayerLocation(photoAt.x,photoAt.y,photoAt.z,photoAt.cell,photoAt.world);p.SetScriptPlayerHeading(0);
+  const float playerX=photoAt.x+d.triggerPrimitives.at(photo).bounds[0]+10;
+  p.SetScriptPlayerLocation(playerX,photoAt.y,photoAt.z,photoAt.cell,photoAt.world);p.SetScriptPlayerHeading(0);
+  const auto pointContact=p.ScriptTriggerChanges();
+  assert(std::none_of(pointContact.begin(),pointContact.end(),[&](const auto& change){return change.first==photo&&change.second;}));
+  p.SetScriptPlayerLocation(playerX,photoAt.y,photoAt.z,photoAt.cell,photoAt.world,26);
   for(const auto& change:p.ScriptTriggerChanges())p.AcknowledgeScriptTrigger(change.first,change.second);
   const auto occupied=p.ScriptOccupiedTriggers();assert(std::find(occupied.begin(),occupied.end(),photo)!=occupied.end());
   const auto ready=fo3dialogue::VariableKey(d,"CG02.PlayerReady");
@@ -1012,7 +1016,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   actorArrival("cg02dadref","cg02dadwaitforpicture");actorArrival("cg02jonasref","cg02jonaswaitforpicture");
   assert(p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG02.DadReady"))==1&&p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG02.JonasReady"))==1);
   const auto& photographer=p.Snapshot().actors.at(jonas);
-  const auto faceJonas=float(std::atan2(-(photographer.position[0]-photoAt.x),photographer.position[1]-photoAt.y));
+  const auto faceJonas=float(std::atan2(-(photographer.position[0]-playerX),photographer.position[1]-photoAt.y));
   p.SetScriptPlayerHeading(faceJonas+1.57079632679f);event(photo,"OnTrigger");assert(p.Snapshot().pipboy.dialogueVariables.at(ready)==0);
   p.SetScriptPlayerHeading(faceJonas);
   {auto pose=p.PrepareReferenceEventTransaction(photo,"OnTrigger",fo3player::PlayerRef,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(pose),error);
