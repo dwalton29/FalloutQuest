@@ -1,4 +1,5 @@
 #include "player/fo3-player-presentation.h"
+#include "player/fo3-player-death.h"
 #include "scripting/fo3-script-cell-handoff.h"
 #include "npc/fo3-response-animation.h"
 #include "rendering/mesh/fo3-lod-material.h"
@@ -196,7 +197,8 @@ uint32_t gFo3StartupQuest=0;
 std::string gFo3StartupError;
 bool gFo3PauseOpen=false,gFo3FocusPaused=false,gFo3GameplayInputSuppressed=false;
 bool Fo3VatsFocus();
-bool Fo3GameplayBlockedOutsideVats(){return gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
+bool Fo3PlayerDead();
+bool Fo3GameplayBlockedOutsideVats(){return Fo3PlayerDead()||gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
 bool Fo3GameplayBlocked(){return Fo3GameplayBlockedOutsideVats()||Fo3VatsFocus();}
 bool Fo3ResidentLegacyStreamActive();
 fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
@@ -1037,7 +1039,7 @@ fo3vr::PipboyTracking gVrPipTracking;
 uint64_t gPipRadioRefresh=0;
 void RefreshFo3PipboyRadio(){++gPipRadioRefresh;gPipMenu.dirty=true;}
 void ResetFo3Pipboy(){gVrPipTracking.Reset();gPipActivation.Reset();gPipSolved=false;gPipMenu.dirty=true;}
-bool Fo3PipboyFocus(){return gPipActivation.Focus();}
+bool Fo3PipboyFocus(){return gPipActivation.Focus()&&!Fo3PlayerDead();}
 float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};
 float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
 float gQ210RightHand[3]{0.0f, 0.0f, 0.0f};
@@ -3660,6 +3662,7 @@ struct Fo3SceneLoadWork {
     std::string abortReason;
     bool boot = false;
     bool bootAttempted = false;
+    bool deathReload = false;
     bool contextApplied = false;
     std::unordered_set<std::string> previousCollisionPolicy;
 };
@@ -3672,6 +3675,8 @@ uint64_t gSceneLoadFrame = 0u;
 fqopaque::GpuTimer gLoadingGpuTimer;
 GLsync gLoadingUploadFence=nullptr;
 std::unique_ptr<fo3player::Session> gPlayerSession;
+bool Fo3PlayerDead(){return gPlayerSession&&gPlayerSession->player.Health()<=0;}
+uint32_t Fo3AudioCell(){return gFo3Title.open?fo3audio::TitleCell:Fo3PlayerDead()?fo3audio::DeathCell:gCurrentCellFormId;}
 float Fo3PlayerTrackingScale(){return gPlayerSession?std::clamp(gPlayerSession->player.PlayerTrackingScale(),.1f,10.f):1.f;}
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 // Disabled inventory displays keep their immutable GPU resources until normal
@@ -4466,6 +4471,7 @@ bool gWeaponPalmValid[2]{};
 bool gFo3ResidentSavePending=false;
 void FlushFo3PlayerState() {
     if (!gPlayerSession || gPlayerSession->saveBlocked || gFo3ResidentExchangeRecoveryFailed) return;
+    if(Fo3PlayerDead()){gFo3ResidentSavePending=false;return;}
     if(Fo3ResidentFrameBlocked()){gFo3ResidentSavePending=true;return;}
     fqframehitch::Operation saveTiming("player-save",[](const char* name,uint64_t us){Q6H_LOGI("Q284 SLOW OP name=%s us=%llu",name,(unsigned long long)us);});
     WeaponPersistWorld();
@@ -4600,7 +4606,15 @@ void AbortFo3SceneLoad(const char* reason) {
     gSceneLoad.missingTextures.clear();
     gSceneLoad.active = false;
     if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
-    if(gSceneLoad.boot&&!gSceneReady){gPlayerSession.reset();gFo3SavePose={};gFo3Title.open=true;gFo3Title.neutral=false;
+    if(gSceneLoad.deathReload||(gSceneLoad.boot&&!gSceneReady)){
+        if(gSceneLoad.deathReload){
+            WeaponShutdown();
+            gSceneReady=false;
+            gExteriorStreamingActiveQ1890=false;
+            gFo3ResidentSavePending=false;
+            gFo3Title.saves=fo3title::Saves(fo3title::SaveRoot);
+        }
+        gPlayerSession.reset();gFo3SavePose={};gFo3Title.open=true;gFo3Title.neutral=false;
         gFo3Title.Notice(gFo3StartupError.empty()?"Could not load the selected game. The save has been preserved. Check logcat for the asset or save error.":gFo3StartupError);}
 }
 
@@ -4613,9 +4627,14 @@ static void Q230RealizeSceneActors(fo3player::Player& player,uint32_t cell,uint3
         if(player.ReferenceDisabled(entry.first,disabled,error)&&!disabled)player.RealizeActor(entry.first);
     }
 }
-bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
-    if (gSceneLoad.active) return false;
+bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bool deathReload=false) {
+    if (gSceneLoad.active || (deathReload&&!Fo3PlayerDead())) return false;
     if(!QuiesceFo3ResidentForSceneChange())return false;
+    if(deathReload){
+        DiscardFo3PendingCellTransitionQ74();
+        BeginFo3Loading(0,0);
+        gFo3StartupError.clear();
+    }
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     DiscardFo3ResidentLightPlan();
@@ -4624,6 +4643,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.active = true;
     gSceneLoad.aborting=false;gSceneLoad.abortReason.clear();
     gSceneLoad.boot = boot;
+    gSceneLoad.deathReload = deathReload;
     gSceneLoad.contextApplied = false;
     gSceneLoad.doorWorkerAttempted=false;
     gSceneLoad.waterWorkerAttempted=false;
@@ -4653,10 +4673,11 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     Q6H_LOGI("SCENE LOAD BEGIN: boot=%d cell=%08X worldspace=%08X generation=%llu cpuWorker=1",
              boot ? 1 : 0, request.cellFormId, request.worldspaceFormId,
              static_cast<unsigned long long>(gSceneLoad.generation));
-    const bool loadPlayer = !gPlayerSession;
-    const std::string startupPath=gFo3StartupPath;
-    const bool startupNew=gFo3StartupNew;
-    const uint32_t startupQuest=gFo3StartupQuest;
+    const bool loadPlayer = !gPlayerSession||deathReload;
+    const auto reloadCatalog=deathReload?gPlayerSession->player.SharedDefinitions():nullptr;
+    const std::string startupPath=deathReload?gPlayerSession->savePath:gFo3StartupPath;
+    const bool startupNew=!deathReload&&gFo3StartupNew;
+    const uint32_t startupQuest=deathReload?0:gFo3StartupQuest;
     fqloadprofile::Log("BEGIN generation=%llu mode=%s cell=%08X worldspace=%08X playerCatalog=%d sceneReadyBefore=%d",
         (unsigned long long)gSceneLoad.generation,boot?"cold-boot":"transition",
         request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
@@ -4666,60 +4687,56 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     StartFo3SceneDoorWorker(request.cellFormId);
     StartFo3SceneWaterWorker(request.worldspaceFormId);
     StartFo3SceneEmittanceWorker(request.worldspaceFormId);
-    if(gPlayerSession)Q230RealizeSceneActors(gPlayerSession->player,request.cellFormId,request.worldspaceFormId,request.x,request.y);
-    const auto referenceState=CaptureFo3ReferenceState();
+    if(gPlayerSession&&!deathReload)Q230RealizeSceneActors(gPlayerSession->player,request.cellFormId,request.worldspaceFormId,request.x,request.y);
+    const auto referenceState=deathReload?nullptr:CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
-            [request, boot, loadPlayer, referenceState, startupPath, startupNew, startupQuest](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
+            [request, boot, loadPlayer, reloadCatalog, referenceState, startupPath, startupNew, startupQuest](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
         result.request = request;
         result.referenceState=referenceState;
         auto phase = std::chrono::steady_clock::now();
         if (loadPlayer) {
-            fo3player::Catalog catalog;
-            std::string error;
-            if (fo3player::LoadCatalog(fo3assets::FalloutMasterPath(), catalog, error)) {
-                // Development NPC daytime-routing test: start ten in-game
-                // minutes before the original 10:00 Common House routine.
-                // Do not alter Bethesda's ESM, calendar or TimeScale.
-                // Normal New Game retains the original GLOB calendar/time.
+            if (reloadCatalog) {
+                result.playerSession = std::make_unique<fo3player::Session>(reloadCatalog);
+            } else {
+                fo3player::Catalog catalog;
+                std::string error;
+                if (!fo3player::LoadCatalog(fo3assets::FalloutMasterPath(),catalog,error)) {
+                    Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s",error.c_str());
+                    return false;
+                }
+                // Keep the original global clock on New Game and the existing
+                // legacy fallback when an old save lacks clock data.
                 if(!startupNew)catalog.initial.gameHour=fo3devclock::kStartupGameHour;
                 result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
-                auto& session = *result.playerSession;
-                session.player.SetScriptEventDiagnostic([](const std::string& message) {
-                    Q6H_LOGI("SCRIPT EVENT: %s",message.c_str());
-                });
-                Q6H_LOGI("GAME START source=%s gameHour=%.6f timeScale=%.1f",
-                    startupNew?"original-globals":"legacy-development-default",
-                    session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
-                session.savePath = startupPath;
-                // Persist authored script/quest state across Quest restarts and
-                // update-compatible APK installs. Invalid saves are retained,
-                // never silently erased or replaced by pristine ESM state.
-                errno=0;
-                if(!startupNew){
-                if(FILE* existing=std::fopen(session.savePath.c_str(),"rb")){
-                    std::fclose(existing);
-                    std::string restoreError;
-                    if(!session.player.Restore(session.savePath,restoreError)){
-                        session.saveBlocked=true;
-                        Q6H_LOGE("PLAYER RESTORE FAILED (save retained): %s",restoreError.c_str());
-                    } else {
-                        Q6H_LOGI("PLAYER RESTORED: %s",session.savePath.c_str());
-                    }
-                } else {
-                    session.saveBlocked=true;
-                    Q6H_LOGE("PLAYER SAVE ACCESS FAILED: %s errno=%d",
-                             session.savePath.c_str(),errno);
+            }
+            auto& session = *result.playerSession;
+            session.player.SetScriptEventDiagnostic([](const std::string& message) {
+                Q6H_LOGI("SCRIPT EVENT: %s",message.c_str());
+            });
+            if(!reloadCatalog)Q6H_LOGI("GAME START source=%s gameHour=%.6f timeScale=%.1f",
+                startupNew?"original-globals":"legacy-development-default",
+                session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
+            session.savePath = startupPath;
+            // Restore into the candidate before publishing any live state.
+            if(!startupNew){
+                std::string restoreError;
+                if(!session.player.Restore(session.savePath,restoreError)){
+                    Q6H_LOGE("PLAYER RESTORE FAILED (save retained): %s",restoreError.c_str());
+                    if(reloadCatalog)result.startupError="Could not reload the previous save. Choose another save from Load.";
+                    return false;
                 }
-                } // New games never read or overwrite the previous playthrough.
-                if(session.saveBlocked)return false;
-                if(!session.saveBlocked){
-                    const auto census=session.player.RegisterOriginalActors();
-                    Q6H_LOGI("NPC ACHR CENSUS authored=%zu registered=%zu existing=%zu conditional=%zu unsupportedBase=%zu unsupportedPose=%zu cap=%zu",
-                        census.authored,census.registered,census.alreadyTracked,
-                        census.disabledOrConditional,census.unsupportedBase,
-                        census.unsupportedPlacement,census.limitReached);
+                if(session.player.Health()<=0){
+                    result.startupError="This save contains a dead player. Choose another save from Load.";
+                    return false;
                 }
-            } else {Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s", error.c_str());return false;}
+                Q6H_LOGI("PLAYER RESTORED: %s",session.savePath.c_str());
+            }
+            const auto census=session.player.RegisterOriginalActors();
+            Q6H_LOGI("NPC ACHR CENSUS authored=%zu registered=%zu existing=%zu conditional=%zu unsupportedBase=%zu unsupportedPose=%zu cap=%zu",
+                census.authored,census.registered,census.alreadyTracked,
+                census.disabledOrConditional,census.unsupportedBase,
+                census.unsupportedPlacement,census.limitReached);
+            if(reloadCatalog)session.savedRevision=session.player.Revision();
         }
         if (cancel.load(std::memory_order_acquire)) return false;
         if(startupNew&&result.playerSession){
@@ -4928,7 +4945,7 @@ bool ProcessQ74TransitionRequest() {
     StartFo3SceneEmittanceWorker(prepared.request.worldspaceFormId);
     // Recheck every frame, including between GPU slices and the collision swap.
     // A prepared projection must never publish over a newer committed save state.
-    if (gPlayerSession && (!prepared.referenceState ||
+    if (gPlayerSession && !gSceneLoad.deathReload && (!prepared.referenceState ||
         prepared.referenceState->revision != gPlayerSession->player.Snapshot().referenceStateRevision)) {
         AbortFo3SceneLoad("reference-state-changed");
         return false;
@@ -5199,6 +5216,7 @@ bool ProcessQ74TransitionRequest() {
     markFinalization("publish-environment-prefetch");
     const size_t oldObjects = gObjects.size();
     if (prepared.playerSession) {
+        if(gSceneLoad.deathReload){WeaponShutdown();gFo3SavePose={};}
         gPlayerSession = std::move(prepared.playerSession);
         gFo3ResidentSavePending=false;
         const auto& p = gPlayerSession->player;
@@ -5214,7 +5232,8 @@ bool ProcessQ74TransitionRequest() {
         const bool advanced=gPlayerSession->player.AdvanceGameHours(request.travelHours);
         Q6H_LOGI("FAST TRAVEL ARRIVED marker=%08X elapsedHours=%.3f clockAdvanced=%d",request.destinationDoorRef,request.travelHours,advanced);
     }
-    FlushFo3PlayerState();
+    // The checkpoint and its arrival sidecar stay paired across recovery.
+    if(!gSceneLoad.deathReload)FlushFo3PlayerState();
     markFinalization("flush-player-state");
     gPlayerSeat.Reset();gPlayerSeat.scene=std::move(prepared.playerFurniture);gPlayerSeatFade=0;
     Q74DeleteGpuObjects(gObjects);
@@ -15164,7 +15183,11 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glUniform1f(q1670PcBloomReadyLocation, q1670BloomReadyQ1670 ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE0);
     const Fo3ImageSpace& image = GetFo3ImageSpace();
-    const auto scriptImage=fo3worldscript::Presentation();
+    auto scriptImage=fo3worldscript::Presentation();
+    if(Fo3PlayerDead()){
+        scriptImage={};
+        scriptImage.saturation=0;
+    }
     glUniform4fv(scriptFadeLocation,1,scriptImage.fade.data());
     glUniform4fv(scriptTintLocation,1,scriptImage.tint.data());
     glUniform3f(scriptGradeLocation,scriptImage.saturation,scriptImage.brightness,scriptImage.contrast);

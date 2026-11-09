@@ -430,7 +430,7 @@ public:
         while (!exitRequested_ && !app_->destroyRequested) {
             ProcessAndroidEvents();
             ProcessXrEvents();
-            fo3audio::Context(gFo3Title.open?fo3audio::TitleCell:gCurrentCellFormId, sessionState_ == XR_SESSION_STATE_FOCUSED);
+            fo3audio::Context(Fo3AudioCell(), sessionState_ == XR_SESSION_STATE_FOCUSED);
             if (sessionRunning_) RenderFrame();
             else {
                 // STOPPING still drains cancellation and the deferred safe save.
@@ -1338,6 +1338,7 @@ private:
                     // waiting for a later focused frame, to exclude the gap.
                     PauseFo3ResidentGameplayTime();gFo3FocusPaused=true;
                     CancelFo3Vats();
+                    death_.Suspend();
                     gFo3PauseMenu.Close();gFo3PauseOpen=false;
                     residentInputBarrier_.Allow(true,false);gFo3GameplayInputSuppressed=true;
                     lastFrameTime_=0;
@@ -1348,7 +1349,7 @@ private:
                 if(sessionState_!=XR_SESSION_STATE_FOCUSED)PumpFo3ResidentWorkflow(false);
                 SetFo3ShoulderInteractionFocused(sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(sessionState_!=XR_SESSION_STATE_FOCUSED) {fo3notify::Notifications().Clear();ResetFo3Pipboy();CancelFo3Lockpick();CancelFo3Terminal();}
-                fo3audio::Context(gFo3Title.open?fo3audio::TitleCell:gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
+                fo3audio::Context(Fo3AudioCell(),sessionState_ == XR_SESSION_STATE_FOCUSED);
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
                 if (sessionState_ == XR_SESSION_STATE_READY && !sessionRunning_) {
@@ -1467,7 +1468,7 @@ private:
             double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED,exitRequested_);
         if(gFo3Title.open&&exitRequested_)ANativeActivity_finish(app_->activity);
         if(!gFo3Title.open)UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
-            double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED);
+            double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3PlayerDead());
         // The V.A.T.S. clock owns simulation pause while its controls stay live.
         gFo3GameplayInputSuppressed=!Fo3VatsFocus()&&!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
         if(gFo3GameplayInputSuppressed){
@@ -1720,6 +1721,42 @@ private:
         doorAimActiveQ1700_ = active;
     }
 
+    void UpdatePlayerDeath(XrTime now) {
+        if (!Fo3PlayerDead()) {
+            death_={};
+            return;
+        }
+        if (gFo3FocusPaused || IsFo3LoadingVisible() || gSceneLoad.active) {
+            death_.Suspend();
+            return;
+        }
+        if (death_.Begin()) {
+            PauseFo3ResidentGameplayTime();
+            CancelFo3Vats();
+            ResetFo3Pipboy();
+            gPipMenu.playingNote=0;
+            EndFo3Dialogue("player death");
+            CancelFo3Lockpick();
+            CancelFo3Terminal();
+            ShutdownFo3Movie();
+            ResetFo3LevelUpDraftAfterDebug();
+            gScriptMessagePanel={};
+            gLootPanel={};
+            gLootCursor.Target(0,0);
+            doorAimActiveQ1700_=false;
+            gFo3PauseMenu.Close();
+            gFo3PauseOpen=false;
+            fo3notify::Notifications().Clear();
+            fo3audio::StopDialogueLane(0);
+            fo3audio::StopDialogueLane(1);
+            fo3audio::Context(fo3audio::DeathCell,true);
+            fo3audio::NamedSound("MUSDeath");
+            FQ_LOGI("PLAYER DEATH: checkpoint reload pending");
+        }
+        if (death_.Ready(now))
+            BeginFo3SceneLoad({},true,true);
+    }
+
     void ApplyAuthoredDoorFacingQ1810(const XrView& view) {
         const auto& arrival = GetFo3ArrivalFacingQ74();
         const float physicalHeadYaw = YawFromQuaternion(view.pose.orientation);
@@ -1797,7 +1834,7 @@ private:
         const bool focusBlocked=sessionState_!=XR_SESSION_STATE_FOCUSED||!frameState.shouldRender;
         if(focusBlocked&&!gFo3FocusPaused)PauseFo3ResidentGameplayTime();
         gFo3FocusPaused=focusBlocked;
-        if(focusBlocked){CancelFo3Vats();gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
+        if(focusBlocked){death_.Suspend();CancelFo3Vats();gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
         // Sample even on non-rendered/invalid-view frames. Resumption establishes
         // a fresh baseline before any gameplay consumer; XR tracking stays raw.
         (void)Fo3GameplayNow();
@@ -1859,6 +1896,7 @@ private:
                 fo3loadingvr::SetHead(loadingHead.position.x,loadingHead.position.y,loadingHead.position.z,
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
+                UpdatePlayerDeath(frameState.predictedDisplayTime);
                 // All loading work advances once before stereo acquisition.
                 // No scene uploads or preparation are dispatched from an eye.
                 if(!gSceneReady && !gFo3Title.open) {
@@ -2076,7 +2114,7 @@ private:
                 }
                 bool dialogueControls=vatsOwned;
                 const bool movieControls=Fo3MovieFocus();
-                UpdateFo3Movie(gameplaySeconds,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,
+                if(!Fo3PlayerDead())UpdateFo3Movie(gameplaySeconds,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,
                     !Fo3GameplayBlocked()&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED,
                     q210RightValid&&sessionState_==XR_SESSION_STATE_FOCUSED,gQ210Head);
                 if(!Fo3GameplayBlocked()&&!vatsOwned) {
@@ -2261,7 +2299,7 @@ private:
                         loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                     fo3titleui::Prepare(gFo3Title);
                 }
-                if(gSceneReady&&!IsFo3LoadingVisible()&&!gFo3Title.open&&!gSceneLoad.active){
+                if(gSceneReady&&!IsFo3LoadingVisible()&&!gFo3Title.open&&!gSceneLoad.active&&!Fo3PlayerDead()){
                     const auto head=ToVirtualPose(loadingHead);
                     gFo3SavePose={gCurrentCellFormId,gExteriorWorldspaceQ1890,
                         gSceneCenterXQ1730+head.position.x*FO3_UNITS_PER_METRE_Q715,
@@ -2285,7 +2323,7 @@ private:
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
                     frame.trackingScale=Fo3PlayerTrackingScale();
-                    frame.modal=Fo3VatsFocus()||gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    frame.modal=Fo3PlayerDead()||Fo3VatsFocus()||gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
                     XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset*frame.trackingScale;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
@@ -2302,7 +2340,7 @@ private:
                     const Fo3Environment& clearEnvironment=GetFo3Environment();
                     static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
                     const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||Fo3MovieFocus(),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||(!Fo3PlayerDead()&&Fo3MovieFocus()),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif
@@ -2382,7 +2420,7 @@ private:
         }
 
         hitch.Mark("render+present");
-        if(!pipPoseUpdated){ResetFo3Pipboy();}
+        if(!pipPoseUpdated){death_.Suspend();ResetFo3Pipboy();}
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
         endInfo.environmentBlendMode = blendMode_;
@@ -2614,7 +2652,8 @@ private:
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                vulkanGameplay_?scratchColor_:eye.images[imageIndex].image, 0);
         const bool titleEye=gFo3Title.open;
-        const bool movieEye=Fo3MovieFocus()&&!IsFo3LoadingVisible()&&!titleEye;
+        const bool showHud=!Fo3PlayerDead();
+        const bool movieEye=showHud&&Fo3MovieFocus()&&!IsFo3LoadingVisible()&&!titleEye;
         const bool loadingEye=IsFo3LoadingVisible()||titleEye||movieEye;
         if(!loadingEye) {
             Q1280BeginEyePostQ1280(framebuffer_, eye.width, eye.height);
@@ -2691,13 +2730,13 @@ private:
                                        q234LateDepthWritesPossible);
             if(spacewarpProducerReady_&&glGetError()!=GL_NO_ERROR)motionDepthReady=false;
             const auto motionLateUiBefore=fqgl::counters.draws;
-            if(!IsFo3LoadingVisible()) {
+            if(showHud&&!IsFo3LoadingVisible()) {
                 if(!Fo3VatsFocus())Q230RenderHealthHud(viewProjection.m);
                 if(Fo3TerminalFocus())RenderFo3Terminal(viewProjection.m);
             }
 
             // UI system colours are display colours, never world image-space inputs.
-            if((Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||Fo3AppearanceFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
+            if(showHud&&(Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||Fo3AppearanceFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
                 const bool appearance=Fo3AppearanceFocus();
                 const auto& panel=appearance?fo3chargen::panel:Fo3TagSkillsFocus()?gTagSkillsPanel:Fo3SpecialBookFocus()?gSpecialBookPanel:gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
@@ -2715,7 +2754,7 @@ private:
                     const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);
                 }
             }
-            if(gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
+            if(showHud&&gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];
                 Mat4 model{};
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
@@ -2727,7 +2766,7 @@ private:
                 const auto mvp=Multiply(viewProjection,model);
                 if(gPlayerSession)fo3menuui::Message(mvp.m,gScriptMessagePanel,gPlayerSession->player);
             }
-            if(Fo3LevelUpFocus()&&!IsFo3LoadingVisible()) {
+            if(showHud&&Fo3LevelUpFocus()&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];
                 Mat4 model{};
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
@@ -2739,14 +2778,14 @@ private:
                 const auto mvp=Multiply(viewProjection,model);
                 fo3levelui::Render(mvp.m,gLevelUp.panel);
             }
-            if(fo3worldscript::scriptSubtitle.visible&&!IsFo3LoadingVisible()&&gPlayerSession){
+            if(showHud&&fo3worldscript::scriptSubtitle.visible&&!IsFo3LoadingVisible()&&gPlayerSession){
                 const auto& panel=fo3worldscript::scriptSubtitle;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
                 const auto mvp=Multiply(viewProjection,model);fo3menuui::Conversation(mvp.m,panel,gPlayerSession->player);
             }
-            if(gDialoguePanel.visible&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
+            if(showHud&&gDialoguePanel.visible&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
@@ -2754,7 +2793,7 @@ private:
                 const auto dialogueMvp=Multiply(viewProjection,model);if(gPlayerSession)fo3menuui::Conversation(dialogueMvp.m,panel,gPlayerSession->player);
             }
 
-            if(gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
+            if(showHud&&gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gBarter.merchantPanel;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
@@ -2765,7 +2804,7 @@ private:
 
             }
             for (uint32_t hand = 0; hand < 2; ++hand) {
-                if (!handPoseValid_[hand]) continue;
+                if (!showHud || !handPoseValid_[hand]) continue;
                 const XrPosef virtualHandPose = ToVirtualPose(handLocalPoses_[hand]);
                 const Mat4 model = MatrixFromPose(virtualHandPose);
                 const Mat4 mvp = Multiply(viewProjection, model);
@@ -2844,21 +2883,23 @@ private:
             }
             // Final colour HUD pass, after world, hands, prompts, loot and post.
             // One head-relative pose/queue snapshot shared by both stereo eyes.
-            if(!IsFo3LoadingVisible()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())) {
+            if(showHud&&!IsFo3LoadingVisible()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())) {
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
                 fo3xpui::Render(notificationMvp.m);
                 if(!gFo3PauseOpen&&!(gPlayerSession&&fo3player::EarlyFirstPerson(gPlayerSession->player))){fo3compassui::Render(notificationMvp.m);fo3sneakui::Render(notificationMvp.m);}
             }
-            if(Fo3VatsFocus()&&!IsFo3LoadingVisible())RenderFo3Vats(viewProjection.m);
+            if(showHud&&Fo3VatsFocus()&&!IsFo3LoadingVisible())RenderFo3Vats(viewProjection.m);
             // Modal lockpicking is last among world/hand/ordinary HUD draws.
             // It has fresh self-occlusion depth, independent of nearby models.
-            if(Fo3LockpickFocus()&&gPlayerSession) {
+            if(showHud&&Fo3LockpickFocus()&&gPlayerSession) {
                 glBindFramebuffer(GL_FRAMEBUFFER,framebuffer_);
                 fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player,eye.width,eye.height);
             }
-            fo3bloodui::Render(fo3worldscript::seconds);
-            fo3blinkui::Render(gPlayerSeatFade);
+            if(showHud){
+                fo3bloodui::Render(fo3worldscript::seconds);
+                fo3blinkui::Render(gPlayerSeatFade);
+            }
             if (depthReady) {
                 fqperf::GpuScope gpuDepth(fqperf::GpuDepthCopy);
                 if (!depthFramebuffer_) glGenFramebuffers(1, &depthFramebuffer_);
@@ -2884,7 +2925,7 @@ private:
                 glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
             }
             rendered = true;
-            if(gFo3PauseMenu.perfHudMode&&!IsFo3LoadingVisible()) {
+            if(showHud&&gFo3PauseMenu.perfHudMode&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];Mat4 model{};
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
@@ -2894,7 +2935,7 @@ private:
                 const auto hudMvp=Multiply(viewProjection,model);
                 fo3perfui::Render(hudMvp.m,gFo3PauseMenu.perfHudMode);
             }
-            if(gFo3PauseOpen&&!IsFo3LoadingVisible()) {
+            if(showHud&&gFo3PauseOpen&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];Mat4 model{};
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
@@ -3025,6 +3066,7 @@ private:
     bool activateLatched_{false};
     fo3scene::ResidentInputBarrier residentInputBarrier_;
     fo3vats::InputRelease vatsRelease_;
+    fo3death::Sequence death_;
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
     float playerYaw_{0.0f};

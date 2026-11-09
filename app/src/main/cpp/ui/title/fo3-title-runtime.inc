@@ -21,7 +21,7 @@ void InitializeFo3Title() {
       std::fclose(f);
     }
   for (const char *s :
-       {"UIMenuFocus", "UIMenuOK", "UIMenuCancel", "UIMenuPrevNext"})
+       {"UIMenuFocus", "UIMenuOK", "UIMenuCancel", "UIMenuPrevNext", "MUSDeath"})
     fo3audio::PreloadSound(s);
 }
 void UpdateFo3Title(bool menu, bool a, bool b, float x, float y, double now,

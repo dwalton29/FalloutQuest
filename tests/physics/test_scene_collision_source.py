@@ -400,7 +400,7 @@ for call in ('UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.',
     assert not guarded(call), call
 assert 'residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral)' in loop
 # The title screen also blocks world mutations; retain every prior barrier.
-assert 'return gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();' in s
+assert 'return Fo3PlayerDead()||gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();' in s
 assert 'residentInputBarrier_.Allow(true,false)' in loop
 assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpWorldAwareGameMode(seconds,scriptedResidents,')
 assert 'BeginFo3ResidentPreparedWorkflow({},std::move(plan))' in loop

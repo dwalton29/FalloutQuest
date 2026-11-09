@@ -34,7 +34,7 @@ struct Event {
   uint32_t id;
   bool active;
   std::string name{};
-  const fo3pipdata::Definitions *definitions = nullptr;
+  std::shared_ptr<const fo3pipdata::Definitions> definitions;
   fo3pipdata::SessionState state;
   std::vector<std::string> paths;
   std::array<float,4> volumes{1,.3f,1,1};
@@ -412,7 +412,7 @@ void Worker() {
   uint32_t cell = UINT32_MAX;
   std::string previousMusic;
   fo3pipdata::Broadcast radio;
-  const fo3pipdata::Definitions *definitions = nullptr;
+  std::shared_ptr<const fo3pipdata::Definitions> definitions;
   fo3pipdata::SessionState broadcastState;
   uint32_t broadcastGeneration[2]{};
   auto playBroadcast = [&](const std::vector<std::string> &paths, int channel) {
@@ -540,7 +540,8 @@ void Worker() {
         env->ExceptionClear();
       if (cell != e.id) {
         cell = e.id;
-        auto relative = cell==TitleCell?std::string("music/special/maintitle.mp3"):catalog.MusicForCell(cell);
+        const bool dead=cell==DeathCell;
+        auto relative = dead?std::string{}:cell==TitleCell?std::string("music/special/maintitle.mp3"):catalog.MusicForCell(cell);
         if (relative != previousMusic) {
           previousMusic = relative;
           std::string playlist;
@@ -561,7 +562,14 @@ void Worker() {
                                   playlist.begin(), playlist.end(), '\n')));
           call(music, playlist, cell==TitleCell?2.f:1.f, true);
         }
-        sound(cell==TitleCell?0:catalog.AmbientForCell(cell), ambient);
+        sound(dead||cell==TitleCell?0:catalog.AmbientForCell(cell), ambient);
+        if(dead){
+          definitions.reset();
+          radio={};
+          playBroadcast({},0);
+          runtime.playingNote=0;
+          playBroadcast({},1);
+        }
       }
       continue;
     }
@@ -713,10 +721,10 @@ void DialogueDone(uint32_t token,bool success){
   __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","NPC LIP END token=%u audioSuccess=%d",token,int(success));
   for(auto& lane:runtime.dialogueCompletion)if(lane.Done(token,success))break;
 }
-void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
+void Radio(uint32_t transmitter, std::shared_ptr<const fo3pipdata::Definitions> definitions,
            const fo3pipdata::SessionState &state) {
   Event e{6, transmitter, true};
-  e.definitions = &definitions;
+  e.definitions = std::move(definitions);
   e.state = state;
   Push(std::move(e));
 }

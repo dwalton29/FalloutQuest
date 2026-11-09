@@ -314,9 +314,12 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
       gPipMenu.radioUpdated=now;gPipMenu.radioPhase=std::fmod(gPipMenu.radioPhase+.1f,1.f);
       if(Fo3PipboyFocus()&&gPipMenu.tab==fo3pip::Tab::Data&&gPipMenu.page==4)gPipMenu.dirty=true;
     }
-    if (lastRadio != tuned) {
+    static const fo3player::Session* radioSession=nullptr;
+    if (lastRadio != tuned || radioSession != session) {
       lastRadio = tuned;
-      fo3audio::Radio(tuned, defs, session->player.Snapshot().pipboy);
+      radioSession = session;
+      const auto catalog=session->player.SharedDefinitions();
+      fo3audio::Radio(tuned,{catalog,&defs},session->player.Snapshot().pipboy);
       lastRadioRevision = session->player.Revision();
     }
     if (tuned && (lastRadioRevision != session->player.Revision()||radioRefresh)) {

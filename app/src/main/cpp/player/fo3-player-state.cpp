@@ -2569,6 +2569,10 @@ bool Session::Flush(std::string &error) {
     error = "Existing player save was rejected and is preserved";
     return false;
   }
+  if (player.Health() <= 0) {
+    error = "Dead player state cannot replace the saved checkpoint";
+    return false;
+  }
   if (savedRevision == player.Revision())
     return true;
   if (!player.Save(savePath, error))

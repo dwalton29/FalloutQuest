@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <jni.h>
+#include <memory>
 #include <string>
 #include "fo3-dialogue-face.h"
 namespace fo3audio {
@@ -18,7 +19,7 @@ void DialogueGain(float gain);
 uint64_t DialogueCompletion();
 void DialogueDone(uint32_t token,bool success);
 DialogueFaceSample DialogueFace(uint32_t token);
-void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
+void Radio(uint32_t transmitter, std::shared_ptr<const fo3pipdata::Definitions> definitions,
            const fo3pipdata::SessionState &state);
 void Note(uint32_t note, const std::vector<std::string> &paths);
 void RadioState(const fo3pipdata::SessionState &state);
@@ -28,6 +29,7 @@ void BroadcastDone(int channel, uint32_t generation);
 void Start(JavaVM *vm, jobject activity);
 void Shutdown();
 inline constexpr uint32_t TitleCell=0xfffffffeu;
+inline constexpr uint32_t DeathCell=0xfffffffdu;
 void Context(uint32_t cell, bool focused);
 void Movie(uint8_t flags); // World mute/music pause; zero restores ordinary audio.
 void Volumes(const std::array<float,4>& values);

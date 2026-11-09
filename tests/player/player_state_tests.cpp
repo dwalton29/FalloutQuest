@@ -1,5 +1,6 @@
 #include "data/fo3-esm-reader.h"
 #include "player/fo3-player-state.h"
+#include "player/fo3-player-death.h"
 #include "player/fo3-development-clock.h"
 #include "npc/fo3-package-schedule.h"
 #include <cmath>
@@ -242,12 +243,39 @@ void Rechecksum(Bytes &b) {
   for (int i = 0; i < 4; ++i)
     b[16 + i] = (crc >> (i * 8)) & 255;
 }
+void PlayerDeath(const fo3player::Catalog& catalog,const std::string& save) {
+  fo3death::Sequence sequence;
+  constexpr int64_t second=1'000'000'000;
+  Check(!sequence.Ready(second)&&sequence.Begin()&&!sequence.Begin(),"death cue starts once");
+  Check(!sequence.Ready(second)&&!sequence.Ready(3*second),"death presentation begins before reload");
+  sequence.Suspend();
+  Check(!sequence.Ready(100*second)&&!sequence.Ready(103*second-1),
+        "headset focus loss cannot advance the death timer");
+  Check(sequence.Ready(103*second),"death reload is due after five presented seconds");
+
+  fo3player::Session active(catalog);
+  active.savePath=save;
+  std::string error;
+  Check(active.player.DamageHealth(5)&&active.Flush(error),"write a living checkpoint");
+  const float health=active.player.Health();
+  const auto revision=active.savedRevision;
+  Check(active.player.DamageHealth(active.player.MaxHealth())&&active.player.Health()==0,
+        "lethal damage reaches zero health");
+  Check(!active.Flush(error)&&active.savedRevision==revision,"death preserves the checkpoint");
+
+  fo3player::Session restored(active.player.SharedDefinitions());
+  Check(restored.player.Restore(save,error)&&restored.player.Health()==health,
+        "restore the previous living state using the same authored catalogue");
+  std::remove(save.c_str());
+}
+
 void Synthetic(const std::string &root) {
   const auto esm = root + ".esm", save = root + ".fqps";
   Write(esm, Fixture());
   fo3player::Catalog c;
   std::string error;
   Check(fo3player::LoadCatalog(esm, c, error), error.c_str());
+  PlayerDeath(c,root+"-death.fqps");
   Check(c.items.size() == 8 && c.initial.special[0] == 5 &&
             c.initial.skills[13] == 23,
         "authored stats");

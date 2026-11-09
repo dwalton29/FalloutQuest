@@ -443,6 +443,7 @@ public:
   // never replaces an existing actor's saved cell, health or package.
   ActorCensusReport RegisterOriginalActors();
   const Catalog &Definitions() const { return *catalog_; }
+  std::shared_ptr<const Catalog> SharedDefinitions() const { return catalog_; }
   const State &Snapshot() const { return state_; }
   fo3experience::Progress ExperienceProgress() const {
     auto progress=fo3experience::Evaluate(state_.level,state_.experience,catalog_->xpBumpBase);
@@ -824,6 +825,7 @@ public:
 
 private:
   friend bool LoadCatalog(const std::string&,Catalog&,std::string&);
+  friend struct Session;
   explicit Player(std::shared_ptr<const Catalog> catalog);
   struct ScriptCandidateTag {};
   bool MakeScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner,ScriptMessage& out)const;
@@ -958,6 +960,7 @@ private:
 // belongs to its worker.
 struct Session {
   explicit Session(Catalog catalog) : player(std::move(catalog)) {}
+  explicit Session(std::shared_ptr<const Catalog> catalog) : player(std::move(catalog)) {}
   Player player;
   std::string savePath;
   bool saveBlocked = false;

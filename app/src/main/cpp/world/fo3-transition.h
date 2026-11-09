@@ -45,6 +45,7 @@ void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 // teardown and rebuild happen later from the render thread.
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest);
 bool HasPendingFo3CellTransitionRequestQ74() noexcept;
+void DiscardFo3PendingCellTransitionQ74() noexcept;
 bool QueueFo3SceneRefreshQ74(uint32_t cell,float x,float y,float z);
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId);
 

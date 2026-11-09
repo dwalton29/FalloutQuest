@@ -1159,6 +1159,11 @@ bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
     return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState, candidateSelection, true);
 }
 
+void DiscardFo3PendingCellTransitionQ74() noexcept {
+    gPendingTransitionQ74={};
+    gHasPendingTransitionQ74=false;
+}
+
 bool HasPendingFo3CellTransitionRequestQ74() noexcept {
     return gHasPendingTransitionQ74&&gPendingTransitionQ74.valid;
 }
