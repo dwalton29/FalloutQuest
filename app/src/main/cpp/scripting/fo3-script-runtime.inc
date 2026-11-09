@@ -510,6 +510,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Kill:ok=KillActor(c.form);break;
     case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
+    case C::ChangeSpell:ok=c.form==PlayerRef&&SetAddiction(c.index,c.value!=0);break;
     case C::ActorValueDamage:ok=ChangeActorValueDamage(c.form,c.index,c.value,c.variable!=0);break;
     case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
     case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;

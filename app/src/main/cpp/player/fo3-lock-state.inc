@@ -51,14 +51,14 @@ PickAccess Player::CanPickLock(uint32_t id) const {
   if(LockRequirement(id)<0)return PickAccess::RequiresKey;
   auto perk=state_.pipboy.perks.find(catalog_->infiltrator);
   if(l.broken&&(l.forceFailures>=2||perk==state_.pipboy.perks.end()||!perk->second))return PickAccess::Broken;
-  if(state_.skills[4]<LockRequirement(id))return PickAccess::Skill;
+  if(EffectiveSkill(4)<LockRequirement(id))return PickAccess::Skill;
   if(!catalog_->bobbyPin||ItemCount(catalog_->bobbyPin)<=0)return PickAccess::NoPins;
   return PickAccess::Ready;
 }
 int Player::ForceLockChance(uint32_t id) const {
   const int requirement=LockRequirement(id);if(requirement<0)return 0;
   // Fallout3.exe 0x601AD0: trunc(base) + trunc(skill) - tier, clamp 0..100.
-  return std::clamp(int(state_.skills[4])+int(LockSetting("fLockSkillBase",10))-requirement,0,100);
+  return std::clamp(int(EffectiveSkill(4))+int(LockSetting("fLockSkillBase",10))-requirement,0,100);
 }
 bool Player::UnlockByKey(uint32_t id) {
   auto l=GetLock(id);if(!l.known||!l.locked||!l.key||ItemCount(l.key)<=0||!CanOpenDoorImpl(PlayerRef,id,true))return false;
@@ -131,7 +131,7 @@ bool Player::TerminalPassword(uint32_t id) const {
   const auto lock=GetLock(id);return lock.known&&lock.key&&ItemCount(lock.key)>0;
 }
 bool Player::CanHackTerminal(uint32_t id) const {
-  const int requirement=TerminalRequirement(id);if(requirement<0||state_.skills[8]<requirement)return false;
+  const int requirement=TerminalRequirement(id);if(requirement<0||EffectiveSkill(8)<requirement)return false;
   const auto lock=GetLock(id);if(!lock.locked)return false;
   bool disabled=false;std::string error;if(!ReferenceDisabled(id,disabled,error)||disabled)return false;
   if(lock.broken){

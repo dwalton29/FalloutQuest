@@ -1,4 +1,5 @@
 #include "fo3-player-state.h"
+#include "dialogue/fo3-dialogue-conditions.h"
 #include "pipboy/fo3-map-runtime.h"
 #include "player/fo3-levelup-rules.h"
 #include "data/fo3-esm-reader.h"
@@ -33,11 +34,10 @@ bool Player::LevelUpPerkSupported(uint32_t id) const {
   const auto special=catalog_->pipboy.formNames.find("intensetraining");
   if((special!=catalog_->pipboy.formNames.end()&&id==special->second)||
      (catalog_->infiltrator&&id==catalog_->infiltrator))return true;
-  // Swift Learner and Educated are handled by the reward and skill budget
-  // entry-points. Other effects must not be silently accepted as functional.
+  // The reward, skill budget and Aid runtime handle these entry points. Other effects must not be silently accepted as functional.
   if(p.effects.empty())return false;
   for(const auto& e:p.effects) {
-    if(e.type!=2||(e.entryPoint!=9&&e.entryPoint!=10)||
+    if(e.type!=2||(e.entryPoint!=9&&e.entryPoint!=10&&e.entryPoint!=11&&e.entryPoint!=23&&e.entryPoint!=25)||
        e.scripted||e.parameterType!=1||e.parameters.size()!=sizeof(float)||
        (e.function!=1&&e.function!=2&&e.function!=3))return false;
     for(const auto& tab:e.conditions)if(!tab.second.empty())return false;
@@ -76,8 +76,8 @@ bool Player::CommitLevelUp(const std::array<uint8_t,14>& chosenSkills,
   const auto& rule=catalog_->rules;
   const float health=next.baseHealth+
       (next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
-      (next.level-1)*rule.healthLevelMult;
-  const float ap=rule.apBase+next.special[5]*rule.apMult;
+      (next.level-1)*rule.healthLevelMult+AidModifier(next,16);
+  const float ap=std::max(0.f,rule.apBase+EffectiveSpecial(next,5)*rule.apMult+AidModifier(next,12));
   if(!std::isfinite(health)||health<=0||next.healthDamage>health||
      !std::isfinite(ap)||ap<0||next.apSpent>ap)return false;
   state_=std::move(next);
@@ -390,51 +390,7 @@ bool Player::TuneRadio(uint32_t ref) {
   }
   return true;
 }
-bool Player::CanUse(uint64_t id, std::string *why) const {
-  auto reject = [&](const char *text) {
-    if (why)
-      *why = text;
-    return false;
-  };
-  auto s = std::find_if(state_.inventory.begin(), state_.inventory.end(),
-                        [&](const Stack &s) { return s.id == id; });
-  if (s == state_.inventory.end())
-    return reject("Item absent");
-  auto item = catalog_->items.find(s->formId);
-  auto a = catalog_->pipboy.aid.find(s->formId);
-  if (item == catalog_->items.end() || item->second.script ||
-      IsQuestObject(s->formId) || item->second.cannotDrop ||
-      a == catalog_->pipboy.aid.end() || a->second.effects.empty())
-    return reject("Requires item script/effect runtime");
-  for (auto &e : a->second.effects) {
-    auto m = catalog_->pipboy.magic.find(e.id);
-    if (m == catalog_->pipboy.magic.end() || e.conditional || e.area ||
-        e.duration || e.range || m->second.archetype != 0 ||
-        (m->second.flags & 0x100000) ||
-        ((m->second.av != 16) && (m->second.av != 12) && (m->second.av != 54) && (m->second.av < 25 || m->second.av > 30)))
-      return reject("Requires timed, conditional or unsupported actor effect");
-  }
-  return true;
-}
-bool Player::Use(uint64_t id) {
-  if (!CanUse(id))
-    return false;
-  auto s = std::find_if(state_.inventory.begin(), state_.inventory.end(),
-                        [&](const Stack &s) { return s.id == id; });
-  auto effects = catalog_->pipboy.aid.at(s->formId)
-                     .effects; // validate all before consuming
-  for (auto &e : effects) {
-    auto &m = catalog_->pipboy.magic.at(e.id);
-    float amount = float(e.magnitude);
-    ChangeActorValueDamage(PlayerRef,m.av,amount,(m.flags&4)==0);
-  }
-  --s->count;
-  if (!s->count)
-    state_.inventory.erase(s);
-  ++state_.pipboy.aidUsed;
-  ++revision_;
-  return true;
-}
+#include "fo3-aid-player.inc"
 } // namespace fo3player
 
 namespace fo3player {

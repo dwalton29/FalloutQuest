@@ -225,8 +225,8 @@ float Player::WeaponDamage(uint64_t id) const {
 float Player::WeaponDamage(const Stack& stack) const {
   const auto item=catalog_->items.find(stack.formId);if(item==catalog_->items.end()||item->second.kind!=ItemKind::Weapon)return 0;
   const auto& d=item->second.weapon;const auto& r=catalog_->weapons;
-  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,state_.skills[d.skill-32]):0;
-  return Damage(d,r,skill,stack.condition);
+  const float skill=d.skill>=32&&d.skill<=45?EffectiveSkill(d.skill-32):0;
+  return AidEntryPoint(0,Damage(d,r,skill,stack.condition));
 }
 
 uint32_t Player::ActorTemplate(uint32_t reference,uint32_t list)const {
@@ -400,13 +400,13 @@ bool Player::Essential(uint32_t reference) const {
 float Player::DamageResistance(uint32_t target) const {
   const auto* contents=target==0x14?&state_.inventory:ContainerContents(target);
   if(!contents)return 0;
-  float dr=0;uint32_t mask=0;
+  float dr=target==PlayerRef?AidModifier(18):0;uint32_t mask=0;
   for(const auto& s:*contents){const auto& i=catalog_->items.at(s.formId);
     if(i.kind!=ItemKind::Armour||(target==0x14&&!s.equipped)||(mask&i.bipedMask))continue;
     const auto found=catalog_->weapons.armourDR.find(s.formId);
     if(found!=catalog_->weapons.armourDR.end()){mask|=i.bipedMask;dr+=found->second;}
   }
-  // Condition/skill/effects modifying armour rating are not yet supported.
+  // Armour condition and skill do not yet modify equipped armour rating.
   return std::clamp(dr,0.f,catalog_->weapons.drMax);
 }
 bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float damage) {

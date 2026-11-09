@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 335
-        versionName '0.181.1-gene-projection-build'
+        versionCode 336
+        versionName '0.182.0-consumables-aid'
 
         ndk {
             abiFilters 'arm64-v8a'

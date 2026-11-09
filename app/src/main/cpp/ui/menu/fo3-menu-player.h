@@ -207,6 +207,64 @@ inline void Card(fo3menu::Layout &l, int parent, const char *name,
   l.Set(id, "_Value", value);
   l.Set(id, "visible", double(visible));
 }
+inline std::string AidMagnitude(const fo3pipdata::Magic& magic,float magnitude){
+  if(!magnitude||magic.archetype==fo3pipdata::MagicScript)return {};
+  const bool harmful=(magic.flags&fo3pipdata::MagicDetrimental)!=0;
+  return std::string(harmful!=(magic.av==54)?"-":"+")+Number(magnitude);
+}
+inline std::string AidEffectText(const fo3player::Player& p,uint32_t form){
+  std::vector<fo3player::Player::AidEffect> effects;
+  if(!p.AidEffects(form,effects))return {};
+  const auto& data=p.Definitions().pipboy;
+  const auto& source=data.aid.at(form);
+  std::string result;
+  for(const auto& applied:effects){
+    const auto& effect=source.effects[applied.index];
+    const auto magic=data.magic.find(effect.id);
+    if(magic==data.magic.end()||(magic->second.archetype==fo3pipdata::MagicScript&&!magic->second.temporaryPerk))continue;
+    const auto& m=magic->second;
+    std::string label=m.name;
+    if(m.av==16&&m.archetype!=fo3pipdata::MagicScript)label=Label(p,"sHitPointsShort");
+    else if(m.av==54)label=Label(p,"sStatsRADAbbrev");
+    else if(m.av>=5&&m.av<=11&&!data.special[m.av-5].name.empty())label=data.special[m.av-5].name;
+    if(label.empty())continue;
+    if(!result.empty())result+=", ";
+    result+=label;
+    const auto magnitude=AidMagnitude(m,applied.magnitude);
+    if(!magnitude.empty())result+=" "+magnitude;
+  }
+  return result;
+}
+inline void StatsAidEffects(fo3menu::Layout& l,const fo3player::Player& p,size_t offset){
+  const auto& state=p.Snapshot();
+  const auto& data=p.Definitions().pipboy;
+  const int list=l.Find("stats_effects_container");
+  std::vector<std::pair<std::string,std::string>> rows;
+  for(const auto& active:state.activeAid){
+    const auto& effect=data.aid.at(active.source).effects[active.index];
+    const auto magic=data.magic.find(effect.id);
+    if(magic!=data.magic.end())
+      rows.emplace_back(p.Definitions().items.at(active.source).name,
+                        magic->second.name+" "+AidMagnitude(magic->second,active.magnitude));
+  }
+  for(auto spell:state.addictions)
+    if(p.WithdrawalActive(spell))rows.emplace_back(data.effectSpells.at(spell).name,"");
+  const auto radiation=data.effectSpells.find(p.RadiationSickness());
+  if(radiation!=data.effectSpells.end())rows.emplace_back(radiation->second.name,"");
+  std::sort(rows.begin(),rows.end());
+  l.Set("stats_no_effects","visible",double(rows.empty()));
+  if(rows.empty())return;
+  const size_t limit=6;
+  const size_t first=std::min(offset,rows.size()>limit?rows.size()-limit:0);
+  for(size_t i=first;i<std::min(first+limit,rows.size());++i){
+    const int id=l.Instantiate("stats_effects_template",list);
+    l.Set(id,"listindex",double(i-first));
+    l.Set(id,"y",double((i-first)*56));
+    l.Set(id,"width",l.N(list,"width")-40.);
+    l.Set(id,"user0",rows[i].first);
+    l.Set(id,"user1",rows[i].second);
+  }
+}
 inline void ItemCards(fo3menu::Layout &l, int parent,
                       const fo3player::Player &p,
                       const fo3player::Stack *stack) {
@@ -221,6 +279,12 @@ inline void ItemCards(fo3menu::Layout &l, int parent,
     return;
   const auto &item = found->second;
   Card(l, parent, "WeightInfo", Decimal(item.weight));
+  if(fo3pip::Consumable(item)){
+    const auto effects=item.bookSkill>=0?
+        p.Definitions().pipboy.skills[size_t(item.bookSkill)].name+" +"+Number(p.AidEntryPoint(11,1)):
+        AidEffectText(p,item.formId);
+    Card(l,parent,"EffectsInfo",effects,!effects.empty());
+  }
   Card(l, parent, "ValueInfo", Number(item.value), item.valueKnown);
   Card(l, parent, "ConditionInfo", "", item.maxCondition > 0);
   l.Set(l.Find("ConditionInfo", parent), "user5", stack->condition);
@@ -449,19 +513,16 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
       l.Set("IM_ItemIcon", "visible", double(!item.icon.empty()));
       l.Set("IM_ItemIcon", "filename", item.icon);
       l.Set("IM_EquipButton", "string",
-            Label(p, item.kind == fo3player::ItemKind::Aid ||
-                             item.kind == fo3player::ItemKind::Ingredient
+            Label(p, fo3pip::Consumable(item)
                          ? "sInventoryUse"
                      : stack->equipped ? "sInventoryUnequip"
                                        : "sInventoryEquip"));
       l.Set("IM_EquipButton", "target",
             double(fo3pip::Equippable(item) ||
-                   item.kind == fo3player::ItemKind::Aid ||
-                   item.kind == fo3player::ItemKind::Ingredient));
+                   fo3pip::Consumable(item)));
       l.Set(l.Root(), "_EquippableItem",
             double(fo3pip::Equippable(item) ||
-                   item.kind == fo3player::ItemKind::Aid ||
-                   item.kind == fo3player::ItemKind::Ingredient));
+                   fo3pip::Consumable(item)));
     }
     Tabs(l, "IM_Tabline",
          {Label(p, "sInventoryWeapons"), Label(p, "sInventoryApparel"),
@@ -501,7 +562,7 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
         size_t av = !special && index == 12 ? 13 : index;
         const auto &source = special ? d.special[av] : d.skills[av];
         rows.push_back({source.name,
-                        Number(special ? state.special[av] : state.skills[av]),
+                        Number(special ? p.EffectiveSpecial(av) : p.EffectiveSkill(av)),
                         false, false});
         if (index == menu.selected) {
           description = source.description;
@@ -535,8 +596,7 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
     l.Set("stats_icon", "visible", double(!icon.empty()));
     l.Set("stats_description_scrollbar", "_current_value",
           double(menu.textScroll));
-    // Source EXE binds Interface\\Stats\\%s.dds to these six tiles. The
-    // current player has no per-limb damage AVs; omit their numeric meters.
+    // Bind the authored limb art and condition meters to the player damage AVs.
     if (menu.page == 0) {
       const char *tiles[]{"head",     "torso",   "leftarm",
                           "rightarm", "leftleg", "rightleg"};
@@ -546,10 +606,15 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
         std::string name = std::string("stats_player_") + tiles[i];
         l.Set(name, "filename",
               std::string("Interface\\Stats\\") + files[i] + ".dds");
-        l.Set(name + "_pct", "visible", 0.);
-        l.Set(name + "_crippled", "visible", 0.);
+        l.Set(name+"_pct_meter","_Value",1.f-state.bodyDamage[size_t(i)]/100.f);
       }
       l.Set("stats_player_face", "visible", 0.);
+      if(menu.statusMode==2)StatsAidEffects(l,p,menu.textScroll);
+      if(menu.statusMode==1){
+        float resistance=0;
+        p.ActorValue(fo3player::PlayerRef,20,resistance);
+        l.Set("stats_rad_resist_level","string",Number(resistance)+"%");
+      }
     }
     for (const auto *name : {"stats_stimpak_button", "stats_healing_mode"})
       l.Set(name, "visible", 0.);

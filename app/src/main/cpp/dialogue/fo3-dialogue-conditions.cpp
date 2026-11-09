@@ -149,6 +149,12 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 309:case 523:value=0;return true;
   case 310:value=who.world==c.a;return who.world!=0;
   case 372:{auto list=d.formLists.find(c.a);if(list==d.formLists.end()){error="form list unavailable";return false;}value=std::find(list->second.begin(),list->second.end(),pc?7:who.base)!=list->second.end();return true;}
+  case 449:{
+    if(!pc||!d.perks.count(c.a)){error="perk state unavailable";return false;}
+    const auto rank=state.pipboy.perks.find(c.a);
+    value=rank!=state.pipboy.perks.end()&&rank->second>0;
+    return true;
+  }
   case 427:{auto voice=p.ActorVoice(who.reference);if(!voice)voice=fo3pipdata::ActorVoice(d,who.base);if(!voice){error="voice type unavailable";return false;}value=voice==c.a;return true;}
   default:error="unsupported function "+std::to_string(c.function);return false;
   }

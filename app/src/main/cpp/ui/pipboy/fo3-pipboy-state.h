@@ -107,6 +107,9 @@ inline int Category(fo3player::ItemKind kind) {
     return 3;
   }
 }
+inline bool Consumable(const fo3player::Item& item){
+  return item.kind==fo3player::ItemKind::Aid||item.kind==fo3player::ItemKind::Ingredient||item.bookSkill>=0;
+}
 inline bool Equippable(const fo3player::Item &i) {
   return i.playable && (i.kind == fo3player::ItemKind::Weapon ||
                         (i.kind == fo3player::ItemKind::Armour && i.bipedMask));
@@ -167,6 +170,11 @@ inline uint64_t PresentationRevision(const fo3player::Player &p) {
   add(b.selectedQuest);
   add(b.tunedRadio);
   add(b.aidUsed);
+  for(float damage:s.bodyDamage)real(damage);
+  for(const auto& effect:s.activeAid){
+    add(effect.source);add(effect.index);real(effect.magnitude);
+  }
+  for(auto spell:s.addictions)add(spell);
   add(b.waypoint.world);
   real(b.waypoint.point.x);
   real(b.waypoint.point.y);
@@ -209,7 +217,7 @@ struct Menu {
         auto i = p.Definitions().items.find(s.formId);
         if (s.count > 0 && i != p.Definitions().items.end() &&
             i->second.playable && i->second.kind != fo3player::ItemKind::Note &&
-            Category(i->second.kind) == page)
+            (Consumable(i->second)?2:Category(i->second.kind)) == page)
           rows.push_back(s.id);
       }
     if (tab == Tab::Stats && page == 3)
@@ -327,7 +335,11 @@ struct Menu {
       textScroll = 0;
     } else if (a == Action::Up || a == Action::Down) {
       int delta = a == Action::Up ? -1 : 1;
-      if(tab==Tab::Stats&&page==0&&inPage){statusMode=(statusMode+delta+3)%3;}
+      if(tab==Tab::Stats&&page==0&&inPage){statusMode=(statusMode+delta+3)%3;textScroll=0;}
+      else if(tab==Tab::Stats&&page==0&&statusMode==2){
+        if(delta<0&&textScroll)--textScroll;
+        if(delta>0)++textScroll;
+      }
       else if (page == 3 && inPage && (tab == Tab::Data || tab == Tab::Stats)) {
         if (delta < 0 && textScroll)
           --textScroll;
@@ -371,10 +383,8 @@ struct Menu {
           auto &i = p.Definitions().items.at(s->formId);
           if (Equippable(i))
             mutation = s->equipped ? p.Unequip(s->id) : p.Equip(s->id);
-          else if (i.kind == fo3player::ItemKind::Aid ||
-                   i.kind == fo3player::ItemKind::Ingredient) {
-            if (p.CanUse(s->id, &actionError))
-              mutation = p.Use(s->id);
+          else if (Consumable(i)) {
+            mutation = p.Use(s->id,&actionError);
           }
         }
       } else if (tab == Tab::Data && page == 4 && selected < rows.size()) {

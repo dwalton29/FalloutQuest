@@ -42,6 +42,22 @@ Condition Cond(const Sub &s) {
   }
   return c;
 }
+std::vector<Effect> Effects(const Subs& subs) {
+  std::vector<Effect> effects;
+  for(const auto& sub:subs){
+    if(sub.type=="EFID"&&sub.n==4){
+      effects.emplace_back();
+      effects.back().id=U(&sub);
+    }else if(sub.type=="EFIT"&&sub.n==20&&!effects.empty()){
+      auto& e=effects.back();
+      e.magnitude=U(&sub);e.area=U(&sub,4);e.duration=U(&sub,8);
+      e.range=U(&sub,12);e.av=U(&sub,16);
+    }else if(sub.type=="CTDA"&&!effects.empty()){
+      effects.back().conditions.push_back(Cond(sub));
+    }
+  }
+  return effects;
+}
 Placement Place(uint32_t flags, const Subs &s, uint32_t cell, uint32_t world) {
   Placement p;
   p.flags = flags;
@@ -79,7 +95,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
 }
 bool Relevant(const std::string &t) {
   return t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
-         t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
+         t == "MGEF" || t == "SPEL" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "HAIR" || t == "EYES" || t == "HDPT" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "CREA" || t == "PACK";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
@@ -439,27 +455,21 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.notes[id] = std::move(n);
   } else if (t == "ALCH" || t == "INGR") {
     Ingestible a;
-    a.flags = U(Find(s, "ENIT"), 8);
-    Effect *e = nullptr;
-    for (auto &v : s) {
-      if (v.type == "EFID" && v.n == 4) {
-        a.effects.push_back({});
-        e = &a.effects.back();
-        e->id = U(&v);
-      } else if (v.type == "EFIT" && v.n == 20 && e) {
-        e->magnitude = U(&v);
-        e->area = U(&v, 4);
-        e->duration = U(&v, 8);
-        e->range = U(&v, 12);
-        e->av = U(&v, 16);
-      } else if (v.type == "CTDA" && e)
-        e->conditional = true;
+    const auto* data=Find(s,"ENIT");
+    if(data&&data->n>=8)a.flags=data->p[4];
+    if(t=="ALCH"&&data&&data->n>=20){
+      a.withdrawal=U(data,8);
+      a.addictionChance=fo3esm::ReadF32(data->p+12);
+      a.sound=U(data,16);
     }
-    d.aid[id] = std::move(a);
+    a.effects=Effects(s);
+    d.aid[id]=std::move(a);
+  } else if(t=="SPEL"){
+    d.effectSpells[id]={Text(s,"FULL"),Effects(s)};
   } else if (t == "MGEF") {
     auto a = Find(s, "DATA");
-    if (a && a->n >= 72)
-      d.magic[id] = {U(a), U(a, 64), U(a, 68), U(a, 8)};
+    if(a&&a->n>=72)
+      d.magic[id]={U(a),U(a,64),U(a,68),U(a,8),U(a,16),0,Text(s,"FULL")};
   } else if (t == "TACT" && (flags & 0x20000)) {
     d.stations[id] = {Text(s, "FULL"), U(Find(s, "VNAM")), U(Find(s, "SNAM"))};
   } else if (t == "SOUN") {

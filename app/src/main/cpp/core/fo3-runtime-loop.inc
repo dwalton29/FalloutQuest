@@ -1914,6 +1914,7 @@ private:
                     scriptPlayer.SetScriptPlayerHeading(gQ210Head[3]);
                     if(!scriptMenu)fo3worldscript::SpeechTick();
                     const auto beforeScripts=scriptPlayer.Revision();
+                    if(!scriptMenu&&!Fo3PipboyFocus())scriptPlayer.AdvanceAid(seconds);
                     // Discover resident identities at 4 Hz or a publication change;
                     // drive quest cadence every application frame, not per eye.
                     struct Q230ScriptedStatics {

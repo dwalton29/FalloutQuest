@@ -66,7 +66,7 @@ bool Player::OpenBarter(uint32_t actor,int discount,BarterSession& out) {
   if(!RestockMerchant(actor,chest)||!PrepareInventory(chest,false))return false;
   if(!state_.merchantVisits.count(chest)){state_.merchantVisits[chest]={state_.gameDaysPassed,state_.gameHour};++revision_;}
   BarterSession candidate;candidate.actor=actor;candidate.container=chest;candidate.discount=discount;
-  candidate.owner=this;candidate.skill=state_.skills[size_t(Skill::Barter)];candidate.perks=state_.pipboy.perks;
+  candidate.owner=this;candidate.skill=uint8_t(EffectiveSkill(size_t(Skill::Barter)));candidate.perks=state_.pipboy.perks;
   candidate.player=state_.inventory;candidate.merchant=state_.containers.at(chest);
   out=std::move(candidate);return true;
 }
@@ -109,7 +109,7 @@ bool Player::BarterPrice(const Stack& s,bool buying,int discount,float& out) con
     value*=b+(1-b)*m*std::pow(s.condition*10,e);
   }
   const float effective=std::max(0.f,value);
-  float price=effective*(base+state_.skills[size_t(Skill::Barter)]*mult/100.f);
+  float price=effective*(base+uint8_t(EffectiveSkill(size_t(Skill::Barter)))*mult/100.f);
   price*=buying?(1-discount/100.f):(1+discount/100.f);
   if(buying){
     struct Effect {uint32_t perk;size_t index;const fo3pipdata::PerkEffect* effect;};
@@ -145,7 +145,7 @@ bool Player::BarterPrice(const Stack& s,bool buying,int discount,float& out) con
 }
 bool Player::BarterBalance(const BarterSession& session,int64_t& net,std::string& error) const {
   error.clear();net=0;
-  if(session.owner!=this||session.skill!=state_.skills[size_t(Skill::Barter)]||session.perks!=state_.pipboy.perks||session.discount < -100||session.discount>100||!MerchantAvailable(session.actor)||
+  if(session.owner!=this||session.skill!=uint8_t(EffectiveSkill(size_t(Skill::Barter)))||session.perks!=state_.pipboy.perks||session.discount < -100||session.discount>100||!MerchantAvailable(session.actor)||
      catalog_->merchantContainers.at(session.actor)!=session.container){error="Merchant unavailable";return false;}
   const auto live=state_.containers.find(session.container);
   if(live==state_.containers.end()||!SameBarterStacks(session.player,state_.inventory)||!SameBarterStacks(session.merchant,live->second)){

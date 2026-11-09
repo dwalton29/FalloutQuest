@@ -15,7 +15,7 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
  const bool los=front&&Q230Sight(actor,0x14,point);
  fo3sneak::Evidence e;e.distance=distance;
  e.exterior=exterior;e.los=los;e.light=Q230PlayerLightLevel(point,now);e.perception=stats->perception;
- e.skill=player.Snapshot().skills[size_t(fo3player::Skill::Sneak)];e.sneaking=player.IsSneaking();e.moving=gPlayerDetectionSpeed>.05f;
+ e.skill=player.EffectiveSkill(size_t(fo3player::Skill::Sneak));player.ActorValue(fo3player::PlayerRef,49,e.chameleon);e.sneaking=player.IsSneaking();e.moving=gPlayerDetectionSpeed>.05f;
  const float walking=player.Definitions().npcBaseSpeed/FO3_UNITS_PER_METRE*(e.sneaking?fo3sneak::Setting(settings,"fMoveSneakMult"):1);
  e.running=e.moving&&walking>0&&gPlayerDetectionSpeed>walking;e.alert=observer.phase!=fo3sneak::Phase::Normal;
  e.otherCombat=actor.runtime.activity==fo3npc::Activity::Combat&&actor.runtime.combatTarget!=0x14;

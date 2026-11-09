@@ -105,26 +105,57 @@ static void MapTests() {
   assert(!InRange(d, t, l));
 }
 static void AidTests() {
-  auto c = Fixture();
-  fo3player::Item item;
-  item.formId = 11;
-  item.kind = fo3player::ItemKind::Aid;
-  c.items[11] = item;
-  c.pipboy.magic[12] = {0, 0, 16, 0};
-  c.pipboy.aid[11].effects.push_back({12, 20, 0, 0, 0, 16, false});
+  auto c=Fixture();
+  for(uint32_t form:{11,13,15,17,19}){
+    auto& item=c.items[form];
+    item.formId=form;item.kind=fo3player::ItemKind::Aid;
+  }
+  c.pipboy.magic[12]={0,MagicValue,16,0,UINT32_MAX,0,"Restore Health"};
+  c.pipboy.magic[14]={MagicRecover,MagicValue,5,0,UINT32_MAX,0,"Strength"};
+  c.pipboy.magic[16]={MagicDetrimental|MagicRecover,MagicValue,5,0,UINT32_MAX,0,"Reduced Strength"};
+  c.pipboy.magic[18]={0,MagicScript,UINT32_MAX,800,UINT32_MAX,0,"Unsupported"};
+  c.pipboy.aid[11].effects={{12,20,0,0,0,16,{}}};
+  c.pipboy.aid[13].effects={{14,2,0,10,0,5,{}}};
+  c.pipboy.aid[15].effects={{12,5,0,10,0,16,{}}};
+  c.pipboy.aid[17].effects={{12,20,0,0,0,16,{}},{18,0,0,0,0,0,{}}};
+  c.pipboy.scripts[800].source="Begin ScriptEffectStart\nUnsupportedCommand\nEnd";
+  c.eventPrograms[800]=fo3script::ParseEvents(c.pipboy.scripts.at(800));
+  c.pipboy.aid[19].effects={{14,2,0,10,0,5,{}},{UsageMonitorEffect,200,0,60,0,0,{}}};
+  c.pipboy.aid[19].withdrawal=20;c.pipboy.aid[19].addictionChance=.1f;
+  c.pipboy.effectSpells[20]={"Withdrawal",{{16,1,0,0,0,5,{}}}};
+  c.initial.special[0]=4;c.rules.carryBase=150;c.rules.carryMult=10;
+
   fo3player::Player p(c);
-  p.Add(11, 2);
-  p.DamageHealth(30);
-  auto id = p.Snapshot().inventory.front().id;
-  assert(p.Use(id));
-  assert(p.Health() == 90 && p.Snapshot().inventory.front().count == 1);
-  c.pipboy.aid[11].effects.push_back({12, 5, 0, 10, 0, 16, false});
-  fo3player::Player blocked(c);
-  blocked.Add(11, 2);
-  auto rev = blocked.Revision();
-  assert(!blocked.Use(blocked.Snapshot().inventory.front().id));
-  assert(blocked.Revision() == rev &&
-         blocked.Snapshot().inventory.front().count == 2);
+  const auto use=[&](uint32_t form){
+    assert(p.Add(form,1));
+    const auto row=std::find_if(p.Snapshot().inventory.begin(),p.Snapshot().inventory.end(),
+      [&](const auto& stack){return stack.formId==form;});
+    return p.Use(row->id);
+  };
+  p.DamageHealth(45);
+  assert(p.Add(11,1));
+  fo3pip::Menu menu;
+  menu.tab=fo3pip::Tab::Items;menu.page=2;
+  menu.Refresh(p);
+  assert(menu.Invoke(fo3pip::Action::Accept,p)&&p.Health()==75&&p.ItemCount(11)==0);
+  assert(use(13)&&p.CarryCapacity()==210&&p.EffectiveSpecial(0)==6);
+  p.AdvanceAid(5);
+  assert(use(13)&&p.Snapshot().activeAid.size()==1);
+  assert(use(15));
+  p.AdvanceAid(2);
+  assert(p.Health()==85&&p.EffectiveSpecial(0)==6);
+  assert(!use(17)&&p.Health()==85&&p.ItemCount(17)==1);
+  assert(use(19)&&p.Snapshot().addictions.count(20)&&!p.WithdrawalActive(20));
+
+  const std::string save="/tmp/fq-aid-"+std::to_string(getpid());
+  std::string error;
+  assert(p.Save(save,error));
+  fo3player::Player restored(c);
+  if(!restored.Restore(save,error)){std::cerr<<error<<'\n';std::abort();}
+  unlink(save.c_str());
+  assert(restored.Health()==85&&restored.CarryCapacity()==210&&!restored.WithdrawalActive(20));
+  restored.AdvanceAid(10);
+  assert(restored.Health()==100&&restored.EffectiveSpecial(0)==3&&restored.WithdrawalActive(20));
 }
 static void SkillPresentationDecodeTests() {
   assert(Relevant("AVIF"));
@@ -411,6 +442,67 @@ static void Original(const char *path) {
   p.DamageHealth(30);
   assert(p.Use(water));
   assert(p.Health() == p.MaxHealth() - 10);
+  const auto consume=[&](const char* editor){
+    const uint32_t form=d.formNames.at(editor);
+    assert(p.Add(form,1));
+    const auto row=std::find_if(p.Snapshot().inventory.begin(),p.Snapshot().inventory.end(),
+      [&](const auto& stack){return stack.formId==form;});
+    if(!p.Use(row->id,&error)){std::cerr<<editor<<": "<<error<<'\n';std::abort();}
+  };
+  const auto caps=d.formNames.at("caps001");
+  const auto priorCaps=p.ItemCount(caps);
+  consume("nukacola");
+  assert(p.ItemCount(caps)==priorCaps+1&&p.Snapshot().pipboy.radiation>0&&p.Health()==p.MaxHealth());
+  consume("radaway");
+  assert(p.Snapshot().pipboy.radiation==0);
+  p.DamageHealth(100);
+  assert(p.ChangeActorValueDamage(fo3player::PlayerRef,25,35,false));
+  const auto beforeStim=p.Health();
+  const auto beforeLimb=p.Snapshot().bodyDamage[0];
+  consume("stimpak");
+  assert(p.Health()>beforeStim+30&&p.Snapshot().bodyDamage[0]<beforeLimb);
+  const auto medicine=p.Snapshot().skills[5];
+  assert(p.DebugSetPerkPoints(1)&&p.DebugSetPerkRank(d.formNames.at("comprehension"),1));
+  consume("bookskillmedicine");
+  assert(p.Snapshot().skills[5]==medicine+2);
+  const auto ap=p.MaxActionPoints();
+  consume("jet");
+  assert(p.MaxActionPoints()==ap+30);
+  const auto hp=p.MaxHealth();
+  consume("buffout");
+  assert(p.MaxHealth()==hp+60);
+  const auto dr=p.DamageResistance(fo3player::PlayerRef);
+  consume("morphine");
+  assert(p.DamageResistance(fo3player::PlayerRef)==dr+25);
+  consume("psycho");
+  assert(p.AidEntryPoint(0,100)==125);
+  consume("yaoguaimeat");
+  assert(std::abs(p.AidEntryPoint(0,100)-137.5f)<.01f);
+  consume("stealthboy");
+  assert(p.AidModifier(49)==75);
+  p.AdvanceAid(240);
+  assert(p.MaxActionPoints()==ap&&p.MaxHealth()==hp&&p.AidEntryPoint(0,100)==100&&
+         p.DamageResistance(fo3player::PlayerRef)==dr&&p.AidModifier(49)==0);
+  float radResistance=0,protectedResistance=0;
+  p.ActorValue(fo3player::PlayerRef,20,radResistance);
+  consume("radx");
+  p.ActorValue(fo3player::PlayerRef,20,protectedResistance);
+  assert(protectedResistance>radResistance+25);
+  consume("radaway");
+  consume("waterunpurified");
+  const float protectedRads=p.Snapshot().pipboy.radiation;
+  p.AdvanceAid(240);
+  consume("radaway");
+  consume("waterunpurified");
+  assert(p.Snapshot().pipboy.radiation>protectedRads);
+  assert(p.ChangeActorValueDamage(fo3player::PlayerRef,54,210,false)&&p.RadiationSickness()==0x32dee);
+  assert(p.AidModifier(7)==-1);
+  ResultScript withdrawal;
+  withdrawal.source="player.AddSpell WithdrawalMorphine";
+  assert(p.ExecuteDialogueResult(withdrawal,error)&&p.WithdrawalActive(d.formNames.at("withdrawalmorphine")));
+  withdrawal.source="player.RemoveSpell WithdrawalMorphine";
+  assert(p.ExecuteDialogueResult(withdrawal,error)&&!p.WithdrawalActive(d.formNames.at("withdrawalmorphine")));
+  std::cout<<"Original Aid, conditions, scripted caps, radiation, medicine and timed chems passed\n";
   Broadcast radio;
   radio.random.seed(4);
   assert(radio.Tune(d, 0x22488));

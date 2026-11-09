@@ -264,8 +264,19 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
     gPipInput.Step(
         Fo3PipboyFocus(), x, y, a, b, grip, now, gPipMenu.MapInteraction(),
         [&](fo3pip::Action action) {
+          uint32_t aidSound=0;
+          const auto used=session->player.Snapshot().pipboy.aidUsed;
+          if(action==fo3pip::Action::Accept&&gPipMenu.tab==fo3pip::Tab::Items&&
+             gPipMenu.selected<gPipMenu.rows.size()){
+            const auto* selected=gPipMenu.Stack(session->player,gPipMenu.rows[gPipMenu.selected]);
+            if(selected){
+              const auto aid=defs.aid.find(selected->formId);
+              if(aid!=defs.aid.end())aidSound=aid->second.sound;
+            }
+          }
           bool mutation = gPipMenu.Invoke(action, session->player);
           if (mutation) {
+            if(session->player.Snapshot().pipboy.aidUsed!=used)fo3audio::SoundEvent(aidSound);
             FlushFo3PlayerState();
             SynchronizeFo3PipboyEquipment();
           }

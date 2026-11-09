@@ -74,6 +74,7 @@ struct Item {
   float weight = 0;
   uint8_t ingestibleFlags=0;
   int32_t equipType=-1;
+  int8_t bookSkill=-1;
   bool playable = true, questItem = false, cannotDrop = false,
        valueKnown = true;
 };
@@ -122,6 +123,8 @@ struct Rules {
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
   float apBase = 0, apMult = 0, carryBase = 0, carryMult = 0;
   float skillPrimaryMult=2,skillLuckMult=.5f; // Verified native fAVDSkill defaults.
+  float medicineBase=1,medicineMult=.5f,addictionThreshold=70;
+  float radEnduranceMult=2,radEnduranceOffset=-1;
   float tagSkillBonus=15; // fAVDTagSkillBonus.
 };
 enum class LockChange : uint8_t { Locked, Key, Picked, Forced, Broken, ScriptUnlocked };
@@ -188,6 +191,12 @@ struct PlayerMove {
   std::array<float,3> position{},rotation{};
   bool pending=false;
 };
+struct ActiveAid {
+  uint32_t source=0,index=0;
+  float magnitude=0;
+  double remaining=0;
+};
+inline constexpr size_t MaxActiveAid=1024;
 struct State {
   bool inCharGen=false,locationSpecificLoadScreens=false;
   float playerScale=1;
@@ -215,6 +224,8 @@ struct State {
   float karma = 0, healthDamage = 0, apSpent = 0;
   // Damage modifiers: head, torso, left/right arm, left/right leg.
   std::array<float,6> bodyDamage{};
+  std::vector<ActiveAid> activeAid;
+  std::unordered_set<uint32_t> addictions;
   uint8_t disabledControls=0;
   std::unordered_set<uint32_t> restrainedActors;
   std::unordered_set<uint32_t> ignoredCrimeActors;
@@ -675,8 +686,21 @@ public:
   bool CanFastTravel(uint32_t marker,uint32_t cell,uint32_t world,std::string& reason) const;
   bool SetWaypoint(uint32_t world,float x,float y);
   bool TuneRadio(uint32_t reference);
+  struct AidEffect {
+    uint32_t index=0;
+    float magnitude=0,seconds=0;
+  };
+  bool AidEffects(uint32_t form,std::vector<AidEffect>& effects,std::string* reason=nullptr) const;
+  float AidModifier(uint32_t actorValue) const { return AidModifier(state_,actorValue); }
+  float EffectiveSpecial(unsigned index) const { return EffectiveSpecial(state_,index); }
+  float EffectiveSkill(unsigned index) const;
+  float AidEntryPoint(uint8_t entryPoint,float value) const;
+  uint32_t RadiationSickness() const;
+  bool WithdrawalActive(uint32_t spell) const;
+  bool SetAddiction(uint32_t spell,bool enabled);
+  void AdvanceAid(double seconds);
   bool CanUse(uint64_t stack,std::string* reason=nullptr) const;
-  bool Use(uint64_t stack);
+  bool Use(uint64_t stack,std::string* reason=nullptr);
   bool Add(uint32_t formId, int32_t count, float condition = 1);
   bool Remove(uint64_t stackId, int32_t count);
   bool Equip(uint64_t stackId,bool scripted=false);
@@ -824,6 +848,12 @@ private:
   void TouchMerchantCells(uint32_t cell);
   bool RestockMerchant(uint32_t actor,uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;
+  bool ValidateAidState(const State& state) const;
+  float AidModifier(const State&,uint32_t actorValue) const;
+  float EffectiveSpecial(const State&,unsigned index) const;
+  uint32_t RadiationSickness(float rads) const;
+  bool WithdrawalActive(const State&,uint32_t spell) const;
+  void ClampAidResources();
   bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0,ScriptProgramOrigin origin={});
   bool SourceEventCompileReady(uint32_t,const char*,uint32_t,uint32_t,std::string&) const;
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);

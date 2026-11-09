@@ -149,15 +149,27 @@ struct Note {
 };
 struct Effect {
   uint32_t id = 0, magnitude = 0, area = 0, duration = 0, range = 0, av = 0;
-  bool conditional = false;
+  std::vector<Condition> conditions;
 };
 struct Magic {
   uint32_t flags = 0, archetype = 0, av = 0, script = 0;
+  uint32_t resistance = UINT32_MAX, temporaryPerk = 0;
+  std::string name;
 };
 struct Ingestible {
   std::vector<Effect> effects;
-  uint32_t flags = 0;
+  uint32_t flags = 0, withdrawal = 0, sound = 0;
+  float addictionChance = 0;
 };
+struct EffectSpell {
+  std::string name;
+  std::vector<Effect> effects;
+};
+// Engine-defined EFID for UMON, with no MGEF record in Fallout3.esm.
+inline constexpr uint32_t UsageMonitorEffect=0x14f;
+inline constexpr uint32_t IngestibleMedicine=4;
+inline constexpr uint32_t MagicRecover=2, MagicDetrimental=4;
+inline constexpr uint32_t MagicValue=0, MagicScript=1, MagicChameleon=12, MagicStimpak=34;
 struct Topic {
   std::string editor, text;
   uint8_t type=0, flags=0;
@@ -288,6 +300,7 @@ struct Definitions {
   std::unordered_map<uint32_t, MessageDefinition> messages;
   std::unordered_map<uint32_t, Ingestible> aid;
   std::unordered_map<uint32_t, Magic> magic;
+  std::unordered_map<uint32_t, EffectSpell> effectSpells;
   std::unordered_map<uint32_t, Station> stations;
   std::unordered_map<uint32_t, Transmitter> transmitters;
   std::unordered_map<uint32_t, std::vector<Info>> topics;

@@ -163,6 +163,7 @@ bool DecodeItem(uint32_t form, uint32_t flags, ItemKind kind,
       return false;
     item.value = I32(d->data + 2);
     item.weight = fo3esm::ReadF32(d->data + 6);
+    if(d->data[1]<14&&d->data[1]!=12)item.bookSkill=int8_t(d->data[1]);
     item.playable = !(d->data[0] & 2);
     break;
   case ItemKind::Misc:
@@ -643,6 +644,15 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const auto setting=settings.find(entry.first);
     if(setting!=settings.end()&&std::isfinite(setting->second)&&setting->second>=0&&setting->second<=10)*entry.second=setting->second;
   }
+  for(const auto& setting:std::array<std::pair<const char*,float*>,5>{{
+      {"fMagicMedicineSkillBase",&next.rules.medicineBase},
+      {"fMagicMedicineSkillMult",&next.rules.medicineMult},
+      {"fAddictionUsageMonitorThreshold",&next.rules.addictionThreshold},
+      {"fAVDRadResistEnduranceMult",&next.rules.radEnduranceMult},
+      {"fAVDRadResistEnduranceOffset",&next.rules.radEnduranceOffset}}}){
+    const auto found=settings.find(setting.first);
+    if(found!=settings.end()&&std::isfinite(found->second))*setting.second=found->second;
+  }
   const auto tagBonus=settings.find("fAVDTagSkillBonus");
   if(tagBonus!=settings.end()){if(!std::isfinite(tagBonus->second)||tagBonus->second<0||tagBonus->second>100)return fail("Invalid tag skill bonus");next.rules.tagSkillBonus=tagBonus->second;}
   // Fast NPC flee locomotion uses the actual Fallout3.esm run multiplier;
@@ -673,6 +683,27 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   // The original compiled bytes remain attached and are never inferred.
   for(const auto& script:next.pipboy.scripts)
     next.eventPrograms.emplace(script.first,fo3script::ParseEvents(script.second));
+  // A matching AddPerk / RemovePerk effect grants a temporary rank for the
+  // lifetime of its MGEF. Keep that rank separate from permanently earned perks.
+  for(auto& entry:next.pipboy.magic){
+    auto& magic=entry.second;
+    if(magic.archetype!=fo3pipdata::MagicScript)continue;
+    const auto program=next.eventPrograms.find(magic.script);
+    if(program==next.eventPrograms.end()||!program->second.error.empty()||
+       program->second.blocks.size()!=2)continue;
+    std::string add,remove;
+    for(const auto& block:program->second.blocks){
+      if(!block.filter.empty())break;
+      std::istringstream words(fo3script::Lower(block.body));
+      std::string command,perk,extra;
+      if(!(words>>command>>perk)||(words>>extra))break;
+      if(block.event=="scripteffectstart"&&command=="addperk")add=perk;
+      if(block.event=="scripteffectfinish"&&command=="removeperk")remove=perk;
+    }
+    const auto perk=next.pipboy.formNames.find(add);
+    if(!add.empty()&&add==remove&&perk!=next.pipboy.formNames.end()&&next.pipboy.perks.count(perk->second))
+      magic.temporaryPerk=perk->second;
+  }
   for(const auto& volume:next.pipboy.triggerPrimitives){
     const auto association=next.pipboy.objectReferenceScripts.find(volume.first);
     if(association==next.pipboy.objectReferenceScripts.end())continue;
@@ -744,8 +775,9 @@ bool Player::SetPlayerAttributes(const std::array<uint8_t,7>& special,
   const auto& r=catalog_->rules;
   const float maxHealth=state_.baseHealth+
       (special[2]+r.healthEnduranceOffset)*r.healthEnduranceMult+
-      (state_.level-1)*r.healthLevelMult;
-  const float maxAp=r.apBase+special[5]*r.apMult;
+      (state_.level-1)*r.healthLevelMult+AidModifier(16);
+  const float agility=std::clamp(float(special[5])+AidModifier(10),1.f,10.f);
+  const float maxAp=std::max(0.f,r.apBase+agility*r.apMult+AidModifier(12));
   if(!std::isfinite(maxHealth)||maxHealth<=0||state_.healthDamage>maxHealth||
      !std::isfinite(maxAp)||maxAp<0||state_.apSpent>maxAp)return false;
   if(state_.special==special&&state_.skills==skills)return true;
@@ -829,20 +861,20 @@ float Player::MaxHealth() const {
   const auto &r = catalog_->rules;
   return state_.baseHealth +
          (state_.special[2] + r.healthEnduranceOffset) * r.healthEnduranceMult +
-         (state_.level - 1) * r.healthLevelMult;
+         (state_.level - 1) * r.healthLevelMult + AidModifier(16);
 }
 float Player::Health() const {
   return std::max(0.0f, MaxHealth() - state_.healthDamage);
 }
 float Player::MaxActionPoints() const {
-  return catalog_->rules.apBase + state_.special[5] * catalog_->rules.apMult;
+  return std::max(0.f,catalog_->rules.apBase+EffectiveSpecial(5)*catalog_->rules.apMult+AidModifier(12));
 }
 float Player::ActionPoints() const {
   return std::max(0.0f, MaxActionPoints() - state_.apSpent);
 }
 float Player::CarryCapacity() const {
   return catalog_->rules.carryBase +
-         state_.special[0] * catalog_->rules.carryMult;
+         EffectiveSpecial(0) * catalog_->rules.carryMult + AidModifier(13);
 }
 double Player::InventoryWeight() const {
   double result = 0;
@@ -1327,8 +1359,12 @@ bool Player::ActorValue(uint32_t reference,uint32_t id,float& value) const {
     if(id>=62&&id<=71)return ActorVariable(reference,id-62,value);
     return false;
   }
-  if(id>=5&&id<=11)value=state_.special[id-5];
-  else if(id>=32&&id<=45)value=state_.skills[id-32];
+  if(id>=5&&id<=11)value=EffectiveSpecial(id-5);
+  else if(id>=32&&id<=45)value=EffectiveSkill(id-32);
+  else if(id==18)value=DamageResistance(PlayerRef);
+  else if(id==20)value=std::clamp((EffectiveSpecial(2)+catalog_->rules.radEnduranceOffset)*
+                                 catalog_->rules.radEnduranceMult+AidModifier(id),0.f,100.f);
+  else if(id==21||id==49||id==52||id==56)value=std::clamp(AidModifier(id),0.f,100.f);
   else if(id>=25&&id<=30)value=100-state_.bodyDamage[id-25];
   else if(id==54)value=state_.pipboy.radiation;
   else if(id==16)value=Health();else if(id==12)value=ActionPoints();
@@ -1348,7 +1384,10 @@ bool Player::ChangeActorValueDamage(uint32_t reference,uint32_t id,float amount,
   if(id!=54&&(id<25||id>30))return false;
   auto& damage=id==54?state_.pipboy.radiation:state_.bodyDamage[id-25];const float next=std::clamp(damage+(restore?-amount:amount),0.f,id==54?1000.f:100.f);
   if(next!=damage){damage=next;++revision_;}
-  if(id==54&&damage>=1000)DamageHealth(MaxHealth());
+  if(id==54){
+    ClampAidResources();
+    if(damage>=1000)DamageHealth(MaxHealth());
+  }
   return true;
 }
 bool Player::DamageHealth(float amount) {
@@ -1503,7 +1542,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasAppearance=state_.appearance.race||state_.appearanceDraft.race;
+  const bool hasAid=!state_.activeAid.empty()||!state_.addictions.empty();
+  const bool hasAppearance=hasAid||state_.appearance.race||state_.appearanceDraft.race;
   const bool hasTags=hasAppearance||state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
   if(!fo3tags::Valid(state_)||(state_.tagMenuOwner&&((!catalog_->pipboy.quests.count(state_.tagMenuOwner)&&!catalog_->references.count(state_.tagMenuOwner))||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner))){error="Invalid tag skills state";return false;}
   const bool hasTalking=hasTags||!state_.talkingActivators.empty()||!state_.dailyPackages.empty();
@@ -1789,7 +1829,21 @@ bool Player::Save(const std::string &path, std::string &error) const {
       for(int value:a->adjustments)payload.push_back(uint8_t(value+10));
     }
   }
-  Put32(bytes, hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasAid){
+    if(!ValidateAidState(state_)){error="Invalid active Aid state";return false;}
+    Put32(payload,0x31444941); // AID1
+    Put32(payload,uint32_t(state_.activeAid.size()));
+    for(const auto& effect:state_.activeAid){
+      Put32(payload,effect.source);Put32(payload,effect.index);
+      PutFloat(payload,effect.magnitude);
+      uint64_t time;std::memcpy(&time,&effect.remaining,sizeof(time));Put64(payload,time);
+    }
+    std::vector<uint32_t> addictions(state_.addictions.begin(),state_.addictions.end());
+    std::sort(addictions.begin(),addictions.end());
+    Put32(payload,uint32_t(addictions.size()));
+    for(auto spell:addictions)Put32(payload,spell);
+  }
+  Put32(bytes, hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1849,7 +1903,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 35))
+      (version < 1 || version > 36))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2416,7 +2470,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       }
       if(version>=35){
         constexpr size_t appearanceBytes=23+fo3character::ControlLimit;
-        if(payload.size()-at!=4+2*appearanceBytes||fo3esm::ReadU32(p+at)!=0x31505041)return fail("Missing saved appearance");
+        if((version>=36?payload.size()-at<4+2*appearanceBytes:payload.size()-at!=4+2*appearanceBytes)||fo3esm::ReadU32(p+at)!=0x31505041)return fail("Missing saved appearance");
         at+=4;
         const bool female=next.playerSex<2?next.playerSex==1:catalog_->pipboy.playerFemale;
         for(auto* a:{&next.appearance,&next.appearanceDraft}){
@@ -2430,6 +2484,23 @@ bool Player::Restore(const std::string &path, std::string &error) {
         }
         if(next.appearanceDraft.race&&!next.appearanceMenuOwner)return fail("Orphaned appearance draft");
       }
+      if(version>=36){
+        if(payload.size()-at<12||fo3esm::ReadU32(p+at)!=0x31444941)return fail("Missing active Aid state");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>MaxActiveAid||payload.size()-at<20ull*count+4)return fail("Invalid active Aid count");
+        for(uint32_t i=0;i<count;++i,at+=20){
+          const uint64_t time=fo3esm::ReadU32(p+at+12)|(uint64_t(fo3esm::ReadU32(p+at+16))<<32);
+          double remaining;std::memcpy(&remaining,&time,sizeof(remaining));
+          next.activeAid.push_back({fo3esm::ReadU32(p+at),fo3esm::ReadU32(p+at+4),
+                                    fo3esm::ReadF32(p+at+8),remaining});
+        }
+        const auto addictions=fo3esm::ReadU32(p+at);at+=4;
+        if(addictions>catalog_->pipboy.effectSpells.size()||payload.size()-at!=4ull*addictions)
+          return fail("Invalid saved addictions");
+        for(uint32_t i=0;i<addictions;++i,at+=4)
+          if(!next.addictions.insert(fo3esm::ReadU32(p+at)).second)return fail("Duplicate saved addiction");
+        if(!ValidateAidState(next))return fail("Invalid active Aid state");
+      }
       if(at!=payload.size())return fail("Trailing player save data");
     }
     if (version == 3 && at != payload.size())
@@ -2439,8 +2510,11 @@ bool Player::Restore(const std::string &path, std::string &error) {
   // baseline. A character with 10 END/AGI may have higher HP/AP limits.
   const auto& rule=catalog_->rules;
   const float maxHealth=next.baseHealth+(next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
-      (next.level-1)*rule.healthLevelMult;
-  const float maxAp=rule.apBase+next.special[5]*rule.apMult;
+      (next.level-1)*rule.healthLevelMult+AidModifier(next,16);
+  const float maxAp=std::max(0.f,rule.apBase+EffectiveSpecial(next,5)*rule.apMult+AidModifier(next,12));
+  // Older saves used unmodified resources even if radiation was already high.
+  if(version<36&&next.pipboy.radiation>0&&next.apSpent<=rule.apBase+next.special[5]*rule.apMult)
+    next.apSpent=std::min(next.apSpent,maxAp);
   // Legacy v1-v14 catalogues may have zero maximum health.
   if(!std::isfinite(maxHealth)||(version>=15&&maxHealth<=0)||next.healthDamage>maxHealth||
      !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)

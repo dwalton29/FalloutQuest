@@ -423,6 +423,13 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
         if(in>>c){if(c!="0"&&c!="1"){error="invalid equipment message flag";return false;}cmd.index=c=="1";}
         else in.clear();
       }else in.clear();
+    } else if(op=="addspell"||op=="removespell"||
+        (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="addspell"||op.substr(op.find('.')+1)=="removespell"))){
+      const auto dot=op.find('.');
+      cmd.type=CommandType::ChangeSpell;
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.value=(dot==std::string::npos?op:op.substr(dot+1))=="addspell";
+      if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){error="invalid spell command";return false;}
     } else if(op=="additem"||op=="additemhealthpercent"||op=="removeitem"||
         (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="additem"||op.substr(op.find('.')+1)=="additemhealthpercent"||op.substr(op.find('.')+1)=="removeitem"))){
       const auto dot=op.find('.');const auto verb=dot==std::string::npos?op:op.substr(dot+1);

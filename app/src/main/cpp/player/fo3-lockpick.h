@@ -14,7 +14,7 @@ struct Game {
     *this={};reference=ref;static const char* tiers[]={"VeryEasy","Easy","Average","Hard","VeryHard"};
     const int tier=p.LockRequirement(ref)/25;static const int defaults[]={400,200,100,50,25};
     const int lower=tier*25,upper=tier<4?lower+25:255;
-    const float fraction=std::clamp((float(p.Snapshot().skills[4])-lower)/(2.f*(upper-lower)),0.f,1.f);
+    const float fraction=std::clamp((p.EffectiveSkill(4)-lower)/(2.f*(upper-lower)),0.f,1.f);
     auto interpolate=[&](const char* prefix,float fallback){const float min=p.LockSetting(std::string(prefix)+"Min"+tiers[tier],fallback);
       const float max=p.LockSetting(std::string(prefix)+"Max"+tiers[tier],fallback);return std::max(1.f,float(int(min+(max-min)*fraction)));};
     width=interpolate("iSweetSpotLength",float(defaults[tier]));concentric=interpolate("iConcentricLength",200);
