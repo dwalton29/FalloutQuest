@@ -68,7 +68,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
-      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73)){error="reference context unavailable";return false;}
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=159&&c.function!=160)){error="reference context unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}

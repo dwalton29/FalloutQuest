@@ -69,6 +69,17 @@ static void OriginalVaultArrivals(const char* path){
   packageTargets[0].aiLastUpdate=-1;
   for(unsigned tick=0;tick<2400&&!reached(packageTargets[0],speech);++tick)Q240UpdateNpcPackage(packageTargets[0],tick*.05);
   assert(reached(packageTargets[0],speech));
+  start(12);
+  auto& partyPlayer=gPlayerSession->player;
+  const auto paul=form("cg02paulhannonref"),stool=form("cg02dinerstool1");
+  const auto& seatConditions=defs.packages.at(form("cg02paulhannonsit")).conditions;
+  fo3dialogue::Context partyContext;partyContext.player=&partyPlayer;
+  assert(fo3dialogue::ReferenceContext(partyPlayer,paul,partyContext.speaker));
+  partyPlayer.SetScriptActorFurniture(overseer,0,0,0);
+  assert(!fo3dialogue::Conditions(seatConditions,partyContext,error)&&error.empty());
+  partyPlayer.SetScriptActorFurniture(overseer,stool,15,3);
+  assert(fo3dialogue::Conditions(seatConditions,partyContext,error)&&error.empty());
+  std::cout<<"Original Paul seating package reads the Overseer's sitting state\n";
   start(15);
   auto& cakePlayer=gPlayerSession->player;
   cakePlayer.SetScriptPlayerLocation(playerStart.x,playerStart.y,playerStart.z,playerStart.cell,0);
