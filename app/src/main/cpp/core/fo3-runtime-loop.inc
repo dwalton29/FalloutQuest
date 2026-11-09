@@ -1736,6 +1736,7 @@ private:
             ResetFo3Pipboy();
             gPipMenu.playingNote=0;
             EndFo3Dialogue("player death");
+            Q230ChatStop("player death");
             CancelFo3Lockpick();
             CancelFo3Terminal();
             ShutdownFo3Movie();

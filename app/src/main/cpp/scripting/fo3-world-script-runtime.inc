@@ -227,15 +227,20 @@ static void UpdateSpeechSubtitle(const fo3pipdata::Definitions& definitions){
     scriptSubtitle.visible=!text.empty();
     if(text!=scriptSubtitle.subtitle){scriptSubtitle.subtitle=std::move(text);++scriptSubtitle.revision;}
 }
+void ResetSpeech(){
+    for(unsigned i=0;i<speechLanes.size();++i){
+        SpeechStop(speechLanes[i],i);
+        speechLanes[i].pendingPackageDone={};
+    }
+    speechPending.clear();
+    scriptSubtitle={};
+}
 void SpeechTick(){
     if(!gPlayerSession)return;
     auto& player=gPlayerSession->player;
     if(speechGeneration!=player.ScriptRuntimeGeneration()){
-        for(unsigned i=0;i<speechLanes.size();++i){
-            SpeechStop(speechLanes[i],i);
-            speechLanes[i].pendingPackageDone={};
-        }
-        speechPending.clear();speechGeneration=player.ScriptRuntimeGeneration();
+        ResetSpeech();
+        speechGeneration=player.ScriptRuntimeGeneration();
     }
     for(unsigned i=0;i<speechLanes.size();++i) {
         AdvanceSpeech(speechLanes[i],i,player);

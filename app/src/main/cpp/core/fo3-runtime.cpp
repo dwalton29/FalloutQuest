@@ -23,6 +23,7 @@ bool Fo3PlayerNameFocus();
 bool Fo3SpecialBookFocus();
 void ShutdownFo3Movie();
 namespace fo3worldscript {
+void ResetSpeech();
 uint32_t SpeechLookTarget(uint32_t actor);
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
@@ -4608,6 +4609,7 @@ void AbortFo3SceneLoad(const char* reason) {
     if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
     if(gSceneLoad.deathReload||(gSceneLoad.boot&&!gSceneReady)){
         if(gSceneLoad.deathReload){
+            fo3worldscript::ResetSpeech();
             WeaponShutdown();
             gSceneReady=false;
             gExteriorStreamingActiveQ1890=false;
@@ -5216,7 +5218,11 @@ bool ProcessQ74TransitionRequest() {
     markFinalization("publish-environment-prefetch");
     const size_t oldObjects = gObjects.size();
     if (prepared.playerSession) {
-        if(gSceneLoad.deathReload){WeaponShutdown();gFo3SavePose={};}
+        if(gSceneLoad.deathReload){
+            fo3worldscript::ResetSpeech();
+            WeaponShutdown();
+            gFo3SavePose={};
+        }
         gPlayerSession = std::move(prepared.playerSession);
         gFo3ResidentSavePending=false;
         const auto& p = gPlayerSession->player;
