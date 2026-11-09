@@ -121,6 +121,32 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     ready.ready=true;actor.combatWeapons.emplace(form,std::move(ready));
     fo3audio::PreloadSound(d.fire3D);fo3audio::PreloadSound(d.equip);
   }
+  // Fists is the engine's weapon for an empty hand. Its original WEAP has
+  // no model, and melee reach comes from the attack pose rather than DNAM range.
+  const auto fists=catalog->pipboy.formNames.find("fists");
+  const auto weapon=fists==catalog->pipboy.formNames.end()?catalog->items.end():catalog->items.find(fists->second);
+  if(weapon!=catalog->items.end()&&weapon->second.weapon.valid&&weapon->second.weapon.animation==0){
+    Q230CombatWeapon ready;ready.definition=weapon->second.weapon;
+    std::vector<uint8_t> bytes;
+    auto& aim=ready.clips[0];auto& attack=ready.clips[1];
+    if(LoadFalloutMeshFile(root+"h2haim.kf",bytes)&&fo3anim::DecodeClip(bytes,aim)&&!aim.tracks.empty()&&
+       LoadFalloutMeshFile(root+"h2hattackright_a.kf",bytes)&&fo3anim::DecodeClip(bytes,attack)&&
+       !attack.tracks.empty()&&attack.frequency>0){
+      const auto hit=std::find_if(attack.textKeys.begin(),attack.textKeys.end(),[](const auto& key){return key.text=="Hit";});
+      const int hand=fo3anim::FindBone(actor.skeleton,"Bip01 R Hand");
+      const int origin=fo3anim::FindBone(actor.skeleton,attack.accumulationRoot);
+      fo3anim::Pose pose;
+      if(hit!=attack.textKeys.end()&&hand>=0&&origin>=0){
+        fo3anim::BindClip(actor.skeleton,attack,pose);
+        if(fo3anim::Sample(actor.skeleton,attack,(hit->time-attack.start)/attack.frequency,pose)){
+          const auto& a=pose.global[hand];const auto& b=pose.global[origin];
+          ready.definition.maxRange=std::hypot(a[12]-b[12],a[13]-b[13])*actor.source.scale;
+          ready.ready=ready.definition.maxRange>0;
+          if(ready.ready)actor.combatWeapons.emplace(fists->second,std::move(ready));
+        }
+      }
+    }
+  }
   // All original A/B/C hit IDLEs. Skip missing clips without inventing
   // stand-ins; choose among loaded siblings on an actual nonfatal impact.
   for(size_t slot=0;slot<fo3npc::HitIdleNames.size();++slot)
@@ -371,6 +397,9 @@ fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement &placement) {
 
 bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
                          float centerY, float floorZ) {
+  // A pure refraction mesh needs a scene-color sample. Omit it from the
+  // ordinary actor pass so it cannot show up as opaque fallback geometry.
+  if(part.mesh.RefractionOnly())return true;
   // BSDismember partitions 101..113 / 201..213 are wound caps,
   // not geometry on the intact actor. Keep the original body partitions.
   if(part.mesh.dismemberSkin && part.mesh.skinTriangleBodyParts.size()==part.mesh.indices.size()/3){

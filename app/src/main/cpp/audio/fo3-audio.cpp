@@ -4,6 +4,7 @@
 #include "fo3-audio-assets.h"
 #include "fo3-audio-catalog.h"
 #include "fo3-footsteps.h"
+#include "ui/loading/fo3-loading-state.h"
 #include "data/fo3-bsa-reader.h"
 #include <algorithm>
 #include <android/log.h>
@@ -24,6 +25,7 @@
 namespace fo3audio {
 namespace {
 constexpr int RadioConversationEvent=19;
+constexpr int LoadingEffectEvent=20;
 struct Event {
   Event() = default;
   Event(int k, uint32_t form, bool enabled, std::string editor = {})
@@ -40,6 +42,7 @@ struct Event {
   uint32_t radioTopic=0;
   bool intercom=false;
   float distance=-1,pan=0;
+  uint64_t loadingGeneration=0;
 };
 struct Runtime {
   JavaVM *vm = nullptr;
@@ -68,6 +71,9 @@ void JNICALL BroadcastDoneNative(JNIEnv*, jobject, jint channel, jint generation
 void JNICALL DialoguePositionNative(JNIEnv*, jobject, jint token,jint milliseconds) {
   for(auto& lane:runtime.dialogueFace)lane.Position(uint32_t(token),milliseconds);
 }
+jboolean JNICALL LoadingCurrentNative(JNIEnv*,jobject,jlong generation){
+  return IsFo3LoadingVisible()&&GetFo3LoadingGeneration()==uint64_t(generation)?JNI_TRUE:JNI_FALSE;
+}
 bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
   if (!env || !activity) return false;
   jclass cls = env->GetObjectClass(activity);
@@ -84,6 +90,8 @@ bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
        reinterpret_cast<void*>(DialogueDoneNative)},
       {const_cast<char*>("audioBroadcastDone"), const_cast<char*>("(II)V"),
        reinterpret_cast<void*>(BroadcastDoneNative)},
+      {const_cast<char*>("audioLoadingCurrent"), const_cast<char*>("(J)Z"),
+       reinterpret_cast<void*>(LoadingCurrentNative)},
   };
   const jint status = env->RegisterNatives(
       cls, methods, static_cast<jint>(sizeof(methods) / sizeof(methods[0])));
@@ -115,6 +123,19 @@ void Push(Event e) {
   if (!runtime.worker.joinable() || runtime.stop ||
       (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16)))
     return;
+  if(e.kind==LoadingEffectEvent){
+    if(e.name.empty()){
+      runtime.events.erase(std::remove_if(runtime.events.begin(),runtime.events.end(),
+          [](const Event& pending){return pending.kind==LoadingEffectEvent;}),runtime.events.end());
+      runtime.events.push_front(std::move(e));
+    }else{
+      const auto queued=std::find_if(runtime.events.begin(),runtime.events.end(),
+          [](const Event& pending){return pending.kind!=LoadingEffectEvent;});
+      runtime.events.insert(queued,std::move(e));
+    }
+    runtime.cv.notify_one();
+    return;
+  }
   if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16 || e.kind==17 || e.kind==18)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
@@ -146,6 +167,7 @@ void Worker() {
   auto cls = env->GetObjectClass(runtime.activity);
   auto volumes=env->GetMethodID(cls,"audioVolumes","(FFFF)V");
   auto movie=env->GetMethodID(cls,"audioMovie","(ZZ)V");
+  auto loadingEffect = env->GetMethodID(cls,"audioLoadingEffect","(Ljava/lang/String;FJ)V");
   auto menuLoop = env->GetMethodID(cls,"audioMenuLoop","(Ljava/lang/String;F)V");
   auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;F)V"),
        effect = env->GetMethodID(cls, "audioEffect", "(Ljava/lang/String;FF)V"),
@@ -157,7 +179,7 @@ void Worker() {
        dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;IIZ)V"),
        dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
-      !broadcast || !dialogue || !dialogueGain || !menuLoop || !volumes || !movie) {
+      !broadcast || !dialogue || !dialogueGain || !menuLoop || !loadingEffect || !volumes || !movie) {
     __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
                         "AUDIO JNI bridge unavailable");
     env->ExceptionClear();
@@ -186,6 +208,12 @@ void Worker() {
       env->ExceptionDescribe();
       env->ExceptionClear();
     }
+  };
+  auto playLoading = [&](const std::string& path,float gain,uint64_t generation){
+    auto str=env->NewStringUTF(path.c_str());
+    env->CallVoidMethod(runtime.activity,loadingEffect,str,gain,jlong(generation));
+    env->DeleteLocalRef(str);
+    if(env->ExceptionCheck())env->ExceptionClear();
   };
   Catalog catalog;
   std::string error;
@@ -291,10 +319,10 @@ void Worker() {
       recentFiles.pop_front();
     return path;
   };
-  auto resolve = [&](std::string path) {
+  auto resolve = [&](std::string path,bool forLoading=false) {
     if (path.rfind("@voice:", 0) == 0)
       path = voicePath(path);
-    if(IsLoadingScreenEffect(path))return std::string{};
+    if(IsLoadingScreenEffect(path)!=forLoading)return std::string{};
     auto list = choices(path);
     if (!list.empty())
       path = list[std::uniform_int_distribution<size_t>(0, list.size() -
@@ -362,6 +390,8 @@ void Worker() {
     extracted[path] = target;
     return remember(target);
   };
+  for(const auto& entry:catalog.sounds)
+    if(IsLoadingScreenEffect(entry.second.path))resolve(entry.second.path,true);
   auto sound = [&](uint32_t id, jmethodID method,float distance=-1,float pan=0) {
     auto s = catalog.sounds.find(id);
     if (s == catalog.sounds.end() || s->second.path.empty() || IsLoadingScreenEffect(s->second.path)) {
@@ -532,6 +562,23 @@ void Worker() {
           call(music, playlist, cell==TitleCell?2.f:1.f, true);
         }
         sound(cell==TitleCell?0:catalog.AmbientForCell(cell), ambient);
+      }
+      continue;
+    }
+    if(e.kind==LoadingEffectEvent){
+      if(e.name.empty()){
+        playLoading("",1,0);
+      }else if(IsFo3LoadingVisible()&&e.loadingGeneration==GetFo3LoadingGeneration()){
+        const auto named=catalog.names.find(e.name);
+        const auto asset=named==catalog.names.end()?catalog.sounds.end():catalog.sounds.find(named->second);
+        if(asset!=catalog.sounds.end()){
+          const auto path=resolve(asset->second.path,true);
+          if(!path.empty()&&IsFo3LoadingVisible()&&e.loadingGeneration==GetFo3LoadingGeneration()){
+            __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING AUDIO cue=%s generation=%llu",
+                e.name.c_str(),static_cast<unsigned long long>(e.loadingGeneration));
+            playLoading(path,asset->second.gain,e.loadingGeneration);
+          }
+        }
       }
       continue;
     }
@@ -720,6 +767,13 @@ void NamedSound(const std::string &editorId) {
   if (!editorId.empty() && editorId.size() <= 128)
     Push({5, 0, true, editorId});
 }
+void LoadingSound(const std::string& editorId) {
+  if(editorId.empty()||editorId.size()>128||!IsFo3LoadingVisible())return;
+  Event event{LoadingEffectEvent,0,true,editorId};
+  event.loadingGeneration=GetFo3LoadingGeneration();
+  Push(std::move(event));
+}
+void StopLoadingSound(){Push({LoadingEffectEvent,0,false});}
 } // namespace fo3audio
 
 // Keep conventional exports as a fallback/debug surface. Production binding

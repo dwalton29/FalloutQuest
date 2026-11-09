@@ -602,6 +602,41 @@ static void OriginalEscapeAmbush(const fo3player::Catalog& catalog){
   }
   std::cout<<"Original radroach ambush advances on its third combat death\n";
 }
+static void OriginalHallway(const fo3player::Catalog& original){
+  auto catalog=original;const auto& d=catalog.pipboy;
+  const auto quest=d.formNames.at("cg03"),amata=d.formNames.at("cg03amataref");
+  const auto butch=d.formNames.at("cg03butchref"),pack=d.formNames.at("cg03amatabutchconv");
+  auto& stage=catalog.initial.pipboy.quests[quest];stage.stage=15;stage.running=true;stage.stages={5,6,10,15};
+  fo3player::Player p(catalog);p.RegisterOriginalActors();std::string error;
+  const auto& marker=d.targets.at(d.formNames.at("demoamatamarker"));
+  const auto changes=p.ScriptActorTriggerChanges(amata,marker.cell,marker.world,{marker.x,marker.y,marker.z});
+  assert(changes.size()==1&&changes.front().second);
+  const auto trigger=changes.front().first;
+  assert(p.ScriptActorTriggerChanges(butch,marker.cell,marker.world,{marker.x,marker.y,marker.z}).empty());
+  auto event=p.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",amata,error);
+  Check(bool(event)&&p.CommitScriptTransaction(*event),error);
+  p.AcknowledgeScriptTrigger(trigger,true,amata);
+  assert(p.ScriptActorTriggerChanges(amata,marker.cell,marker.world,{marker.x,marker.y,marker.z}).empty());
+  assert(p.Snapshot().pipboy.quests.at(quest).stage==20);
+  const auto topic=d.packages.at(pack).dialogueTopic;
+  assert(p.QueueScriptSpeech(amata,topic,butch,true,false,pack));
+  fo3script::Action action;
+  while(p.PollScriptAction(action)&&action.form!=topic){}
+  assert(action.kind==fo3script::ActionKind::Conversation&&action.reference==amata&&action.info);
+  fo3dialogue::Session speech;
+  speech.previewReferences=[](const auto&,const auto&,auto&){return true;};
+  speech.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};
+  fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;
+  assert(fo3dialogue::ReferenceContext(p,amata,ctx.speaker)&&fo3dialogue::ReferenceContext(p,butch,ctx.target));
+  Check(speech.StartSelectedTopic(topic,action.info,ctx,p,true),"original Tunnel Snakes conversation");
+  unsigned lines=0;
+  while(speech.phase==fo3dialogue::Phase::Speaking){
+    assert(++lines<=4);speech.AudioDone(speech.audioToken,true,ctx,p);
+    if(speech.Active()&&speech.actor!=ctx.speaker.reference)std::swap(ctx.speaker,ctx.target);
+  }
+  assert(lines==4&&p.Snapshot().pipboy.quests.at(quest).stage==25);
+  std::cout<<"Original Amata trigger and four Tunnel Snakes lines advanced CG03 to stage 25\n";
+}
 static void OriginalExam(const fo3player::Catalog& original,const char* master,bool skip){
   auto catalog=original;const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg03"),teacher=d.formNames.at("cg03mrbrotchref"),butch=d.formNames.at("cg03butchref");
   // Boundary fixture: the prior introduction and hallway conversation ended.
@@ -622,7 +657,7 @@ static void OriginalExam(const fo3player::Catalog& original,const char* master,b
     assert(p.Snapshot().pipboy.quests.at(quest).stages.count(45)&&p.Snapshot().tagMenuOwner==teacher&&p.TagSkillsRemaining()==3);
     for(unsigned skill:{0u,8u,11u})assert(p.ToggleTagSkill(skill));assert(p.ConfirmTagSkills());
   }else{
-    choose(talk,ctx,"cg03brotchstarta3");assert(p.Snapshot().pipboy.quests.at(quest).stage==42);talk.End("presentation fixture");
+    choose(talk,ctx,"cg03brotchstarta3");assert(p.Snapshot().pipboy.quests.at(quest).stage==42&&p.Snapshot().disabledControls==4);talk.End("presentation fixture");
     uint32_t trigger=0;const auto triggerScript=d.formNames.at("cg03classroomtriggerscript");for(const auto& ref:catalog.references){const auto script=catalog.eventBaseScripts.find(ref.second.base);if(script!=catalog.eventBaseScripts.end()&&script->second==triggerScript){trigger=ref.first;break;}}assert(trigger);
     const auto& at=d.targets.at(trigger);p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
     auto event=[&](){auto plan=p.PrepareReferenceEventTransaction(trigger,"OnTrigger",fo3player::PlayerRef,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(plan),error);
@@ -842,6 +877,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
         auto fight=p.PrepareDialogueInfoTransaction(topic,choice->info,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
         Check(bool(fight)&&p.CommitScriptTransaction(*fight),error);
         assert(p.Snapshot().actors.at(ctx.speaker.reference).hostile==fo3player::PlayerRef);
+        assert(p.Definitions().items.at(d.formNames.at("fists")).weapon.valid&&p.ActorUnarmedDamage(ctx.speaker.reference)>0);
         auto reaction=p.PrepareReferenceEventTransaction(ctx.speaker.reference,"OnStartCombat",fo3player::PlayerRef,error);
         Check(bool(reaction),error);
         Check(p.RollbackScriptTransaction(*fight), "restore the pre-fight state for the peaceful route");
@@ -975,7 +1011,7 @@ int main(int argc,char** argv){
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
   if(argc>2&&std::string(argv[2])=="--escape-exit"){OriginalEscapeExit(catalog);return 0;}
   if(argc>2&&std::string(argv[2])=="--escape-ambush"){OriginalEscapeAmbush(catalog);return 0;}
-  if(argc>2&&std::string(argv[2])=="--exam"){OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);return 0;}
+  if(argc>2&&std::string(argv[2])=="--exam"){OriginalHallway(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);return 0;}
   fo3player::Player player(catalog);player.RegisterOriginalActors();
   auto plan=player.PrepareNewGameTransaction(catalog.pipboy.formNames.at("cg00"),error);Check(bool(plan),error);
   fo3script::ScriptMasterMatch match;std::atomic<bool> cancelled{false};
@@ -1005,7 +1041,7 @@ int main(int argc,char** argv){
   const auto& base=catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00birthbaseisfx"));assert(base.valid&&!(base.flags&1));
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
-  OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);
+  OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);OriginalHallway(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);
   OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);
   std::cout<<"Original birth, playpen, birthday, intercom, target practice, photo, age jumps and G.O.A.T., both sex branches, package callbacks, heading, inventory and saves passed\n";
 }

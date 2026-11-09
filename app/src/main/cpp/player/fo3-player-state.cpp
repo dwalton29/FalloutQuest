@@ -673,6 +673,23 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   // The original compiled bytes remain attached and are never inferred.
   for(const auto& script:next.pipboy.scripts)
     next.eventPrograms.emplace(script.first,fo3script::ParseEvents(script.second));
+  for(const auto& volume:next.pipboy.triggerPrimitives){
+    const auto association=next.pipboy.objectReferenceScripts.find(volume.first);
+    if(association==next.pipboy.objectReferenceScripts.end())continue;
+    const auto program=next.eventPrograms.find(association->second.first);
+    if(program==next.eventPrograms.end()||!program->second.error.empty())continue;
+    for(const auto& block:program->second.blocks){
+      if(block.event!="ontriggerenter"&&block.event!="ontriggerleave")continue;
+      const auto actor=next.pipboy.formNames.find(block.filter);
+      if(actor!=next.pipboy.formNames.end()&&next.actorPlacements.count(actor->second))
+        next.actorTriggerVolumes[actor->second].push_back(volume.first);
+    }
+  }
+  for(auto& entry:next.actorTriggerVolumes){
+    auto& volumes=entry.second;
+    std::sort(volumes.begin(),volumes.end());
+    volumes.erase(std::unique(volumes.begin(),volumes.end()),volumes.end());
+  }
   // All eligible original ACHR identities must remain resolvable by actor
   // health, hostility, persistence and the unloaded scheduler. Keep their
   // full authored pose even if no quest, patrol or door currently points here.
@@ -2440,7 +2457,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
   scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;ClearScriptActorFurniture();
-  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
+  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
   scriptPrompts_=restoredPrompts;pendingScriptMessages_=std::move(restoredPrompts);scriptButtons_=std::move(restoredButtons);
   pendingScriptSounds_.clear();pendingBarters_.clear();EndContainerInteraction();
   ++revision_;

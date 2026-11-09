@@ -25,14 +25,15 @@ inline bool Permitted(uint32_t flags,size_t index,bool sleep) {
   return index<30&&(flags&(1u<<index))&&(flags&(sleep?0x80000000u:0x40000000u));
 }
 struct Reservations { std::unordered_map<uint64_t,uint32_t> owners; };
+inline uint64_t ReservationKey(uint32_t reference,size_t seat){return (uint64_t(reference)<<32)|seat;}
 class Lease {
   std::shared_ptr<Reservations> pool_;uint64_t key_=0;uint32_t owner_=0;
 public:
   Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
   ~Lease(){Release();}
-  bool Acquire(const std::shared_ptr<Reservations>& pool,uint32_t reference,size_t marker,uint32_t actor) {
+  bool Acquire(const std::shared_ptr<Reservations>& pool,uint32_t reference,size_t marker,uint32_t actor,size_t seat=0) {
     if(!pool||!reference||!actor||marker>=30)return false;
-    const uint64_t key=uint64_t(reference)<<32; // Side markers are alternative entries to one object.
+    const uint64_t key=ReservationKey(reference,seat);
     if(pool_&&pool_==pool&&key_==key&&owner_==actor)return true;
     if(pool->owners.count(key))return false;
     Release();pool_=pool;key_=key;owner_=actor;pool_->owners[key]=actor;return true;
@@ -75,7 +76,7 @@ struct Program {
   }
 };
 struct MarkerIdle { uint32_t form=0; fo3anim::Clip clip; };
-struct Slot { bool idleMarker=false; float idleTimer=0; std::vector<MarkerIdle> idles; uint32_t reference=0,base=0;size_t index=0;Marker marker;fo3pipdata::Placement placement;fo3anim::Matrix alignment=fo3anim::Identity();std::shared_ptr<const Program> program;bool sleep=false;std::shared_ptr<const Program> childProgram;};
+struct Slot { bool idleMarker=false; float idleTimer=0; std::vector<MarkerIdle> idles; uint32_t reference=0,base=0;size_t index=0,seat=0;Marker marker;fo3pipdata::Placement placement;fo3anim::Matrix alignment=fo3anim::Identity();std::shared_ptr<const Program> program;bool sleep=false;std::shared_ptr<const Program> childProgram;};
 struct Scene {std::vector<Slot> slots;std::shared_ptr<Reservations> reservations=std::make_shared<Reservations>();};
 template<class Loader>
 inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32_t cell,uint32_t world,Loader&& load,bool includeEat=false,const std::unordered_set<uint32_t>* cells=nullptr,bool includeChildren=false) {
@@ -85,6 +86,7 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
   for(const auto& r:d.targets){const auto& p=r.second;if((cells&&!cells->count(p.cell))||p.world!=world||(!world&&p.cell!=cell)||(p.flags&0x820)||p.parent||std::fabs(p.rx)>1e-5f||std::fabs(p.ry)>1e-5f||std::fabs(p.scale-1)>1e-5f)continue;
     const auto f=d.furniture.find(p.base);if(f==d.furniture.end()||!f->second.valid||!std::isfinite(p.scale)||p.scale<=0)continue;
     std::vector<uint8_t> bytes;std::vector<Marker> markers;if(!load(f->second.model,bytes)||!DecodeMarkers(bytes,markers))continue;
+    std::vector<std::pair<size_t,std::array<float,3>>> seats;
     for(size_t i=0;i<markers.size();++i){const auto& m=markers[i];const bool sleep=Permitted(f->second.markers,i,true),eat=includeEat&&Permitted(f->second.markers,i,false);if(!sleep&&!eat)continue;
       // Verified vanilla adult bed IDLE CTDA function 160 uses 1/2.
       // Floor-bed and scripted furniture require their own procedures.
@@ -94,6 +96,7 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       if(eat&&m.reference==11){enter="chairleftsit";loop="chairdynamicidle";exit="chairleftstand";}
       if(eat&&m.reference==12){enter="chairrightsit";loop="chairdynamicidle";exit="chairrightstand";}
       if(eat&&m.reference==14){enter="chairfrontsit";loop="chairdynamicidle";exit="chairfrontstand";}
+      if(eat&&m.reference==15){enter="sitdownstool";loop="stooldynamicidle";exit="standupstoolnormal";}
       if(eat&&m.reference==17){enter="floorsitenter";loop="floorsitdynamicidle";exit="floorexit";}
       const auto loadProgram=[&](auto& cache,const char* begin,const char* idle,const char* end)->std::shared_ptr<const Program>{
         if(!begin)return {};
@@ -118,7 +121,20 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       }
       if(!program&&!child)continue;
       Slot slot;slot.reference=r.first;slot.base=p.base;slot.index=i;slot.marker=m;slot.placement=p;slot.alignment=Alignment(p,m);
-      slot.program=std::move(program);slot.childProgram=std::move(child);slot.sleep=sleep;scene->slots.push_back(std::move(slot));
+      slot.program=std::move(program);slot.childProgram=std::move(child);slot.sleep=sleep;
+      if(eat&&markers.size()>1){
+        // Several FRN markers can lead to one chair. Reserve the occupied
+        // entry endpoint, so a booth with separated seats supports both actors.
+        const auto& entry=(slot.program?slot.program:slot.childProgram)->enter;
+        const auto end=fo3anim::Point(slot.alignment,Root(entry,(entry.stop-entry.start)/entry.frequency).translation);
+        const auto shared=std::find_if(seats.begin(),seats.end(),[&](const auto& existing){
+          return std::hypot(end[0]-existing.second[0],end[1]-existing.second[1])<35.f&&
+                 std::abs(end[2]-existing.second[2])<20.f;
+        });
+        if(shared!=seats.end())slot.seat=shared->first;
+        else {slot.seat=i;seats.emplace_back(i,end);}
+      }
+      scene->slots.push_back(std::move(slot));
     }
   }
   // Cache decoded marker clips once per resident scene. Conditions are checked

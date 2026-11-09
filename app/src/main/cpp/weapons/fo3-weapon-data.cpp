@@ -82,6 +82,8 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
     if(t=="GMST"&&k=="DATA"&&n==4){float v=fo3esm::ReadF32(b);if(std::isfinite(v)&&v>=0){if(editor=="fDamageToWeaponGunMult")o.damageGun=v;if(editor=="fDamageToWeaponEnergyMult")o.damageEnergy=v;if(editor=="fDamageToWeaponLauncherMult")o.damageLauncher=v;
       if(editor=="fDamageSkillBase")o.skillBase=v;
       if(editor=="fDamageSkillMult")o.skillMult=v;
+      if(editor=="fAVDUnarmedDamageBase")o.unarmedBase=v;
+      if(editor=="fAVDUnarmedDamageMult")o.unarmedMult=v;
       if(editor=="fDamageGunWeapCondBase")o.conditionBase=v;
       if(editor=="fDamageGunWeapCondMult")o.conditionMult=v;
       if(editor=="fAVDNPCHealthLevelMult")o.npcHealthLevel=v;

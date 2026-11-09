@@ -14,7 +14,10 @@ inline bool Contains(const fo3pipdata::Placement& p,const fo3pipdata::TriggerPri
   const auto rotate=[](float& a,float& b,float angle){const float c=std::cos(angle),s=std::sin(angle);
     const float old=a;a=c*a-s*b;b=s*old+c*b;};
   rotate(x,y,-p.rz);rotate(z,x,-p.ry);rotate(y,z,-p.rx);
-  return std::abs(x)<=shape.bounds[0]&&std::abs(y)<=shape.bounds[1]&&std::abs(z)<=shape.bounds[2];
+  // Trigger bounds and the placed floor can differ by a few float ULPs.
+  constexpr float tolerance=.01f;
+  return std::abs(x)<=shape.bounds[0]+tolerance&&std::abs(y)<=shape.bounds[1]+tolerance&&
+         std::abs(z)<=shape.bounds[2]+tolerance;
 }
 struct AnimationSequence {std::string name;double duration=0;bool loop=false;};
 struct AnimationRun {std::string group;double started=0,duration=0;bool loop=false;};

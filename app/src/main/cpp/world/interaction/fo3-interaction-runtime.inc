@@ -63,7 +63,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
     dx /= length; dy /= length; dz /= length;
     auto& player = gPlayerSession->player;
-    if(player.PlayerControlDisabled(5))return false;
+    if(player.PlayerControlDisabled(0))return false;
     const auto& catalog = player.Definitions();
     float best = 3.001f;
     Fo3DoorAimQ1700 door;

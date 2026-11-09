@@ -298,6 +298,7 @@ struct Catalog {
   std::unordered_map<uint32_t,fo3script::ImageModifier> imageModifiers;
   std::unordered_map<uint32_t,std::string> eventBaseNames;
   std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
+  std::unordered_map<uint32_t,std::vector<uint32_t>> actorTriggerVolumes;
   std::unordered_set<uint32_t> doorBases;
   std::unordered_set<uint32_t> scriptedBases;
   std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
@@ -636,8 +637,10 @@ public:
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;
+  std::vector<std::pair<uint32_t,bool>> ScriptActorTriggerChanges(
+      uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position)const;
   std::vector<uint32_t> ScriptOccupiedTriggers() const;
-  void AcknowledgeScriptTrigger(uint32_t reference,bool inside);
+  void AcknowledgeScriptTrigger(uint32_t reference,bool inside,uint32_t actor=PlayerRef);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
   bool PollQuestNotice(QuestNotice& out);
@@ -716,6 +719,7 @@ public:
   bool ReloadActorWeapon(uint32_t reference,uint64_t instance);
   const Stack* ActorWeapon(uint32_t reference) const;
   float ActorWeaponDamage(uint32_t reference) const;
+  float ActorUnarmedDamage(uint32_t reference) const;
   float DamageResistance(uint32_t reference) const;
   bool UpdateActor(uint32_t reference,const ActorState& state);
   bool SetCorpsePose(uint32_t reference,const CorpsePose& pose);
@@ -858,6 +862,7 @@ private:
   std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;
   std::unordered_map<uint32_t,fo3script::AnimationRun> scriptAnimations_;
   std::unordered_set<uint32_t> scriptInsideTriggers_;
+  std::unordered_set<uint64_t> scriptActorInsideTriggers_;
   double scriptRuntimeSeconds_=0,scriptElapsedSeconds_=0;
   uint64_t scriptRuntimeGeneration_=0;
   std::vector<ScriptMessage> pendingScriptMessages_;

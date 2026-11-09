@@ -430,7 +430,7 @@ static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata:
     if(slot.marker.reference==17&&def&&def->female)continue; // Authored skirt branch requires its own entry/exit program.
     if(!exact&&p.location.type!=1&&Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>std::max(0,p.location.radius))continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
-    const uint64_t key=uint64_t(slot.reference)<<32;const auto owner=f.Pool()->owners.find(key);
+    const auto key=fo3furniture::ReservationKey(slot.reference,slot.seat);const auto owner=f.Pool()->owners.find(key);
     if(owner!=f.Pool()->owners.end()&&owner->second!=actor.source.refFormId)continue;
     const float candidate=Q240PlanarDistance(here,{slot.alignment[12],slot.alignment[13],slot.alignment[14]});if(candidate<distance){distance=candidate;best=i;}
   }return best;
@@ -459,7 +459,7 @@ static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::P
     if(!slot.idleMarker&&((child?!slot.childProgram:!slot.program)||(def&&slot.marker.reference==17&&def->female)))continue;
     if(Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>radius)continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
-    const auto owner=f.Pool()->owners.find(uint64_t(slot.reference)<<32);
+    const auto owner=f.Pool()->owners.find(fo3furniture::ReservationKey(slot.reference,slot.seat));
     if(owner!=f.Pool()->owners.end()&&owner->second!=actor.source.refFormId)continue;
     if(slot.idleMarker&&!std::any_of(slot.idles.begin(),slot.idles.end(),[&](const auto& idle){return Q240MarkerIdleEligible(actor,idle.form);}))continue;
     choices.push_back(i);
@@ -579,7 +579,10 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
     }
-    if(package.type==15&&(!package.dialogueValid||!package.target.valid||package.target.type!=0||!package.target.value||package.target2.valid||package.location2.valid||package.procedureActions||package.otherProcedureScript)){
+    const bool sharedDialogueLocation=package.location.valid&&package.location.type==0&&
+      package.location2.type==0&&package.location2.value==package.location.value;
+    if(package.type==15&&(!package.dialogueValid||!package.target.valid||package.target.type!=0||!package.target.value||
+       package.target2.valid||(package.location2.valid&&!sharedDialogueLocation)||package.procedureActions||package.otherProcedureScript)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Dialogue AI requires one real actor target and no unsupported procedure actions");continue;
     }
     if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
@@ -609,8 +612,9 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
         listener[0],listener[1],listener[2],false,false};
       if(gPlayerSession->player.TalkingActivatorActor(package.target.value)&&!fo3dialogue::ReferenceContext(gPlayerSession->player,package.target.value,ctx.target))continue;
     }
-    // Quest policy: a stable Accompany random gate per actor/package/game minute.
-    if(package.type==7)ctx.randomPercent=float((actor.source.refFormId*2654435761u^packageId*2246822519u^uint32_t(fo3tod::WrapHour(hour)*60)*3266489917u)%100);
+    // A random package condition stays stable across reevaluation in the same game minute.
+    if(std::any_of(package.conditions.begin(),package.conditions.end(),[](const auto& condition){return condition.function==77;}))
+      ctx.randomPercent=float((actor.source.refFormId*2654435761u^packageId*2246822519u^uint32_t(fo3tod::WrapHour(hour)*60)*3266489917u)%100);
     std::string error;
     // GECK: Flee conditions gate entry but do not terminate an active package.
     const bool continuingFlee=package.type==10&&actor.aiPackage==packageId&&actor.aiSequence==1;
@@ -644,8 +648,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       }
     }
     if(package.type==15){
-      if(package.location.valid&&package.location.type!=2u&&package.location.type!=3u&&
-          !(package.location.type==0u&&package.location.value==package.target.value)){
+      if(package.location.valid&&package.location.type!=0u&&package.location.type!=2u&&package.location.type!=3u){
         Q240AiLogOnce(actor.source.refFormId,packageId,"Dialogue start-location mode unsupported");continue;
       }
 #ifndef FO3_NPC_CHAT_AVAILABLE
@@ -653,6 +656,12 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
 #else
       if(!FO3_NPC_CHAT_AVAILABLE(actor,package.target.value,packageId)){continue;}
       if(!Q240PackageActorTarget(actor,package.target.value,anchor))continue;
+      if(package.location.valid&&package.location.type==0&&package.location.value!=package.target.value){
+        const auto placed=definitions.targets.find(package.location.value);
+        if(placed==definitions.targets.end()||placed->second.cell!=gCurrentCellFormId||
+            placed->second.world!=gExteriorWorldspaceQ1890)continue;
+        anchor={placed->second.x,placed->second.y,placed->second.z};
+      }
 #endif
     }
     else if(package.type==7){std::array<float,3> current{};if(!Q240AccompanyDestination(actor,package,current,anchor)){Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","target/destination unavailable in resident scene; cross-cell continuation requires XTEL milestone");continue;}}
@@ -1334,19 +1343,24 @@ static void Q240AdvanceAccompany(Q230ActorVisual& actor,const fo3pipdata::Packag
 // Conversation AI: approach the ORIGINAL PTDT actor via local NAVM, then
 // request a mutually reserved single-voice HELLO from the resident director.
 // No quest scripts/INFO results are executed by this path.
-static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,float dt,double now) {
+static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,
+                               const std::array<float,3>& anchor,float dt,double now) {
   std::array<float,3> listener{};
   if(!Q240PackageActorTarget(actor,p.target.value,listener)){
     Q240PackageRouteFailed(actor,now,"Dialogue partner no longer resident");return;
   }
   const float talkingDistance=p.target.radius>0?float(p.target.radius):128.f; // authored PTDT distance, then VR fallback
   const auto here=Q240GamePosition(actor);
-  if(Q240PlanarDistance(here,listener)<=talkingDistance){
+  const bool placed=p.location.valid&&p.location.type==0&&p.location.value!=p.target.value;
+  const auto& destination=placed?anchor:listener;
+  const float arrival=placed?float(std::max(8,p.location.radius)):talkingDistance;
+  if(Q240PlanarDistance(here,destination)<=arrival){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
     actor.runtime.navigationDoor=0;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Conversation;
     actor.runtime.procedure=fo3npc::Procedure::Waiting;
-    if(now<actor.aiRepathAt)return;
+    if(now<actor.aiRepathAt||Q240PlanarDistance(here,listener)>talkingDistance||
+       (p.location2.valid&&Q240PlanarDistance(anchor,listener)>std::max(8,p.location2.radius)))return;
 #ifdef FO3_NPC_CHAT_REQUEST
     if(FO3_NPC_CHAT_REQUEST(actor.source.refFormId,p.target.value,now)){
       actor.aiRepathAt=now+2.;
@@ -1358,14 +1372,14 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
     actor.aiRepathAt=now+2.;return;
   }
   if(now>=actor.aiRepathAt&&(actor.aiPathIndex>=actor.aiPathGame.size()||
-      Q240PlanarDistance(actor.runtime.pathDestinationGame,listener)>32.f)){
+      Q240PlanarDistance(actor.runtime.pathDestinationGame,destination)>32.f)){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
-    actor.runtime.navigationDoor=0;actor.runtime.pathDestinationGame=listener;
+    actor.runtime.navigationDoor=0;actor.runtime.pathDestinationGame=destination;
     actor.aiRepathAt=now+.75;
     std::string error;
-    if(!actor.navigationGraph||!Q240ActorPath(actor,*actor.navigationGraph,here,listener,actor.aiPathGame,
+    if(!actor.navigationGraph||!Q240ActorPath(actor,*actor.navigationGraph,here,destination,actor.aiPathGame,
           &error,&actor.aiPathSurfaces)||actor.aiPathGame.empty()||
-       Q240PlanarDistance(actor.aiPathGame.back(),listener)>talkingDistance){
+       Q240PlanarDistance(actor.aiPathGame.back(),destination)>arrival){
       Q240PackageRouteFailed(actor,now,"Dialogue partner NAVM approach unavailable");return;
     }
   }
@@ -1405,7 +1419,7 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
   if(!f.Active()){
     const size_t target=p->type==12?Q240SandboxTarget(actor,*p,actor.runtime.evaluatedAnchor,actor.runtime.evaluatedRadius):Q240FurnitureTarget(actor,*p);if(target==SIZE_MAX){Q240PackageRouteFailed(actor,now,"furniture unavailable");return true;}
     const auto& slot=f.scene->slots[target];auto lease=std::make_shared<fo3furniture::Lease>();
-    if(!lease->Acquire(f.Pool(),slot.reference,slot.index,actor.source.refFormId)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
+    if(!lease->Acquire(f.Pool(),slot.reference,slot.index,actor.source.refFormId,slot.seat)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
     const auto* def=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
     const auto& races=gPlayerSession->player.Definitions().pipboy.childRaces;
     f.child=def&&races.count(def->race);
@@ -1618,7 +1632,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   }
   if(package->type==4||package->type==3||package->type==8||Q240TravelFurniture(actor,*package)){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
   if(package->type==7){Q240AdvanceAccompany(actor,*package,dt,now);return;}
-  if(package->type==15){Q240AdvanceNpcTalk(actor,*package,dt,now);return;}
+  if(package->type==15){Q240AdvanceNpcTalk(actor,*package,anchor,dt,now);return;}
   if(package->type==10){Q240AdvanceFleePackage(actor,*package,anchor,dt,now);return;}
   if(package->type==2){Q240AdvancePlayerEscort(actor,*package,anchor,dt,now);return;}
   if(package->type==1&&Q240PlanarDistance(Q240GamePosition(actor),anchor)<=std::max(0,package->target.radius)){

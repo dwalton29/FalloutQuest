@@ -40,7 +40,7 @@ struct RuntimeState {
   bool hasLastRoamDestination=false;
   uint32_t scriptLookTarget=0,scriptSpeechToken=0;
   bool scriptLookRotateBody=false;
-  uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
+  uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0,combatWeaponForm=0;
   // One active XTEL approach. No player scene transition is ever queued.
   uint32_t xtelDoor=0,xtelCell=0;
   bool offScene=false;

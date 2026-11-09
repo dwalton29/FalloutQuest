@@ -10,12 +10,12 @@ std::unordered_map<uint32_t,Q2400InteriorDoorState> gQ2400InteriorDoors;
 uint64_t gQ2400DoorSceneSerial=1;
 struct DoorObject {bool q2400SwingDoor=true;Fo3DoorTeleport teleport;uint32_t refFormId=20;float minX=.14f,maxX=.16f,minY=-1,maxY=2,minZ=-4,maxZ=0;};
 std::vector<DoorObject> gObjects;
-bool stepBlocked=true,wallBlocked=false,doorAvailable=true,loadDoor=false,hasChest=true;int toggles=0,queries=0,openSounds=0;
+bool stepBlocked=true,wallBlocked=false,windowedDoor=false,doorAvailable=true,loadDoor=false,hasChest=true;int toggles=0,queries=0,openSounds=0;
 void Q230UpdateActor(Q230ActorVisual&){}
 bool Q230LiveBone(const Q230ActorVisual& actor,int,std::array<float,3>& out){out=actor.runtime.position;out[1]+=1;return hasChest;}
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi){lo=hi=actor.runtime.position;hi[1]+=.2f;return true;}
-bool TraceFo3WorldSurface(float,float,float,float,float,float,float,uint32_t,uint32_t,Fo3WorldSurfaceHit* hit){
-  if(!stepBlocked)return false;
+bool TraceFo3WorldSurface(float,float y,float,float,float,float,float,uint32_t,uint32_t,Fo3WorldSurfaceHit* hit){
+  if(!stepBlocked||(windowedDoor&&y>FLOOR_Y+.8f))return false;
   ++queries;*hit={wallBlocked?21u:20u,.004f};return true;
 }
 const DoorObject* Q2400FindSwingDoorObject(uint32_t id){return id==20&&doorAvailable&&!loadDoor?&gObjects.front():nullptr;}
@@ -35,7 +35,7 @@ static Q230ActorVisual Prepare(bool locked=false,bool npcKey=false){
   fo3player::Item key;key.formId=300;key.kind=fo3player::ItemKind::Key;c.items[300]=key;
   c.actorInventories[43].entries.clear();if(npcKey)c.actorInventories[43].entries.push_back({300,0,1,1,1,false});
   gPlayerSession=std::make_unique<Session>(std::move(c));assert(gPlayerSession->player.PrepareActorInventory(42));
-  gQ2400InteriorDoors.clear();++gQ2400DoorSceneSerial;gObjects={DoorObject{}};stepBlocked=true;wallBlocked=false;doorAvailable=true;loadDoor=false;hasChest=true;toggles=queries=openSounds=0;
+  gQ2400InteriorDoors.clear();++gQ2400DoorSceneSerial;gObjects={DoorObject{}};stepBlocked=true;wallBlocked=false;windowedDoor=false;doorAvailable=true;loadDoor=false;hasChest=true;toggles=queries=openSounds=0;
   actor.aiPathGame={{1015,2010,20}};actor.aiPathSurfaces={{0,0}};actor.aiPathIndex=0;
   return actor;
 }
@@ -113,6 +113,7 @@ int main(int argc,char** argv){
   a=Prepare();hasChest=false;stepBlocked=false;before=a.runtime.position;
   Q240AdvancePath(a,.014f,1);assert(a.runtime.position!=before); // Creature bounds, no humanoid chest.
   stepBlocked=true;assert(Q230PathBlocked(a,1,0,0,.009f,1)&&toggles==1); // Sub-centimetre movement still finds the door.
+  a=Prepare();windowedDoor=true;assert(Q230PathBlocked(a,1,0,0,.009f,1)&&toggles==1);
   if(argc>1)OriginalDoors(argv[1]);
   std::cout<<"NPC local door animation wait, collision, keys, script rejection and XTEL isolation passed\n";
 }

@@ -1479,12 +1479,6 @@ private:
             if(p.PlayerControlDisabled(0)||p.Restrained(fo3player::PlayerRef))moveX_=moveY_=0;
             if(p.PlayerControlDisabled(4)&&!Fo3ScriptMessageFocus())turnX_=0;
             if(p.PlayerControlDisabled(6))sneakDown_=false;
-            static bool blockedActivationDown=false;
-            if(p.PlayerControlDisabled(5)&&!Fo3ScriptMessageFocus()){
-                if(activateDownQ1700_&&!blockedActivationDown&&p.Snapshot().noActivationSound)
-                    fo3audio::SoundEvent(p.Snapshot().noActivationSound);
-                blockedActivationDown=activateDownQ1700_;activateDownQ1700_=false;
-            }else blockedActivationDown=activateDownQ1700_;
         }
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                                               XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -2146,7 +2140,10 @@ private:
                     UpdateDoorAimQ1700(gameplaySeconds);
                     if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                         activateLatched_ = true;
-                        if (handPoseValid_[1]) {
+                        if(gPlayerSession&&gPlayerSession->player.PlayerControlDisabled(0)){
+                            const auto sound=gPlayerSession->player.Snapshot().noActivationSound;
+                            if(sound)fo3audio::SoundEvent(sound);
+                        }else if (handPoseValid_[1]) {
                             const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
                             const Mat4 handMatrixQ1700 = MatrixFromPose(handQ1700);
                             (void)ActivateFo3Interaction(
@@ -2458,6 +2455,7 @@ private:
             const bool wasLoading = IsFo3LoadingVisible();
             if(wasLoading)MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
             if (wasLoading && !IsFo3LoadingVisible()) {
+                fo3audio::StopLoadingSound();
                 pendingPlayableGeneration=GetFo3LoadingGeneration();
                 fqloadprofile::Log("PRESENTATION_COMPLETE generation=%llu elapsedMs=%.1f sceneReady=%d worldObjects=%zu collisionReady=%d sceneLoadActive=%d",
                     (unsigned long long)pendingPlayableGeneration,GetFo3LoadingElapsedUs()/1000.0,

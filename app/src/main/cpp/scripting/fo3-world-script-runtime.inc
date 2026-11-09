@@ -25,15 +25,15 @@ struct SpeechLane {
     uint32_t package=0,packageOwner=0;
     std::pair<uint32_t,uint32_t> pendingPackageDone{};
     double began=0;
-    bool subtitle=false,noTargetLook=false;
+    bool subtitle=false,noTargetLook=false,noHeadTracking=false;
 };
 static std::array<SpeechLane,2> speechLanes;
 uint32_t SpeechLookTarget(uint32_t actor){
     for(const auto& lane:speechLanes)
-        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&lane.reference==actor&&lane.reference==lane.identity)
+        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noHeadTracking&&lane.reference==actor&&lane.reference==lane.identity)
             return lane.target==actor?0:lane.target;
     for(const auto& lane:speechLanes)
-        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noTargetLook&&lane.target==actor&&lane.target==lane.listener&&lane.reference!=actor)
+        if(lane.dialogue.phase==fo3dialogue::Phase::Speaking&&!lane.noHeadTracking&&!lane.noTargetLook&&lane.target==actor&&lane.target==lane.listener&&lane.reference!=actor)
             return lane.reference;
     return 0;
 }
@@ -76,7 +76,7 @@ static void SpeechStop(SpeechLane& lane,unsigned index){
     if(lane.dialogue.Active()&&(index||!gDialogue.Active()))fo3audio::StopDialogueLane(index);
     lane.dialogue.End("scripted speech stopped");
     lane.reference=lane.identity=lane.target=lane.listener=lane.topic=lane.token=0;
-    lane.package=lane.packageOwner=0;lane.subtitle=lane.noTargetLook=false;
+    lane.package=lane.packageOwner=0;lane.subtitle=lane.noTargetLook=lane.noHeadTracking=false;
 }
 
 static uint64_t runtimeGeneration=~uint64_t{0};
@@ -201,6 +201,9 @@ static void StartSpeech(SpeechLane& lane,unsigned index,const fo3script::Action&
     lane.listener=admission.target.reference;lane.topic=action.form;
     lane.package=action.package;lane.packageOwner=action.reference;lane.subtitle=action.forceSubtitle;
     lane.noTargetLook=action.noTargetLook;
+    const auto& packages=player.Definitions().pipboy.packages;
+    const auto package=packages.find(action.package);
+    lane.noHeadTracking=package!=packages.end()&&(package->second.dialogueFlags&1u);
     player.SetScriptActorTalking(lane.reference,true);
     player.SetScriptActorTalking(lane.identity,true);
     fo3audio::DialogueGain(.7f);
@@ -333,6 +336,20 @@ void Events(){
     for(const auto& change:player.ScriptTriggerChanges()){
         if(Event(change.first,change.second?"OnTriggerEnter":"OnTriggerLeave",fo3player::PlayerRef))
             player.AcknowledgeScriptTrigger(change.first,change.second);
+        if(Fo3ResidentFrameBlocked())return;
+    }
+    struct ActorTriggerChange {uint32_t actor,volume;bool entering;};
+    std::vector<ActorTriggerChange> actorChanges;
+    for(const auto& actor:gQ230NpcActors){
+        if(actor.runtime.offScene||!actor.runtime.Alive())continue;
+        const auto id=actor.source.refFormId;
+        for(const auto& change:player.ScriptActorTriggerChanges(
+                id,gCurrentCellFormId,gExteriorWorldspaceQ1890,Q240GamePosition(actor)))
+            actorChanges.push_back({id,change.first,change.second});
+    }
+    for(const auto& change:actorChanges){
+        if(Event(change.volume,change.entering?"OnTriggerEnter":"OnTriggerLeave",change.actor))
+            player.AcknowledgeScriptTrigger(change.volume,change.entering,change.actor);
         if(Fo3ResidentFrameBlocked())return;
     }
     std::vector<uint32_t> refs;

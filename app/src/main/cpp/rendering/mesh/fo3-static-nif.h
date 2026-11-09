@@ -51,6 +51,8 @@ struct Fo3StaticNifMesh {
     uint32_t shaderFlags1 = 0u;
     uint32_t shaderType = 0u;
     uint32_t shaderFlags2 = 0u;
+    // Bethesda SF1 Refraction / Fire Refraction without SF2 Refraction Tint.
+    bool RefractionOnly() const {return (shaderFlags1&0x18000u)&&!(shaderFlags2&0x10u);}
     bool noLighting = false;
     bool alphaBlend = false;
     bool alphaTest = false;

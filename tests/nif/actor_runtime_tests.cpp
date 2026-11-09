@@ -200,6 +200,14 @@ std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
 #include "world/fo3-resident-time-runtime.inc"
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 #undef FO3_ACTOR_RUNTIME_HOST_TEST
+static void RefractionMeshesAreNotActorGeometry(){
+  Q230ActorVisual actor;
+  CpuObject part;part.mesh.shaderFlags1=0x82018000;part.mesh.shaderFlags2=1;
+  assert(part.mesh.RefractionOnly()&&Q230UploadActorPart(actor,part,0,0,0));
+  assert(actor.objects.empty()&&actor.rigs.empty());
+  part.mesh.shaderFlags1=0x82080108;part.mesh.shaderFlags2=0;
+  assert(!part.mesh.RefractionOnly());
+}
 static void CombatCompositionTests(){
   using namespace fo3anim;using namespace fo3npc;
   Q230ActorVisual a;
@@ -273,6 +281,7 @@ static void CombatCompositionTests(){
   assert(a.combatPose.instance==1&&a.combatPose.from.empty());
 }
 int main(int argc,char** argv) {
+  RefractionMeshesAreNotActorGeometry();
   (void)argc;(void)argv;
 #ifdef FQ_REAL_CREATURE_ASSETS
   if(argc!=3)return 77;

@@ -15,7 +15,9 @@ public:
  bool Busy()const{return phase!=Phase::Idle;}
  bool Active()const{return seated||Busy();}
  bool Begin(uint32_t ref,size_t index,const Pose& sit,const Pose& stand,double now){
-  if(Active()||!scene||index>=scene->slots.size()||!lease.Acquire(scene->reservations,ref,index,0x14))return false;
+  if(Active()||!scene||index>=scene->slots.size())return false;
+  const auto& slot=scene->slots[index];
+  if(slot.reference!=ref||!lease.Acquire(scene->reservations,ref,slot.index,0x14,slot.seat))return false;
   reference=ref;marker=index;sitting=sit;standing=stand;entering=true;phase=Phase::Out;started=now;return true;
  }
  void Leave(double now){if(seated&&!Busy()){entering=false;phase=Phase::Out;started=now;}}

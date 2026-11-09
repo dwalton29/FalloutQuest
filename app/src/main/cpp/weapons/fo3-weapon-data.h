@@ -65,6 +65,7 @@ struct Definitions {
   std::unordered_map<uint32_t,std::string> models;
   float damageGun=0,damageEnergy=0,damageLauncher=0;
   float skillBase=0,skillMult=0,conditionBase=0,conditionMult=0;
+  float unarmedBase=0,unarmedMult=0;
   float npcHealthLevel=0,npcHealthEndurance=0;
   float detectionDistance=0,drMax=85;
 };

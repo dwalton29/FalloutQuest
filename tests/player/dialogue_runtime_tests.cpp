@@ -377,6 +377,29 @@ static void OriginalIntercomApproach(const fo3player::Catalog& original,const ch
          !gQ230NpcActors.front().runtime.furniture.Active());
   EndFo3Dialogue("authored birthday greeting fixture");
   std::cout<<"Original Butch leaves furniture for his sweetroll greeting\n";
+
+  party.stage=44;party.stages={40,42,44};
+  const auto rangePackage=c.pipboy.formNames.at("cg02dadtoinsidetargetrange");
+  const auto& inside=c.pipboy.targets.at(c.pipboy.packages.at(rangePackage).location.value);
+  const auto& outside=c.pipboy.targets.at(c.pipboy.formNames.at("cg02dadmovetomarker"));
+  assert(inside.cell==gCurrentCellFormId&&outside.cell==inside.cell);
+  gPlayerSession=std::make_unique<Session>(c);auto& range=gPlayerSession->player;range.RegisterOriginalActors();
+  range.SetScriptPlayerLocation(outside.x,outside.y,outside.z,outside.cell,outside.world);
+  gQ210Head=Q240ScenePosition({outside.x,outside.y,outside.z});
+  actor={};actor.source.refFormId=ref;actor.source.baseFormId=start.base;actor.navigationGraph=graph;
+  actor.runtime.position=Q240ScenePosition({outside.x,outside.y,outside.z});actor.runtime.yaw=-outside.rz;
+  gQ230NpcActors={actor};
+  auto& dad=gQ230NpcActors.front();
+  for(unsigned n=0;n<1200&&Q240PlanarDistance(Q240GamePosition(dad),{inside.x,inside.y,inside.z})>8;++n)
+    Q240UpdateNpcPackage(dad,n*.05);
+  assert(dad.aiPackage==rangePackage&&!gDialogue.Active()&&
+         Q240PlanarDistance(Q240GamePosition(dad),{inside.x,inside.y,inside.z})<=8);
+  range.SetScriptPlayerLocation(inside.x,inside.y-50,inside.z,inside.cell,inside.world);
+  gQ210Head=Q240ScenePosition({inside.x,inside.y-50,inside.z});
+  for(unsigned n=0;n<100&&!gDialogue.Active();++n)Q240UpdateNpcPackage(dad,60+n*.05);
+  assert(gDialogue.Active()&&gDialogue.actor==ref);
+  EndFo3Dialogue("authored range greeting fixture");
+  std::cout<<"Original Dad follows his shooting-range marker before starting the greeting\n";
 }
 static void OriginalBirthdayRelease(const fo3player::Catalog& original){
   const auto q=original.pipboy.formNames.at("cg02"),dad=original.pipboy.formNames.at("cg02dadref"),radio=original.pipboy.formNames.at("radiovault101ref");

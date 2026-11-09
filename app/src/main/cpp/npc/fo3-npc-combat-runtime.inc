@@ -25,7 +25,8 @@ static fo3anim::Matrix Q230WeaponMatrix(Q230ActorVisual& actor) {
 }
 static void Q230RenderWeapon(Q230ActorVisual& actor,bool alpha) {
   if(!gPlayerSession||actor.runtime.activity!=fo3npc::Activity::Combat)return;
-  const auto* owned=gPlayerSession->player.ActorWeapon(actor.source.refFormId);if(!owned)return;
+  const auto* owned=gPlayerSession->player.ActorWeapon(actor.source.refFormId);
+  if(!owned||actor.runtime.equippedWeapon!=owned->id)return;
   const auto prepared=actor.combatWeapons.find(owned->formId);if(prepared==actor.combatWeapons.end())return;
   const auto transform=Q230WeaponMatrix(actor);
   for(size_t index:prepared->second.gpu){auto& o=actor.objects[index];if(o.alphaBlend!=alpha)continue;
@@ -173,10 +174,17 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
     const float score=d.damage*s.condition*std::max(rate,.01f);
     if((inRange&&!bestInRange)||(inRange==bestInRange&&score>best)){best=score;bestInRange=inRange;selected=s.id;form=s.formId;}
   }
-  if(!selected)return false;
-  if(actor.runtime.equippedWeapon==selected&&p.ActorWeapon(actor.source.refFormId))return true;
-  if(!p.EquipActorWeapon(actor.source.refFormId,selected))return false;
-  actor.runtime.equippedWeapon=selected;actor.runtime.reloadUntil=0;actor.runtime.pendingAttack=false;
+  if(!selected){
+    if(style&&style->restrictions==2)return false;
+    const auto& names=p.Definitions().pipboy.formNames;
+    const auto fists=names.find("fists");
+    if(fists==names.end()||!actor.combatWeapons.count(fists->second))return false;
+    form=fists->second;
+  }
+  if(actor.runtime.equippedWeapon==selected&&actor.runtime.combatWeaponForm==form)return true;
+  if(selected&&!p.EquipActorWeapon(actor.source.refFormId,selected))return false;
+  actor.runtime.combatWeaponForm=form;actor.runtime.equippedWeapon=selected;
+  actor.runtime.reloadUntil=0;actor.runtime.pendingAttack=false;
   actor.runtime.nextMeleeDecision=actor.runtime.nextAttack=actor.runtime.burstUntil=actor.runtime.burstWaitUntil=actor.runtime.actionUntil=0;
   actor.runtime.action=fo3npc::CombatAction::Acquire;
   const auto& clips=actor.combatWeapons.at(form).clips;
@@ -403,10 +411,9 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
         (defensive?Q230DefendsLeader(actor,policy,0x14):fo3npc::Acquires(ai,fo3npc::Relationship(p,actor.source.refFormId,0x14)));
     Q230ObservePlayer(actor,enemyPlayer,now);
 #endif
-    if(saved!=p.Snapshot().actors.end()&&saved->second.hostile&&Q230Target(saved->second.hostile,point,base))acquire=saved->second.hostile;
-#if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
-    if(acquire==0x14&&actor.playerDetection.phase==fo3sneak::Phase::Normal)acquire=0;
-#endif
+    const bool knownThreat=saved!=p.Snapshot().actors.end()&&saved->second.hostile&&
+      Q230Target(saved->second.hostile,point,base);
+    if(knownThreat)acquire=saved->second.hostile;
     if(!acquire&&s.activity!=fo3npc::Activity::Combat){
       float nearest=ai.radiusEnabled?float(ai.radius):c.weapons.detectionDistance;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
@@ -430,11 +437,11 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       candidate(0x14);for(const auto& other:gQ230NpcActors)candidate(other.source.refFormId);
     }
     if(acquire&&acquire!=s.combatTarget){
-      if(policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue&&!Q240AdoptPackage(actor,policyId,*policy,policyAnchor))return;
+      if(!knownThreat&&policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue&&!Q240AdoptPackage(actor,policyId,*policy,policyAnchor))return;
       if(s.dialogue)EndFo3Dialogue("combat threat");
       if(s.activity!=fo3npc::Activity::Combat)Q240SuspendPackageWait(actor,now);
       const bool starting=s.activity!=fo3npc::Activity::Combat;
-      s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;
+      s.BeginCombat(acquire);s.lastThreat=point;s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST)
       if(starting&&!fo3worldscript::Event(actor.source.refFormId,"OnStartCombat",acquire,true))return;
 #else
@@ -455,7 +462,11 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   if(valid&&!visible)target=s.lastThreat; // Search the observed location, never an unseen actor's live position.
   bool searchExpired=now-s.lastSeen>15;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
-  if(s.combatTarget==0x14)searchExpired=actor.playerDetection.phase==fo3sneak::Phase::Normal;
+  if(s.combatTarget==0x14){
+    const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
+    const bool knownThreat=saved!=p.Snapshot().actors.end()&&saved->second.hostile==s.combatTarget;
+    searchExpired=actor.playerDetection.phase==fo3sneak::Phase::Normal&&(!knownThreat||searchExpired);
+  }
 #endif
   // Bethesda's full multi-target detection event list is not decoded. This bounded
   // loaded-scene bridge uses authored player detection expiry and the existing
@@ -498,10 +509,18 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     s.action=fo3npc::CombatAction::Cover;
     Q230TacticalRoute(actor,game,0,INFINITY,false,true,now);Q240AdvancePath(actor,dt,now);return;
   }
-  const auto* owned=p.ActorWeapon(actor.source.refFormId);if(!owned)return;
-  const uint64_t instance=owned->id;const uint32_t form=owned->formId;
+  const auto* owned=s.equippedWeapon?p.ActorWeapon(actor.source.refFormId):nullptr;
+  if(s.equippedWeapon&&!owned)return;
+  const uint64_t instance=owned?owned->id:0;
+  const uint32_t form=s.combatWeaponForm;
   const auto& weapon=actor.combatWeapons.at(form);const auto& d=weapon.definition;
   const auto* style=Q230Style(actor);const bool ranged=d.Firearm();
+  const auto attackOrigin=[&](){
+    std::array<float,3> origin{};
+    if(!owned&&Q230LiveBone(actor,actor.chestBone,origin))return origin;
+    return fo3anim::Point(Q230WeaponMatrix(actor),{weapon.muzzle[0]/FO3_UNITS_PER_METRE,
+        FLOOR_Y+weapon.muzzle[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-weapon.muzzle[1]/FO3_UNITS_PER_METRE});
+  };
   const float dx=target[0]-s.position[0],dz=target[2]-s.position[2],distance=std::sqrt(dx*dx+dz*dz)*FO3_UNITS_PER_METRE;
   std::array<float,3> aimOrigin{};
   if(Q230LiveBone(actor,actor.chestBone,aimOrigin)){
@@ -598,16 +617,14 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     if(!movingFire)s.animation=fo3npc::Animation::Attack;Q230ActionSounds(actor,now);
     if(now<s.pendingHit)return;
     s.pendingAttack=false;
-    const auto matrix=Q230WeaponMatrix(actor);
-    const auto local=std::array<float,3>{weapon.muzzle[0]/FO3_UNITS_PER_METRE,FLOOR_Y+weapon.muzzle[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-weapon.muzzle[1]/FO3_UNITS_PER_METRE};
-    const auto muzzle=fo3anim::Point(matrix,local);
+    const auto muzzle=attackOrigin();
     const float mx=target[0]-muzzle[0],my=target[1]-muzzle[1],mz=target[2]-muzzle[2];
     const float ml=std::sqrt(mx*mx+my*my+mz*mz);
     // Revalidate the actual muzzle at the authored hit key: geometry or the
     // target may have moved since the attack wind-up began.
     if(ml<=.01f||HasFo3InteractionOccluder(muzzle[0],muzzle[1],muzzle[2],mx/ml,my/ml,mz/ml,ml,s.combatTarget))return;
     const auto aim=fo3vr::Unit(fo3vr::V{mx,my,mz});
-    const float damage=p.ActorWeaponDamage(actor.source.refFormId);
+    const float damage=owned?p.ActorWeaponDamage(actor.source.refFormId):p.ActorUnarmedDamage(actor.source.refFormId);
     if(ranged){
       if(p.FireActorWeapon(actor.source.refFormId,instance)){
         const auto right=fo3vr::Unit(fo3vr::Cross(aim,{0,1,0}));const auto up=fo3vr::Unit(fo3vr::Cross(right,aim));
@@ -620,8 +637,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   }
   if(now<s.actionUntil){if(!movingFire)s.animation=fo3npc::Animation::Attack;Q230ActionSounds(actor,now);return;}
   if(!movingFire)s.animation=fo3npc::Animation::Aim;s.action=fo3npc::CombatAction::Aim;
-  const auto matrix=Q230WeaponMatrix(actor);
-  const auto muzzle=fo3anim::Point(matrix,{weapon.muzzle[0]/FO3_UNITS_PER_METRE,FLOOR_Y+weapon.muzzle[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-weapon.muzzle[1]/FO3_UNITS_PER_METRE});
+  const auto muzzle=attackOrigin();
   const float mx=target[0]-muzzle[0],my=target[1]-muzzle[1],mz=target[2]-muzzle[2],ml=std::sqrt(mx*mx+my*my+mz*mz);
   if(std::fabs(error)>.2f||ml<=.01f||HasFo3InteractionOccluder(muzzle[0],muzzle[1],muzzle[2],mx/ml,my/ml,mz/ml,ml,s.combatTarget))return;
   if(!ranged&&style&&style->meleeValid){

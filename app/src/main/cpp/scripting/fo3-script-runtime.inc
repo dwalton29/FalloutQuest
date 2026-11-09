@@ -1004,8 +1004,31 @@ std::vector<uint32_t> Player::ScriptOccupiedTriggers() const {
   }
   std::sort(active.begin(),active.end());return active;
 }
-void Player::AcknowledgeScriptTrigger(uint32_t reference,bool inside){
-  if(inside)scriptInsideTriggers_.insert(reference);else scriptInsideTriggers_.erase(reference);
+std::vector<std::pair<uint32_t,bool>> Player::ScriptActorTriggerChanges(
+    uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position)const {
+  std::vector<std::pair<uint32_t,bool>> changes;
+  const auto volumes=catalog_->actorTriggerVolumes.find(actor);
+  if(volumes==catalog_->actorTriggerVolumes.end())return changes;
+  for(const auto reference:volumes->second){
+    const auto placed=catalog_->pipboy.targets.find(reference);
+    const auto shape=catalog_->pipboy.triggerPrimitives.find(reference);
+    if(placed==catalog_->pipboy.targets.end()||shape==catalog_->pipboy.triggerPrimitives.end())continue;
+    const auto& p=placed->second;
+    bool disabled=true;std::string error;
+    const bool inside=(world?p.world==world:p.cell==cell)&&
+        ReferenceDisabled(reference,disabled,error)&&!disabled&&fo3script::Contains(p,shape->second,position);
+    if(inside!=bool(scriptActorInsideTriggers_.count((uint64_t(actor)<<32)|reference)))
+      changes.push_back({reference,inside});
+  }
+  return changes;
+}
+void Player::AcknowledgeScriptTrigger(uint32_t reference,bool inside,uint32_t actor){
+  if(actor==PlayerRef){
+    if(inside)scriptInsideTriggers_.insert(reference);else scriptInsideTriggers_.erase(reference);
+  }else{
+    const auto key=(uint64_t(actor)<<32)|reference;
+    if(inside)scriptActorInsideTriggers_.insert(key);else scriptActorInsideTriggers_.erase(key);
+  }
 }
 bool Player::QueueScriptSound(uint32_t form){
   if(!form||pendingScriptSounds_.size()>=16)return false;

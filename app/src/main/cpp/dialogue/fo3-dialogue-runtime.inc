@@ -187,14 +187,16 @@ void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
   if(previous&&gPlayerSession){fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();}
 }
 void EndFo3Dialogue(const char* reason){CleanupFo3Dialogue(gDialogue.actor,reason);}
-bool StartFo3Dialogue(uint32_t reference) {
+bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0) {
   if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
   auto* actor=DialogueActor(reference);if(!actor)return false;
 #ifdef FO3_NPC_CHAT_RUNTIME
   Q230ChatStop("player interaction takes priority");
 #endif
   ConfigureFo3Dialogue();
-  if(!actor->runtime.CanTalk()||!gDialogue.Start(DialogueContext(*actor),gPlayerSession->player)) {
+  const auto context=DialogueContext(*actor);
+  if(!actor->runtime.CanTalk()||
+      !(topic?gDialogue.StartTopic(topic,context,gPlayerSession->player):gDialogue.Start(context,gPlayerSession->player))) {
     Q6H_LOGI("NPC DIALOGUE REENTER actor=%08X success=0 package=%08X activity=%d dialogue=%d reason=%s",reference,actor->runtime.package,int(actor->runtime.activity),actor->runtime.dialogue,gDialogue.endReason.c_str());return false;
   }
   Q240SuspendPackageWait(*actor,gDialogueTime);
@@ -373,7 +375,10 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       const float targetX=chat?chatPartner[0]:gQ210Head[0];
       const float targetZ=chat?chatPartner[2]:gQ210Head[2];
       const float desired=std::atan2(-(targetX-x),-(targetZ-z));
-      actor.runtime.Face(desired,dt,scriptedLook,actor.runtime.scriptLookRotateBody);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
+      const bool implicitSpeechTurn=scriptedLook&&!actor.runtime.scriptLookTarget&&
+          actor.runtime.scriptSpeechToken&&actor.runtime.speaking;
+      actor.runtime.Face(desired,dt,scriptedLook,actor.runtime.scriptLookRotateBody||implicitSpeechTurn);
+      actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
     }
   }
 }

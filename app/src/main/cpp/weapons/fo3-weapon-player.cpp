@@ -518,6 +518,18 @@ float Player::ActorWeaponDamage(uint32_t reference) const {
   const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,a->skills[d.skill-32]):0;
   return Damage(d,r,skill,s->condition);
 }
+float Player::ActorUnarmedDamage(uint32_t reference) const {
+  float skill=0;
+  if(reference==PlayerRef){
+    if(!ActorValue(reference,45,skill))return 0;
+  }else{
+    const auto* actor=ActorStatistics(reference);
+    if(!actor||actor->creature)return 0;
+    skill=actor->skills[13];
+  }
+  const auto& settings=catalog_->weapons;
+  return std::ceil(settings.unarmedBase+settings.unarmedMult*std::clamp(skill,0.f,100.f));
+}
 bool Player::ReloadActorWeapon(uint32_t reference,uint64_t instance) {
   const auto* w=ActorWeapon(reference);if(!w||w->id!=instance||ActorHealth(reference)<=0)return false;
   const auto& d=catalog_->items.at(w->formId).weapon;if(!d.Firearm()||w->loadedRounds>=d.clip)return false;

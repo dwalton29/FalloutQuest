@@ -159,8 +159,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid character generation flag";return false;}
     }
     else if(op=="enableplayercontrols"||op=="disableplayercontrols"){
-      cmd.type=CommandType::PlayerControls;cmd.value=op=="enableplayercontrols";cmd.index=127;
-      for(unsigned n=0;n<7;++n){if(!(in>>a)){in.clear();break;}float flag;if(!number(a,flag)||(flag!=0&&flag!=1)){error="invalid player controls flag";return false;}if(flag==0)cmd.index&=~(1u<<n);}
+      cmd.type=CommandType::PlayerControls;cmd.value=op=="enableplayercontrols";
+      // Defaults initialized by Fallout3.exe at 007920E0 / 007911D0.
+      cmd.index=cmd.value?127u:7u;
+      for(unsigned n=0;n<7;++n){if(!(in>>a)){in.clear();break;}float flag;if(!number(a,flag)||(flag!=0&&flag!=1)){error="invalid player controls flag";return false;}if(flag==0)cmd.index&=~(1u<<n);else cmd.index|=1u<<n;}
     }else if(op=="ignorecrime"||(op.size()>12&&op.substr(op.size()-12)==".ignorecrime")){
       const auto dot=op.find('.');cmd.type=CommandType::IgnoreCrime;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid IgnoreCrime";return false;}
