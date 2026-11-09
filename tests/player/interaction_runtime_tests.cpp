@@ -601,6 +601,22 @@ int main() {
     UpdateFo3ScriptMessage(3.3,0,true,false,true);Check(gScriptMessagePanel.subtitle=="First question"&&gScriptMessagePanel.visible&&!named.PendingScriptMessageCount(),"restore replaces stale panel with one canonical prompt");
     UpdateFo3ScriptMessage(3.4,0,true,false,true);Check(gScriptMessagePanel.visible,"held restore A does not answer");
     UpdateFo3ScriptMessage(3.5,0,false,false,true);UpdateFo3ScriptMessage(3.6,0,true,false,true);Check(!gScriptMessagePanel.visible,"restored question accepts fresh answer");std::remove(menuSave.c_str());
+
+    auto collectible=c;collectible.initial.baseHealth=100;collectible.initial.special.fill(5);
+    collectible.items[100].script=102;collectible.items[100].questItem=true;
+    collectible.eventBaseScripts[100]=102;
+    collectible.pipboy.scripts[102].source=
+        "Begin OnActivate\nif IsActionRef player == 1\nPlayer.ModAv Strength 1\nActivate\n"
+        "ModPCMiscStat \"Bobbleheads Found\", 1\nendif\nEnd";
+    collectible.eventPrograms[102]=fo3script::ParseEvents(collectible.pipboy.scripts[102]);
+    gPlayerSession=std::make_unique<fo3player::Session>(collectible);
+    gObjects={GpuObject{}};gObjects.front().baseRecordType="MISC";
+    auto& collector=gPlayerSession->player;
+    Check(query()&&t.pickup&&t.allowed&&std::string(t.prompt.data())=="Take Authored Item","scripted collectible is a Take target");
+    activate();
+    Check(collector.IsCollected(10)&&collector.ItemCount(100)==3&&collector.Snapshot().special[0]==6&&
+          collector.Snapshot().pipboy.bobbleheadsFound==1,"A runs native pickup and script effects together");
+    Check(!CollectFo3WorldReference(10)&&collector.Snapshot().pipboy.bobbleheadsFound==1,"collected item cannot repeat its script");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

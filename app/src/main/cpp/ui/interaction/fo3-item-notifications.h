@@ -21,7 +21,7 @@ struct Entry {
     std::array<char,512> text{};
     std::string icon,sound;
     ExperienceMeter meter;
-    double enqueued=0;
+    double enqueued=0,hold=0;
     bool quest=false,sounded=false;
 };
 class Queue {
@@ -37,11 +37,11 @@ public:
         if(count==size_)return;
         entries_=std::move(kept);head_=0;size_=count;if(currentRemoved)started_=now_;++revision_;
     }
-    void Enqueue(const std::string& text,const std::string& icon="") {
+    void Enqueue(const std::string& text,const std::string& icon="",double hold=Hold) {
         if(size_==Capacity) {head_=(head_+1)%Capacity;--size_;started_=now_;++revision_;}
         auto& e=entries_[(head_+size_)%Capacity];
         std::snprintf(e.text.data(),e.text.size(),"%s",text.c_str());e.enqueued=now_;e.icon=icon;e.sound.clear();e.meter={};
-        e.quest=false;e.sounded=false;
+        e.quest=false;e.sounded=false;e.hold=std::clamp(hold,0.,MaxAge);
         if(!size_) {started_=now_;++revision_;}
         ++size_;
     }
@@ -72,7 +72,7 @@ public:
     }
     double Age() const {return size_?now_-started_:0;}
     double Duration() const {
-        if(!Quest())return Hold+Fade;
+        if(!Quest())return (size_?entries_[head_].hold:Hold)+Fade;
         // Upper bound includes whitespace and wrapped/truncated characters;
         // no notification can disappear before its final emitted glyph fades.
         return 8.0+.1*std::strlen(Text());
@@ -103,7 +103,7 @@ public:
         if(!size_)return 0;
         const double age=now_-started_;
         if(Quest())return static_cast<float>(std::clamp(std::min(age/2.0,(Duration()-age)/2.0),0.0,1.0));
-        return static_cast<float>(std::clamp((Hold+Fade-age)/Fade,0.0,1.0));
+        return static_cast<float>(std::clamp((Duration()-age)/Fade,0.0,1.0));
     }
     size_t Size() const {return size_;}
     uint64_t Revision() const {return revision_;}

@@ -219,6 +219,22 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       const auto dot=op.find('.');const auto verb=dot==std::string::npos?op:op.substr(dot+1);
       cmd.type=CommandType::ActorValueDamage;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));cmd.variable=verb.substr(0,7)=="restore";
       if(!(in>>a>>b)||!cmd.form||(cmd.index=fo3av::ID(a))==UINT32_MAX||!number(b,cmd.value)||cmd.value<0){error="invalid actor value damage/restore";return false;}
+    } else if(op=="player.modav"||op=="player.modactorvalue"){
+      cmd.type=CommandType::ModifyActorValue;cmd.form=fo3player::PlayerRef;
+      if(!(in>>a>>b)||(cmd.index=fo3av::ID(a))==UINT32_MAX||!number(b,cmd.value)||
+         std::floor(cmd.value)!=cmd.value||std::abs(cmd.value)>100){
+        error="invalid permanent player actor value modifier";return false;
+      }
+    } else if(op=="modpcmiscstat"){
+      cmd.type=CommandType::ModifyMiscStat;
+      in>>std::ws;
+      if(in.peek()!='"'||!(in>>std::quoted(a))||a!="bobbleheads found"){
+        error="unsupported player miscellaneous statistic";return false;
+      }
+      in>>std::ws;if(in.peek()==',')in.get();
+      if(!(in>>b)||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||std::abs(cmd.value)>1000000){
+        error="invalid player miscellaneous statistic increment";return false;
+      }
     } else if(op=="setav"||(op.size()>6&&op.substr(op.size()-6)==".setav")){
       cmd.type=CommandType::SetActorValue;cmd.form=op=="setav"?owner:form(op.substr(0,op.size()-6));
       if(!(in>>a>>b)){error="missing actor value";return false;}

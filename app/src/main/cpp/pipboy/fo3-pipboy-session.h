@@ -34,7 +34,7 @@ struct SessionState {
   uint32_t selectedQuest = 0, tunedRadio = 0;
   std::unordered_set<uint32_t> silentRadios;
   // Runtime-observed counters. Original General label comes from GMST/exe.
-  uint32_t aidUsed = 0;
+  uint32_t aidUsed = 0, bobbleheadsFound = 0;
   float radiation = 0;
   std::unordered_set<uint32_t> talkedActors, knownTopics;
   std::unordered_set<uint64_t> saidInfos; // actor reference + INFO (Say Once is per actor)

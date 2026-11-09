@@ -118,6 +118,22 @@ void original(){
  assert(find(after,slides)&&fo3scene::SameResidentPlacement(*exam,*find(after,slides)));
  assert(find(after,projector)&&fo3scene::SameResidentPlacement(*idle,*find(after,projector)));
  assert(LoadFo3InteriorCellPlacementsQ1700(classroom,after,&state)&&find(after,slides)&&!find(after,projector));
+ const std::unordered_set<uint32_t> displayBases={
+   0x416b3,0x416b4,0x416b5,0x416b6,0x416b7,0x416b8,0x416b9,0x416ba,0x416bb,0x416bc,
+   0x416bd,0x416be,0x416bf,0x416c0,0x416c1,0x416c2,0x416c3,0x416c4,0x416c5,0x416c7};
+ for(const auto& house:{std::pair<uint32_t,uint32_t>{0x151e3,0x95b66},{0x170e7,0xbe883}}){
+   assert(LoadFo3InteriorCellPlacementsQ1700(house.first,before,nullptr,false,true,&displayBases));
+   fo3world::ReferenceStateSnapshot visible;
+   for(uint32_t ref=house.second;ref<house.second+20;++ref){
+     const auto* figure=find(before,ref);
+     assert(figure&&figure->retainedSwitch&&figure->modelPath.find("Clutter\\BobbleHead\\")==0);
+     visible.states[ref]=fo3world::ReferenceEnableState::Enabled;
+   }
+   assert(LoadFo3InteriorCellPlacementsQ1700(house.first,after,&visible,false,true,&displayBases));
+   for(uint32_t ref=house.second;ref<house.second+20;++ref)
+     assert(find(after,ref)&&fo3scene::SameResidentPlacement(*find(before,ref),*find(after,ref)));
+ }
+ std::cout<<"Both original homes retain all twenty display meshes at their authored placements\n";
  std::cout<<"Original classroom retains both authored projector variants before and during the exam\n";
  std::cout<<"Original Moira display selects the authored mounted world model\n";
  std::cout<<"Original MS11 detonator model/pose selection and collision input honor saved snapshots\n";

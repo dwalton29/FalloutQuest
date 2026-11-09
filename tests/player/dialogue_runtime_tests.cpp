@@ -512,12 +512,102 @@ static void OriginalExamRelease(const fo3player::Catalog& original){
   refreshAllowed=deferAllowed=false;
   std::cout<<"Original G.O.A.T. switches projectors without a scene reload and Brotch accepts post-exam dialogue\n";
 }
+static void OriginalBobbleheads(const fo3player::Catalog& catalog){
+  using namespace fo3player;
+  const auto& names=catalog.pipboy.formNames;
+  const auto medicine=names.at("bobbleheadmedi");
+  gPlayerSession=std::make_unique<::Session>(catalog);auto& player=gPlayerSession->player;
+  const auto publish=[&](Player& p){
+    gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());
+    gFo3ScenePublication.Publish(gFo3ReferenceState);
+  };
+  publish(player);loading=false;deferAllowed=refreshAllowed=true;
+  const auto refreshes=sceneRefreshes;
+  const std::pair<const char*,uint32_t> collectibles[]={
+    {"str",5},{"per",6},{"end",7},{"cha",8},{"int",9},{"agl",10},{"luk",11},
+    {"bart",32},{"bgun",33},{"ergw",34},{"expl",35},{"lock",36},{"medi",37},
+    {"mele",38},{"repr",39},{"scnc",40},{"sgun",41},{"snek",42},{"spch",43},{"uarm",45}};
+  std::string error;unsigned count=0;
+  for(const auto& collectible:collectibles){
+    const auto name=std::string("bobblehead")+collectible.first;
+    const auto base=names.at(name);
+    const auto placed=std::find_if(catalog.references.begin(),catalog.references.end(),[&](const auto& entry){
+      return entry.second.base==base;
+    });
+    assert(placed!=catalog.references.end());
+    const auto ref=base==medicine?names.at("bobbleheadmedi02ref"):placed->first;
+    gCurrentCellFormId=catalog.references.at(ref).cell;gExteriorWorldspaceQ1890=0;
+    gObjects={{ref,false,false,false,"MISC"}};
+    assert(player.CanActivatePlacedItem(ref)&&!player.CanPickup(ref));
+    float before=0,after=0;
+    assert(player.PermanentActorValue(PlayerRef,collectible.second,before));
+    auto plan=player.PrepareReferenceEventTransaction(ref,"OnActivate",PlayerRef,error);
+    if(!plan)std::cerr<<name<<" OnActivate: "<<error<<"\n";
+    assert(plan&&player.ItemCount(base)==0);
+    assert(plan->HasReferenceChanges()==(base==medicine));
+    assert(plan->HasReferenceChanges()?PublishFo3DialogueReferences(player,*plan,error):player.CommitScriptTransaction(*plan));
+    assert(!loading&&sceneRefreshes==refreshes);
+    assert(player.PermanentActorValue(PlayerRef,collectible.second,after));
+    const bool special=collectible.second<32;
+    assert(after==std::min(before+(special?1.f:10.f),special?10.f:100.f));
+    assert(player.ItemCount(base)==1&&player.IsQuestObject(base)&&player.Snapshot().pipboy.bobbleheadsFound==++count);
+    assert(!player.CanActivatePlacedItem(ref)&&!player.PrepareReferenceEventTransaction(ref,"OnActivate",PlayerRef,error));
+    ScriptMessage message;
+    assert(player.PollScriptMessage(message)&&message.form==names.at(name+"buffmessage")&&message.title=="Found Bobblehead");
+    if(base==medicine)for(const char* copy:{"bobbleheadmedi01ref","bobbleheadmedi02ref","bobbleheadmedi03ref"}){
+      bool disabled=false;
+      assert(player.ReferenceDisabled(names.at(copy),disabled,error)&&disabled);
+    }
+  }
+  assert(count==20&&player.Snapshot().achievements.count(49)&&player.Snapshot().achievements.count(50));
+  const auto special=player.Snapshot().special;
+  const auto skills=player.Snapshot().skills;
+  const auto save="/tmp/fq-bobbleheads-"+std::to_string(getpid());
+  assert(player.Save(save,error));
+  for(uint32_t standBase:{names.at("bobbleheaddisplaymegaton"),names.at("bobbleheaddisplaytenpenny")}){
+    assert(player.Restore(save,error)&&player.Snapshot().pipboy.bobbleheadsFound==20);
+    assert(player.Snapshot().special==special&&player.Snapshot().skills==skills);
+    const auto stand=std::find_if(catalog.references.begin(),catalog.references.end(),[&](const auto& entry){
+      return entry.second.base==standBase;
+    });
+    assert(stand!=catalog.references.end());
+    gCurrentCellFormId=stand->second.cell;
+    auto plan=player.PrepareReferenceEventTransaction(stand->first,"OnActivate",PlayerRef,error);
+    if(!plan)std::cerr<<"Stand activation: "<<error<<"\n";
+    assert(plan&&plan->AffectedReferences().size()==20);
+    const auto displayed=plan->AffectedReferences();
+    for(auto ref:displayed){
+      assert(player.Definitions().messageActivatorBases.count(catalog.references.at(ref).base));
+      gFo3RetainedSwitches.insert(ref);gFo3DormantSwitches.insert(ref);radioCollision[ref]=false;
+    }
+    publish(player);assert(plan&&PublishFo3DialogueReferences(player,*plan,error));
+    assert(!loading&&sceneRefreshes==refreshes&&gFo3DormantSwitches.empty());
+    assert(player.Snapshot().special==special&&player.Snapshot().skills==skills);
+    for(const auto& collectible:collectibles)assert(player.ItemCount(names.at(std::string("bobblehead")+collectible.first))==0);
+    for(auto ref:displayed){
+      bool disabled=true;
+      assert(radioCollision.at(ref)&&player.ReferenceDisabled(ref,disabled,error)&&!disabled);
+      assert(player.DispatchReferenceEvent(ref,"OnActivate",PlayerRef,error)==ScriptEventResult::Executed);
+      ScriptMessage inscription;assert(player.PollScriptMessage(inscription)&&!inscription.text.empty());
+    }
+    assert(player.DispatchReferenceEvent(stand->first,"OnActivate",PlayerRef,error)==ScriptEventResult::Executed);
+    ScriptMessage empty;assert(player.PollScriptMessage(empty)&&empty.form==names.at("bobbleheadnone")&&empty.notificationSeconds==2);
+    const auto placedSave=save+"-placed";assert(player.Save(placedSave,error)&&player.Restore(placedSave,error));
+    for(auto ref:displayed){bool disabled=true;assert(player.ReferenceDisabled(ref,disabled,error)&&!disabled);}
+    unlink(placedSave.c_str());
+    gFo3RetainedSwitches.clear();gFo3DormantSwitches.clear();radioCollision.clear();
+  }
+  unlink(save.c_str());gFo3ScriptRemovedItems.clear();gObjects.clear();
+  deferAllowed=refreshAllowed=false;
+  std::cout<<"All 20 original bobblehead pickups, Medicine duplicates, achievements, messages, saves and both resident displays passed\n";
+}
 static void OriginalBirthHandoff(const char* path){
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
   OriginalIntercomApproach(c,path);
   OriginalBirthdayRelease(c);
   OriginalPhotoHandoff(c);
   OriginalExamRelease(c);
+  OriginalBobbleheads(c);
   const auto birth=c.pipboy.formNames.at("cg00"),baby=c.pipboy.formNames.at("cg01"),dad=c.pipboy.formNames.at("cg00dadref");
   // Boundary precondition: the preceding end-of-birth fade reached stage 90.
   auto& stage=c.initial.pipboy.quests[birth];stage.stage=90;stage.running=true;stage.stages.insert(90);

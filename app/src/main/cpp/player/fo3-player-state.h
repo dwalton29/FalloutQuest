@@ -184,6 +184,7 @@ struct ScriptMessage {
   std::string title,text;
   std::vector<std::string> buttons;
   float argument=0;bool hasArgument=false;
+  uint32_t notificationSeconds=0;
 };
 struct MerchantVisit {uint32_t day=0;float hour=0;};
 struct PlayerMove {
@@ -310,6 +311,7 @@ struct Catalog {
   std::unordered_map<uint32_t,fo3script::ImageModifier> imageModifiers;
   std::unordered_map<uint32_t,std::string> eventBaseNames;
   std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
+  std::unordered_set<uint32_t> messageActivatorBases;
   std::unordered_map<uint32_t,std::vector<uint32_t>> actorTriggerVolumes;
   std::unordered_set<uint32_t> doorBases;
   std::unordered_set<uint32_t> scriptedBases;
@@ -453,6 +455,7 @@ public:
   float MaxHealth() const;
   float Health() const;
   bool ActorValue(uint32_t reference,uint32_t value,float& result) const;
+  bool PermanentActorValue(uint32_t reference,uint32_t value,float& result) const;
   bool ChangeActorValueDamage(uint32_t reference,uint32_t value,float amount,bool restore);
   float HealthPercentage(uint32_t reference) const;
   bool SetPlayerControls(uint32_t mask,bool enable);
@@ -767,6 +770,7 @@ public:
   bool PollTheftEvent(TheftEvent& out);
   bool PollKarmaEvent(KarmaEvent& out);
   bool CanPickup(uint32_t reference) const;
+  bool CanActivatePlacedItem(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   LockInfo GetLock(uint32_t reference) const;
   int LockRequirement(uint32_t reference) const;
@@ -857,6 +861,10 @@ private:
   bool MigrateWeaponInstances(State &state) const;
   bool ValidateAidState(const State& state) const;
   float AidModifier(const State&,uint32_t actorValue) const;
+  bool CanPickupPlacedItem(uint32_t reference,bool scripted) const;
+  bool PickupPlacedItem(uint32_t reference,bool scripted);
+  bool ModifyActorValue(uint32_t reference,uint32_t value,int delta);
+  std::array<uint8_t,14> SkillsForSpecial(const std::array<uint8_t,7>& special) const;
   float EffectiveSpecial(const State&,unsigned index) const;
   uint32_t RadiationSickness(float rads) const;
   bool WithdrawalActive(const State&,uint32_t spell) const;

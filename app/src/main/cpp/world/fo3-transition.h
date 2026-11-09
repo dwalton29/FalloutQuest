@@ -37,7 +37,8 @@ bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
 bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
                            std::vector<Fo3WorldPlacement>& outPlacements,
                            const fo3world::ReferenceStateSnapshot* referenceState = nullptr,
-                           bool candidateSelection = false);
+                           bool candidateSelection = false,
+                           const std::unordered_set<uint32_t>* messageActivators = nullptr);
 // Render thread publishes a resolved startup context before finalization.
 void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 

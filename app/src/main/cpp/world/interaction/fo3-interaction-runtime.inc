@@ -34,19 +34,30 @@ void NotifyFo3ItemTransfer(uint32_t base,int32_t count) {
 }
 
 // Render-thread transaction shared by A-button and physical shoulder release.
-// CanPickup/Pickup remain the only inventory/ownership/count/condition policy.
 bool CollectFo3WorldReference(uint32_t reference) {
     if(Fo3ResidentFrameBlocked())return false;
     if(!gSceneReady || IsFo3LoadingVisible() || !gPlayerSession || gPlayerSession->saveBlocked) return false;
     auto& player=gPlayerSession->player;
-    if(!player.CanPickup(reference)) return false;
+    const bool scripted=player.CanActivatePlacedItem(reference);
+    if(!scripted&&!player.CanPickup(reference)) return false;
     const auto ref=player.Definitions().references.at(reference);
-    if(!player.Pickup(reference)) return false;
+    if(scripted){
+        for(const auto& hand:gQ220Grab)if(hand.refFormId==reference)return false;
+        std::string error;
+        const auto result=DispatchFo3ScriptedActivation(reference,fo3player::PlayerRef,error);
+        if(result!=fo3player::ScriptEventResult::Executed){
+            if(result==fo3player::ScriptEventResult::Unsupported)
+                Q6H_LOGW("SCRIPT ITEM ACTIVATE FAILED: ref=%08X reason=%s",reference,error.c_str());
+            return false;
+        }
+        FlushFo3PlayerState();
+        if(!player.IsCollected(reference)&&IsFo3ReferenceEnabled(player,reference))return false;
+    }else if(!player.Pickup(reference))return false;
     RetireFo3LooseBody(reference);
     for(auto& hand:gQ220Grab) if(hand.refFormId==reference) hand={};
     gQ223DynamicBodies.erase(reference);
     RefreshFo3RemovedCollisionRefs();
-    NotifyFo3ItemTransfer(ref.base,ref.count);
+    if(!scripted)NotifyFo3ItemTransfer(ref.base,ref.count);
     Q6H_LOGI("ITEM PICKUP: reference=%08X base=%08X count=%d condition=%.3f weight=%.2f stacks=%zu",reference,ref.base,ref.count,ref.condition,
         player.InventoryWeight(),player.Snapshot().inventory.size());
     return true;
@@ -78,6 +89,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         const bool container=catalog.containers.count(object.baseFormId)!=0;
         const bool terminal=catalog.pipboy.terminals.count(object.baseFormId)!=0;
         const bool furniture=catalog.pipboy.furniture.count(object.baseFormId)!=0&&HasFo3PlayerSeat(object.refFormId);
+        const bool item=catalog.items.count(object.baseFormId)!=0;
         // Scripted activators use their original ACTI SCRI rather than being
         // treated as pickup items or a fabricated FalloutQuest interaction.
         const bool scripted=(object.baseRecordType=="ACTI" || container || furniture) &&
@@ -85,7 +97,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
         if (object.nonvisualResident || player.IsCollected(object.refFormId) ||
-            (!container && !terminal && !furniture && !scripted && !catalog.items.count(object.baseFormId)) ||
+            (!container && !terminal && !furniture && !scripted && !item) ||
             !IsFo3ReferenceEnabled(player,object.refFormId)) continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
@@ -102,14 +114,15 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         float distance;
         if (fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,3,distance) && distance<best) {
             const bool dispatchScript=scripted&&(!container||!player.CanLootContainer(object.refFormId));
-            best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted&&!terminal&&!furniture;target.terminal=terminal;target.furniture=furniture;
+            best=distance; target.reference=object.refFormId; target.pickup=item&&!container&&!terminal&&!furniture;target.terminal=terminal;target.furniture=furniture;
             target.container=container;target.scripted=dispatchScript;
             const float panelDistance=std::max(0.0f,distance-.15f);
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
                 (furniture&&!dispatchScript?CanFo3PlayerSit(target.reference):(dispatchScript||terminal) ? (IsFo3ReferenceEnabled(player,target.reference)&&
                     (!container||player.CanScriptActivateContainer(target.reference)))
-                  : (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference)));
+                  : (container ? player.CanLootContainer(target.reference) :
+                    player.CanPickup(target.reference)||player.CanActivatePlacedItem(target.reference)));
             target.door={};
         }
     }
@@ -290,6 +303,10 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
         if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;
         if(!player.PollScriptMessage(request))return;
+        if(request.notificationSeconds){
+            fo3notify::Notifications().Enqueue(request.text,{},request.notificationSeconds);
+            return;
+        }
         Q6H_LOGI("SCRIPT MESSAGE PRESENT: form=%08X owner=%08X buttons=%zu remaining=%zu",request.form,request.owner,request.buttons.size(),player.PendingScriptMessageCount());
         gScriptMessageOwner=request.owner;
         gScriptMessagePanel.title=std::move(request.title);
@@ -468,11 +485,10 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
     }
     if(!target.allowed){
         if(gPlayerSession&&gPlayerSession->player.GetLock(target.reference).locked){BeginFo3Lockpick(target.reference);return false;}
-        // Existing scripted doors and scripted item bases were deliberately
-        // blocked by their legacy default-action policies. Still deliver an
-        // actual activation event, but never invent a door transition/pickup.
+        // Deliver a scripted door's event even when its default action is
+        // unavailable. Item activation must pass pickup eligibility.
         if(gPlayerSession && !gPlayerSession->saveBlocked && !target.talk &&
-           !target.container &&
+           !target.container && !target.pickup &&
            gPlayerSession->player.HasReferenceEvent(target.reference,"OnActivate")){
             const auto& refs=gPlayerSession->player.Definitions().references;
             const auto ref=refs.find(target.reference);

@@ -3795,7 +3795,8 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> published,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
         const std::vector<fo3scene::ResidentVisualRecord>& live,
-        const std::vector<uint32_t>& affected,const std::vector<fo3player::ScriptExecution>& programs, Fo3ResidentCpuPreparation& out,
+        const std::vector<uint32_t>& affected,const std::vector<fo3player::ScriptExecution>& programs,
+        const std::unordered_set<uint32_t>& messageActivators,Fo3ResidentCpuPreparation& out,
         const std::atomic<bool>& cancelled, std::string& error) {
     error.clear();
     if (!request.valid || !published || !candidate || !publication.scene ||
@@ -3831,7 +3832,7 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
     auto load=[&](auto& placements,const auto& state) {
         return request.worldspaceFormId
             ?LoadFo3WorldspacePlacements(next.exteriorScope,placements,state.get())
-            :LoadFo3ScenePlacements(request,placements,state.get(),true);
+            :LoadFo3ScenePlacements(request,placements,state.get(),true,&messageActivators);
     };
     std::vector<Fo3WorldPlacement> before, after;
     if (!load(before,next.published) || !load(after,next.candidate)) {
@@ -3943,14 +3944,15 @@ bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection
     const auto collisionState=CaptureFo3CollisionMutationState();
     const auto lightRevision=gFo3LightPublication.Revision();
     const auto doorRevision=GetFo3DoorResourceRevision();
+    const auto catalog=gPlayerSession->player.SharedDefinitions();
     auto capturedDoors=context.worldspaceFormId?Fo3DoorResources{}:CaptureFo3DoorResources();
-    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,lightRevision,doorRevision,
+    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,lightRevision,doorRevision,catalog,
             capturedDoors=std::move(capturedDoors),published=std::move(published),candidate=std::move(candidate),rollback=std::move(rollback),
             live=std::move(live),affected=std::move(affected),programs=std::move(programs)](
             Fo3ResidentCpuPreparation& result,const std::atomic<bool>& cancelled) {
         std::string error;
         if(!PrepareFo3ResidentCpuResources(context,scope,publication,visualRevision,
-                published,candidate,live,affected,programs,result,cancelled,error))return false;
+                published,candidate,live,affected,programs,catalog->messageActivatorBases,result,cancelled,error))return false;
         result.assetTicket=ticket;result.collisionScope=collisionScope;result.lightRevision=lightRevision;result.doorRevision=doorRevision;
         result.affected=affected;result.rollback=rollback;
         if(!context.worldspaceFormId) {
@@ -4679,7 +4681,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
              boot ? 1 : 0, request.cellFormId, request.worldspaceFormId,
              static_cast<unsigned long long>(gSceneLoad.generation));
     const bool loadPlayer = !gPlayerSession||deathReload;
-    const auto reloadCatalog=deathReload?gPlayerSession->player.SharedDefinitions():nullptr;
+    const auto residentCatalog=gPlayerSession?gPlayerSession->player.SharedDefinitions():nullptr;
     const std::string startupPath=deathReload?gPlayerSession->savePath:gFo3StartupPath;
     const bool startupNew=!deathReload&&gFo3StartupNew;
     const uint32_t startupQuest=deathReload?0:gFo3StartupQuest;
@@ -4695,13 +4697,13 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
     if(gPlayerSession&&!deathReload)Q230RealizeSceneActors(gPlayerSession->player,request.cellFormId,request.worldspaceFormId,request.x,request.y);
     const auto referenceState=deathReload?nullptr:CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
-            [request, boot, loadPlayer, reloadCatalog, referenceState, startupPath, startupNew, startupQuest](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
+            [request, boot, loadPlayer, residentCatalog, referenceState, startupPath, startupNew, startupQuest](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
         result.request = request;
         result.referenceState=referenceState;
         auto phase = std::chrono::steady_clock::now();
         if (loadPlayer) {
-            if (reloadCatalog) {
-                result.playerSession = std::make_unique<fo3player::Session>(reloadCatalog);
+            if (residentCatalog) {
+                result.playerSession = std::make_unique<fo3player::Session>(residentCatalog);
             } else {
                 fo3player::Catalog catalog;
                 std::string error;
@@ -4718,7 +4720,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
             session.player.SetScriptEventDiagnostic([](const std::string& message) {
                 Q6H_LOGI("SCRIPT EVENT: %s",message.c_str());
             });
-            if(!reloadCatalog)Q6H_LOGI("GAME START source=%s gameHour=%.6f timeScale=%.1f",
+            if(!residentCatalog)Q6H_LOGI("GAME START source=%s gameHour=%.6f timeScale=%.1f",
                 startupNew?"original-globals":"legacy-development-default",
                 session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
             session.savePath = startupPath;
@@ -4727,7 +4729,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
                 std::string restoreError;
                 if(!session.player.Restore(session.savePath,restoreError)){
                     Q6H_LOGE("PLAYER RESTORE FAILED (save retained): %s",restoreError.c_str());
-                    if(reloadCatalog)result.startupError="Could not reload the previous save. Choose another save from Load.";
+                    if(residentCatalog)result.startupError="Could not reload the previous save. Choose another save from Load.";
                     return false;
                 }
                 if(session.player.Health()<=0){
@@ -4741,7 +4743,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
                 census.authored,census.registered,census.alreadyTracked,
                 census.disabledOrConditional,census.unsupportedBase,
                 census.unsupportedPlacement,census.limitReached);
-            if(reloadCatalog)session.savedRevision=session.player.Revision();
+            if(residentCatalog)session.savedRevision=session.player.Revision();
         }
         if (cancel.load(std::memory_order_acquire)) return false;
         if(startupNew&&result.playerSession){
@@ -4778,7 +4780,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
         result.resolveUs = Fo3SceneElapsedUs(phase);
         if (cancel.load(std::memory_order_acquire)) return false;
         phase = std::chrono::steady_clock::now();
-        if (!LoadFo3ScenePlacements(result.request, result.placements, result.referenceState.get())) return false;
+        const auto catalog=result.playerSession?result.playerSession->player.SharedDefinitions():residentCatalog;
+        if (!LoadFo3ScenePlacements(result.request,result.placements,result.referenceState.get(),false,
+                catalog?&catalog->messageActivatorBases:nullptr))return false;
         if (result.request.worldspaceFormId == 0u)
             fo3interior::Load(fo3assets::FalloutMasterPath(), result.request.cellFormId,
                 {result.request.x,result.request.y,result.request.z}, result.interiorLighting, result.referenceState.get());
@@ -10780,18 +10784,26 @@ void Q220UpdateLooseGrab(
     if (state.active) {
         const auto ref=state.refFormId;
         if(handIndex==1) {
+            const bool scriptedPickup=gPlayerSession&&gPlayerSession->player.CanActivatePlacedItem(ref);
             const bool eligible=!Fo3LockpickFocus() && gShoulderFocused && gSceneReady && !IsFo3LoadingVisible() &&
-                gPlayerSession && !gPlayerSession->saveBlocked && gPlayerSession->player.CanPickup(ref);
+                gPlayerSession && !gPlayerSession->saveBlocked && (scriptedPickup||gPlayerSession->player.CanPickup(ref));
             const bool wasInside=gShoulderGesture.inside,wasArmed=gShoulderGesture.armed;
             const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
             const bool commit=gShoulderGesture.Update(handIndex,ref,handValid,eligible,grip,gShoulderZone,{hand.x,hand.y,hand.z},now);
             if(wasInside!=gShoulderGesture.inside || wasArmed!=gShoulderGesture.armed)
                 Q6H_LOGI("SHOULDER INVENTORY ZONE: rightHand=1 heldRef=%08X inside=%d armed=%d shoulder=(%.3f %.3f %.3f) hand=(%.3f %.3f %.3f) bodyYaw=%.3f",
                     ref,gShoulderGesture.inside,gShoulderGesture.armed,gShoulderZone.shoulder[0],gShoulderZone.shoulder[1],gShoulderZone.shoulder[2],hand.x,hand.y,hand.z,gQ213TorsoYaw);
+            if(commit&&scriptedPickup){
+                // Some authored pickups disable the placed reference. Give
+                // the transaction ownership after the physical release.
+                fo3rigid::Live().Release(handIndex);
+                state.active=false;state.refFormId=0;
+            }
             if(commit && CollectFo3WorldReference(ref)) {
                 Q6H_LOGI("SHOULDER INVENTORY COMMIT: ref=%08X notificationQueued=1",ref);
                 gShoulderGesture.Reset();state.previousGrip=grip;return;
             }
+            if(commit&&scriptedPickup){gShoulderGesture.Reset();state.previousGrip=grip;return;}
             if(grip<=RELEASE) gShoulderGesture.Reset();
         }
         if (Q223DynamicBody* body =

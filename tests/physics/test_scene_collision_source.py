@@ -613,7 +613,7 @@ print('Dialogue binds canonical INFO/phase evidence, rebuilds indexes and preser
 # Original-master matching runs on owned worker inputs before any asset decode.
 assert worker.index('MatchScriptProgramsToMaster(')<worker.index('PrepareResidentAuthoredAdmission(')<worker.index('SelectResidentResources(')
 assert 'programs=std::move(programs)' in lane_start
-assert 'published,candidate,live,affected,programs,result,cancelled,error' in lane_start
+assert 'published,candidate,live,affected,programs,catalog->messageActivatorBases,result,cancelled,error' in lane_start
 assert 'script.AffectedReferences(),script.ExecutedScripts()' in s
 assert 'cpu.scriptMaster.Verified()&&cpu.authored.Matches' in s
 assert s.count('cpu.scriptMaster.Matches(script.ExecutedScripts())')==2

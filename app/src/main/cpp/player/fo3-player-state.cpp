@@ -1,6 +1,7 @@
 #include "fo3-player-state.h"
 #include "fo3-tag-skills.h"
 #include "data/fo3-esm-reader.h"
+#include "dialogue/fo3-dialogue-results.h"
 #include "npc/fo3-package-schedule.h"
 
 #include <algorithm>
@@ -260,6 +261,27 @@ static void FinalizePlayerCatalog(Catalog& catalog) {
     auto inserted=catalog.dialogueInfos.emplace(info.id,std::make_pair(topic.first,n));
     if(!inserted.second||!info.id||!topic.first||info.topic!=topic.first)
       inserted.first->second={0,0};
+  }
+  // Read-only displays can keep their models resident while disabled.
+  // Classify the authored activation body, independent of quest or FormID.
+  catalog.messageActivatorBases.clear();
+  for(const auto& entry:catalog.eventBaseScripts){
+    if(!catalog.eventBaseNames.count(entry.first))continue;
+    const auto program=catalog.eventPrograms.find(entry.second);
+    if(program==catalog.eventPrograms.end()||!program->second.error.empty()||program->second.blocks.size()!=1)continue;
+    const auto& event=program->second.blocks.front();
+    if(event.event!="onactivate")continue;
+    fo3pipdata::ResultScript script;script.source=event.body;
+    std::vector<fo3dialogue::Command> commands;std::string error;
+    if(!fo3dialogue::CompileResult(catalog.pipboy,script,commands,error))continue;
+    using Command=fo3dialogue::CommandType;
+    bool message=false,readOnly=true;
+    for(const auto& command:commands){
+      if(command.type==Command::ShowMessage)message=true;
+      else if(command.type!=Command::If&&command.type!=Command::ElseIf&&command.type!=Command::Else&&
+              command.type!=Command::EndIf&&command.type!=Command::Return){readOnly=false;break;}
+    }
+    if(message&&readOnly)catalog.messageActivatorBases.insert(entry.first);
   }
 }
 
@@ -1099,20 +1121,26 @@ bool Player::RollbackReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept {
   }
   plan.phase_=ReferenceEnablePlan::Phase::RolledBack;return true;
 }
-bool Player::CanPickup(uint32_t id) const {
+bool Player::CanPickup(uint32_t id) const {return CanPickupPlacedItem(id,false);}
+bool Player::CanActivatePlacedItem(uint32_t id) const {
+  return HasReferenceEvent(id,"OnActivate")&&CanPickupPlacedItem(id,true);
+}
+bool Player::CanPickupPlacedItem(uint32_t id,bool scripted) const {
   const auto r = catalog_->references.find(id);
   if (r == catalog_->references.end() || IsCollected(id))
     return false;
   const auto &ref = r->second;
   const auto i = catalog_->items.find(ref.base);
   if(!ref.valid || (ref.flags & 0x20) || !ResolveOwnership(id).known || ref.locked ||
-     i==catalog_->items.end() || !i->second.playable || i->second.script ||
+     i==catalog_->items.end() || !i->second.playable ||
+     (i->second.script&&(!scripted||HasReferenceEvent(id,"OnAdd"))) ||
      !(i->second.maxCondition>0 || ref.condition==1))return false;
   bool disabled=false;std::string error;
   return ReferenceDisabled(id,disabled,error)&&!disabled;
 }
-bool Player::Pickup(uint32_t id) {
-  if (!CanPickup(id) || state_.collected.size() >= 100000)
+bool Player::Pickup(uint32_t id) {return PickupPlacedItem(id,false);}
+bool Player::PickupPlacedItem(uint32_t id,bool scripted) {
+  if (!CanPickupPlacedItem(id,scripted) || state_.collected.size() >= 100000)
     return false;
   const auto &ref = catalog_->references.at(id);
   // Record before Add (which can allocate); undo on an invalid Add.
@@ -1276,21 +1304,24 @@ bool Player::AdjustSpecialBook(unsigned attribute,int delta){
   if(value<1||value>10||(delta>0&&SpecialBookRemaining()<=0))return false;
   state_.specialDraft[attribute]=uint8_t(value);++revision_;return true;
 }
-bool Player::ConfirmSpecialBook(){
-  if(!state_.specialMenuOwner||SpecialBookRemaining()!=0)return false;
+std::array<uint8_t,14> Player::SkillsForSpecial(const std::array<uint8_t,7>& special) const {
   // Native actor-value governing attributes, in the canonical skill order.
   // Preserve authored skill offsets and earned/tag bonuses; change only the
   // contribution of the edited SPECIAL attributes.
   static constexpr unsigned governing[14]={3,2,1,1,1,4,0,4,4,5,5,3,5,2};
   auto skills=state_.skills;const auto& rules=catalog_->rules;
-  const int luck=int(std::ceil(state_.specialDraft[6]*rules.skillLuckMult))-int(std::ceil(state_.special[6]*rules.skillLuckMult));
+  const int luck=int(std::ceil(special[6]*rules.skillLuckMult))-int(std::ceil(state_.special[6]*rules.skillLuckMult));
   for(unsigned i=0;i<14;++i){
     if(i==12)continue; // Throwing is unused in Fallout 3.
     const auto attribute=governing[i];
-    const int delta=int(std::lround((int(state_.specialDraft[attribute])-int(state_.special[attribute]))*rules.skillPrimaryMult))+luck;
+    const int delta=int(std::lround((int(special[attribute])-int(state_.special[attribute]))*rules.skillPrimaryMult))+luck;
     skills[i]=uint8_t(std::clamp(int(skills[i])+delta,0,100));
   }
-  if(!SetPlayerAttributes(state_.specialDraft,skills))return false;
+  return skills;
+}
+bool Player::ConfirmSpecialBook(){
+  if(!state_.specialMenuOwner||SpecialBookRemaining()!=0)return false;
+  if(!SetPlayerAttributes(state_.specialDraft,SkillsForSpecial(state_.specialDraft)))return false;
   state_.specialMenuOwner=state_.specialMenuTotal=0;state_.specialDraft={};++revision_;return true;
 }
 #include "fo3-tag-skills.inc"
@@ -1369,6 +1400,26 @@ bool Player::ActorValue(uint32_t reference,uint32_t id,float& value) const {
   else if(id==54)value=state_.pipboy.radiation;
   else if(id==16)value=Health();else if(id==12)value=ActionPoints();
   else if(id==23)value=state_.karma;else if(id==46)value=float(InventoryWeight());else return false;
+  return true;
+}
+bool Player::PermanentActorValue(uint32_t reference,uint32_t id,float& value) const {
+  if(reference!=PlayerRef)return false;
+  if(id>=5&&id<=11)value=state_.special[id-5];
+  else if(id>=32&&id<=45)value=state_.skills[id-32];
+  else return false;
+  return true;
+}
+bool Player::ModifyActorValue(uint32_t reference,uint32_t id,int delta){
+  if(reference!=PlayerRef)return false;
+  if(id>=5&&id<=11){
+    auto special=state_.special;
+    special[id-5]=uint8_t(std::clamp(int(special[id-5])+delta,1,10));
+    return SetPlayerAttributes(special,SkillsForSpecial(special));
+  }
+  if(id<32||id>45)return false;
+  auto& skill=state_.skills[id-32];
+  const auto next=uint8_t(std::clamp(int(skill)+delta,0,100));
+  if(next!=skill){skill=next;++revision_;}
   return true;
 }
 float Player::HealthPercentage(uint32_t reference) const {

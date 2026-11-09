@@ -389,6 +389,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     message.text=Text(s,"DESC");
     for(const auto& sub:s)if(sub.type=="ITXT")message.buttons.push_back(fo3esm::ZString(sub.p,sub.n));
     message.displayFlags=U(Find(s,"DNAM"));
+    message.displaySeconds=U(Find(s,"TNAM"));
     d.messages[id]=std::move(message);
   } else if (t == "PERK") {
     Perk p;

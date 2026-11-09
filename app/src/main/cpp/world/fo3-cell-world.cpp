@@ -41,8 +41,9 @@ extern void PumpFo3AndroidEventsQ1860();
 bool LoadFo3CellPlacements(uint32_t cellFormId,
                            std::vector<Fo3WorldPlacement>& outPlacements,
                            const fo3world::ReferenceStateSnapshot* referenceState = nullptr,
-                           bool candidateSelection = false, bool retainSwitches = false) {
-    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState, candidateSelection, retainSwitches);
+                           bool candidateSelection = false, bool retainSwitches = false,
+                           const std::unordered_set<uint32_t>* messageActivators = nullptr) {
+    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState, candidateSelection, retainSwitches,messageActivators);
 }
 
 // Placement metadata is compiled separately; LAND shares only explicit CPU
@@ -1148,7 +1149,8 @@ void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request) {
 bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
                            std::vector<Fo3WorldPlacement>& outPlacements,
                            const fo3world::ReferenceStateSnapshot* referenceState,
-                           bool candidateSelection) {
+                           bool candidateSelection,
+                           const std::unordered_set<uint32_t>* messageActivators) {
     outPlacements.clear();
     if (!request.valid) return false;
     if (request.worldspaceFormId != 0u) {
@@ -1156,7 +1158,7 @@ bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
             {request.worldspaceFormId, request.cellFormId, request.x, request.y, -1, candidateSelection},
             outPlacements, referenceState);
     }
-    return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState, candidateSelection, true);
+    return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState, candidateSelection,true,messageActivators);
 }
 
 void DiscardFo3PendingCellTransitionQ74() noexcept {

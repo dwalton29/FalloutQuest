@@ -22,6 +22,7 @@ class Expression {
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
       if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
+         query=="getpermanentactorvalue"||query=="getpcmiscstat"||
          query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="getdeadcount"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
@@ -142,7 +143,11 @@ class Expression {
       if(skill<32||skill>45||skill==44)return Fail("invalid tagged actor value");
       value=p.IsPlayerTagSkill(skill);return true;
     }
-    if(query=="getav"){
+    if(t=="getpcmiscstat"){
+      if(at==tokens.size()||tokens[at++]!="\"bobbleheads found\"")return Fail("unsupported player miscellaneous statistic");
+      value=float(p.Snapshot().pipboy.bobbleheadsFound);return true;
+    }
+    if(query=="getav"||query=="getpermanentactorvalue"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing actor value");
       const auto name=tokens[at++];
@@ -152,7 +157,8 @@ class Expression {
       if(name.size()==10&&name.substr(0,8)=="variable"&&name[8]>='0'&&name[8]<='1'&&name[9]>='0'&&name[9]<='9'){
         const unsigned slot=(name[8]-'0')*10+name[9]-'0';if(slot>=1&&slot<=10)valueId=61+slot;
       }
-      return p.ActorValue(id,valueId,value)||Fail("actor value unavailable "+name);
+      return (query=="getav"?p.ActorValue(id,valueId,value):p.PermanentActorValue(id,valueId,value))||
+        Fail("actor value unavailable "+name);
     }
     if(query=="gethealthpercentage"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));value=p.HealthPercentage(id);return value>=0||Fail("actor health unavailable");
@@ -215,7 +221,10 @@ public:
     for(size_t i=0;i<text.size();) {
       if(std::isspace((unsigned char)text[i])){++i;continue;}
       const size_t start=i;const auto c=text[i];
-      if(std::isalnum((unsigned char)c)||c=='_'||c=='.'){while(i<text.size()&&(std::isalnum((unsigned char)text[i])||text[i]=='_'||text[i]=='.'))++i;}
+      if(c=='"'){
+        ++i;while(i<text.size()&&text[i]!='"')++i;
+        if(i<text.size())++i;
+      }else if(std::isalnum((unsigned char)c)||c=='_'||c=='.'){while(i<text.size()&&(std::isalnum((unsigned char)text[i])||text[i]=='_'||text[i]=='.'))++i;}
       else {++i;if(i<text.size()&&((text[i]=='='&&(c=='='||c=='!'||c=='<'||c=='>'))||(text[i]==c&&(c=='&'||c=='|'))))++i;}
       auto token=text.substr(start,i-start);for(auto& ch:token)ch=char(std::tolower((unsigned char)ch));tokens.push_back(token);
     }
@@ -512,6 +521,13 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
     case C::ChangeSpell:ok=c.form==PlayerRef&&SetAddiction(c.index,c.value!=0);break;
     case C::ActorValueDamage:ok=ChangeActorValueDamage(c.form,c.index,c.value,c.variable!=0);break;
+    case C::ModifyActorValue:ok=ModifyActorValue(c.form,c.index,int(c.value));break;
+    case C::ModifyMiscStat: {
+      auto& count=state_.pipboy.bobbleheadsFound;
+      const auto next=uint32_t(std::clamp(int64_t(count)+int(c.value),int64_t(0),int64_t(UINT32_MAX)));
+      if(next!=count){count=next;++revision_;}
+      break;
+    }
     case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
     case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;
     case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
@@ -688,13 +704,19 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
   const auto& program=def->second;
   if(!program.error.empty()) {error=program.error;return false;}
   if(program.compiledOnly) {error="compiled-only event not supported";return false;}
+  const auto name=fo3script::Lower(event);
+  if(name=="onactivate"){
+    const auto placed=catalog_->references.find(owner);
+    if(placed!=catalog_->references.end()&&catalog_->items.count(placed->second.base)&&
+       !CanPickupPlacedItem(owner,true)){error="placed item unavailable for activation";return false;}
+  }
   const auto previousActivator=scriptActivator_,previousReference=scriptReference_;
   scriptActivator_=activator;scriptReference_=owner;
   struct RestoreContext {Player& p;uint32_t activator,reference;
     ~RestoreContext(){p.scriptActivator_=activator;p.scriptReference_=reference;}} context{*this,previousActivator,previousReference};
   unsigned budget=4096;
   for(const auto& block:program.blocks){
-    if(block.event!=fo3script::Lower(event))continue;
+    if(block.event!=name)continue;
     // Event matching identity can be a weapon/package/topic, independently
     // of GetActionRef (the actor responsible for the event).
     const uint32_t match=filterForm?filterForm:activator;
@@ -712,7 +734,7 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
       return false;
     }
   }
-  if(fo3script::Lower(event)=="gamemode")scriptButtons_.erase(owner);
+  if(name=="gamemode")scriptButtons_.erase(owner);
   return true;
 }
 ScriptEventResult Player::DispatchReferenceEvent(uint32_t reference,const char* event,
@@ -902,13 +924,17 @@ bool Player::MakeScriptMessage(uint32_t form,float argument,bool hasArgument,uin
   request={};request.form=form;request.owner=owner;request.title=m->second.title;
   request.argument=argument;request.hasArgument=hasArgument;
   request.text=m->second.text;request.buttons=m->second.buttons;
+  if(!(m->second.displayFlags&1u)&&request.buttons.empty())request.notificationSeconds=m->second.displaySeconds;
   if(hasArgument){
     const auto marker=request.text.find("%.0f");
     if(marker==std::string::npos||!std::isfinite(argument))return false;
     char number[48];std::snprintf(number,sizeof(number),"%.0f",double(argument));
     request.text.replace(marker,4,number);
   }
-  if(request.text.find('%')!=std::string::npos)return false; // unknown formatting cannot be guessed
+  for(size_t i=0;(i=request.text.find('%',i))!=std::string::npos;++i){
+    if(i+1==request.text.size()||request.text[i+1]!='%')return false;
+    request.text.erase(i,1); // Authored literal percent escape.
+  }
   return true;
 }
 bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner){
@@ -955,6 +981,13 @@ void Player::FinishScriptAnimation(uint32_t reference,const std::string& group){
 }
 bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
   if(reference!=scriptReference_)return false;
+  const auto placed=catalog_->references.find(reference);
+  if(placed!=catalog_->references.end()&&catalog_->items.count(placed->second.base)){
+    // Commit inventory, world removal, and the rest of OnActivate together.
+    if(activator!=PlayerRef||pendingScriptItems_.size()>=128||!PickupPlacedItem(reference,true))return false;
+    pendingScriptItems_.push_back({placed->second.base,placed->second.count});++scriptEffectRevision_;
+    return true;
+  }
   if(!CanScriptActivateDoor(reference,activator)){
     if(activator!=PlayerRef||!CanScriptActivateContainer(reference)||!PrepareInventory(reference,false))return false;
   }

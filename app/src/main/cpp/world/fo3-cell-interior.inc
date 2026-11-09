@@ -281,7 +281,8 @@ void ConvertBethesdaRotation(float rx, float ry, float rz,
 bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
                                         std::vector<Fo3WorldPlacement>& outPlacements,
                                         const fo3world::ReferenceStateSnapshot* referenceState,
-                                        bool candidateSelection = false, bool retainSwitches = false) {
+                                        bool candidateSelection = false, bool retainSwitches = false,
+                                        const std::unordered_set<uint32_t>* messageActivators = nullptr) {
     outPlacements.clear();
     std::vector<Q1700Interior::RawPlacement> raw;
     if (!Q1700Interior::CollectCellReferences(cellFormId, raw)) {
@@ -313,6 +314,10 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
     const auto retainRadio=[retainSwitches](const auto& p){
         return retainSwitches&&p.radio&&!p.hasEnableParent&&(p.recordFlags&Q1700Interior::Q1700_INITIALLY_DISABLED);
     };
+    const auto retainDisplay=[messageActivators](const auto& p){
+        return messageActivators&&messageActivators->count(p.baseFormId)&&!p.hasEnableParent&&
+            (p.recordFlags&Q1700Interior::Q1700_INITIALLY_DISABLED);
+    };
     std::unordered_set<uint32_t> dormant;
     std::unordered_map<uint32_t, bool> enabledMemo;
     std::vector<const Q1700Interior::RawPlacement*> active;
@@ -321,7 +326,7 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
         std::unordered_set<uint32_t> visiting;
         const bool authored=Q1700Interior::ResolveEnabled(p.refFormId, refs, enabledMemo, visiting);
         const bool enabled=referenceState?referenceState->Enabled(p.refFormId,authored):authored;
-        if (!(p.recordFlags & 0x20u) && (enabled||retainRadio(p)||switchCandidates.count(p.refFormId))) {
+        if (!(p.recordFlags & 0x20u) && (enabled||retainRadio(p)||retainDisplay(p)||switchCandidates.count(p.refFormId))) {
             active.push_back(&p);
             if(!enabled)dormant.insert(p.refFormId);
         }
@@ -356,7 +361,8 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
         if (baseIt == bases.end()) continue;
         const auto& base = baseIt->second;
         if (base.modelPath.empty() || !Q1700Interior::EndsInNif(base.modelPath)) continue;
-        const bool retained=(retainRadio(*p)&&base.recordType=="TACT")||retainedPairs.count(p->refFormId);
+        const bool retained=(retainRadio(*p)&&base.recordType=="TACT")||
+            (retainDisplay(*p)&&base.recordType=="ACTI")||retainedPairs.count(p->refFormId);
         if(!retained&&dormant.count(p->refFormId))continue;
 
         Fo3WorldPlacement world;

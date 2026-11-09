@@ -125,6 +125,8 @@ inline void ExtendedStats(fo3pip::Menu &menu, const fo3player::Player &p) {
            // Fallout3.exe.
     Text("Locations Discovered", 120, 180);
     Text(std::to_string(s.discovered.size()), 680, 180);
+    Text("Bobbleheads Found", 120, 231);
+    Text(std::to_string(s.bobbleheadsFound), 680, 231);
     Draw(r.fontTexture[0]);
   }
 }

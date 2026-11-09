@@ -66,7 +66,7 @@ inline bool InventoryReferenceRemoval(const fo3player::Player& player,
   for(auto ref:plan.AffectedReferences()){
     const auto item=catalog.references.find(ref);
     if(item==catalog.references.end()||!item->second.valid||!catalog.items.count(item->second.base)||
-       after->Enabled(ref,true)||!available(ref)){error="inventory removal requires an unheld disabled item";return false;}
+       after->Enabled(ref,!(item->second.flags&0x800u))||!available(ref)){error="inventory removal requires an unheld disabled item";return false;}
   }
   error.clear();return true;
 }

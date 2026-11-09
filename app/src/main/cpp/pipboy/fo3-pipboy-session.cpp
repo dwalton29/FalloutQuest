@@ -122,6 +122,10 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
     std::sort(ids.begin(),ids.end());
     Put(b,ids.size());for(auto id:ids)Put(b,id);
   }
+  if(s.bobbleheadsFound){
+    Put(b,0x3154534d); // MST1: player miscellaneous statistics.
+    Put(b,s.bobbleheadsFound);
+  }
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -241,13 +245,17 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
       for(uint32_t i=0;i<count&&r.ok;++i){const auto id=r.U();if(!d.markers.count(id)||!set->insert(id).second)return fail();}
     }
   }
-  if(r.ok&&r.at<n){
-    if(r.U()!=0x52414431)return fail();
+  if(r.ok&&n-r.at>=4&&fo3esm::ReadU32(p+r.at)==0x52414431){
+    r.U();
     const auto count=r.Count(10000);
     for(uint32_t i=0;i<count&&r.ok;++i){
       const auto id=r.U();
       if(!d.transmitters.count(id)||!s.silentRadios.insert(id).second)return fail();
     }
+  }
+  if(r.ok&&r.at<n){
+    if(r.U()!=0x3154534d)return fail();
+    s.bobbleheadsFound=r.U();
   }
   if (!r.ok || r.at != n ||
       (s.selectedQuest &&

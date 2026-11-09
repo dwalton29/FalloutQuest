@@ -251,6 +251,7 @@ struct MessageDefinition {
   std::string title, text;
   std::vector<std::string> buttons;
   uint32_t displayFlags = 0;
+  uint32_t displaySeconds = 0;
 };
 struct Station {
   std::string name;
