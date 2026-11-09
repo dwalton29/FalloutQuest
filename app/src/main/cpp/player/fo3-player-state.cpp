@@ -1542,7 +1542,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasAid=!state_.activeAid.empty()||!state_.addictions.empty();
+  const bool hasLimbs=!state_.actorLimbDamage.empty();
+  const bool hasAid=hasLimbs||!state_.activeAid.empty()||!state_.addictions.empty();
   const bool hasAppearance=hasAid||state_.appearance.race||state_.appearanceDraft.race;
   const bool hasTags=hasAppearance||state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
   if(!fo3tags::Valid(state_)||(state_.tagMenuOwner&&((!catalog_->pipboy.quests.count(state_.tagMenuOwner)&&!catalog_->references.count(state_.tagMenuOwner))||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.appearanceMenuOwner))){error="Invalid tag skills state";return false;}
@@ -1843,7 +1844,19 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(addictions.size()));
     for(auto spell:addictions)Put32(payload,spell);
   }
-  Put32(bytes, hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasLimbs){
+    if(state_.actorLimbDamage.size()>150000){error="Too many damaged limbs";return false;}
+    Put32(payload,0x314d424c); // LBM1
+    std::vector<std::pair<uint64_t,float>> limbs(state_.actorLimbDamage.begin(),state_.actorLimbDamage.end());
+    std::sort(limbs.begin(),limbs.end());
+    Put32(payload,uint32_t(limbs.size()));
+    for(const auto& limb:limbs){
+      if(!catalog_->actorPlacements.count(uint32_t(limb.first>>32))||uint32_t(limb.first)>=14||
+         !std::isfinite(limb.second)||limb.second<=0||limb.second>1){error="Invalid damaged limb";return false;}
+      Put64(payload,limb.first);PutFloat(payload,limb.second);
+    }
+  }
+  Put32(bytes, hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1903,7 +1916,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 36))
+      (version < 1 || version > 37))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2495,11 +2508,24 @@ bool Player::Restore(const std::string &path, std::string &error) {
                                     fo3esm::ReadF32(p+at+8),remaining});
         }
         const auto addictions=fo3esm::ReadU32(p+at);at+=4;
-        if(addictions>catalog_->pipboy.effectSpells.size()||payload.size()-at!=4ull*addictions)
+        if(addictions>catalog_->pipboy.effectSpells.size()||
+           (version>=37?payload.size()-at<4ull*addictions+8:payload.size()-at!=4ull*addictions))
           return fail("Invalid saved addictions");
         for(uint32_t i=0;i<addictions;++i,at+=4)
           if(!next.addictions.insert(fo3esm::ReadU32(p+at)).second)return fail("Duplicate saved addiction");
         if(!ValidateAidState(next))return fail("Invalid active Aid state");
+      }
+      if(version>=37){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314d424c)return fail("Missing limb damage state");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>150000||payload.size()-at!=12ull*count)return fail("Invalid damaged limb count");
+        for(uint32_t i=0;i<count;++i,at+=12){
+          const uint64_t key=U64(p+at);
+          const float damage=fo3esm::ReadF32(p+at+8);
+          if(!catalog_->actorPlacements.count(uint32_t(key>>32))||uint32_t(key)>=14||
+             !std::isfinite(damage)||damage<=0||damage>1||!next.actorLimbDamage.emplace(key,damage).second)
+            return fail("Invalid damaged limb");
+        }
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

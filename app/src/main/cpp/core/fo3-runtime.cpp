@@ -50,6 +50,8 @@ bool OwnsSpeechResultAdmission(bool admitting,uint64_t ticket);
 #include "world/interaction/fo3-shoulder-zone.h"
 #include "weapons/fo3-weapon-asset.h"
 #include "weapons/fo3-weapon-hit.h"
+#include "weapons/fo3-vats-state.h"
+#include "ui/menu/fo3-menu-vats-layout.h"
 #include "ui/interaction/fo3-weapon-ammo-hud.h"
 #include "ui/interaction/fo3-health-bar-hud.h"
 #include "ui/interaction/fo3-compass-hud.h"
@@ -193,7 +195,9 @@ fo3title::Pose gFo3SavePose;
 uint32_t gFo3StartupQuest=0;
 std::string gFo3StartupError;
 bool gFo3PauseOpen=false,gFo3FocusPaused=false,gFo3GameplayInputSuppressed=false;
-bool Fo3GameplayBlocked(){return gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
+bool Fo3VatsFocus();
+bool Fo3GameplayBlockedOutsideVats(){return gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
+bool Fo3GameplayBlocked(){return Fo3GameplayBlockedOutsideVats()||Fo3VatsFocus();}
 bool Fo3ResidentLegacyStreamActive();
 fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
 void ResetFo3ResidentPreparationLane();
@@ -15557,6 +15561,9 @@ bool StartFo3DebugQuestEntry(fo3player::Player& player,uint32_t quest,std::strin
 #include "audio/fo3-audio-assets.h"
 #include "ui/title/fo3-title-runtime.inc"
 #include "ui/video/fo3-movie-runtime.inc"
+namespace {
+#include "weapons/fo3-vats-runtime.inc"
+}
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,

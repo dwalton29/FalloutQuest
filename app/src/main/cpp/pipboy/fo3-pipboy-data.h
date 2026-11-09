@@ -177,6 +177,7 @@ struct Topic {
   std::vector<uint32_t> quests;
 };
 struct ActorDefinition {
+  uint32_t bodyParts=0; // CREA PNAM, resolved with the original traits template.
   std::string editor, name;
   uint32_t race=0, actorClass=0, voice=0, script=0, templateActor=0,combatStyle=0;
   float karma=0;int16_t disposition=0;

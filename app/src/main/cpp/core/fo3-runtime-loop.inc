@@ -450,7 +450,7 @@ public:
         ShutdownFo3LoadingVr();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
-        fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3titleui::Shutdown();fo3menuui::Shutdown();
+        fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3titleui::Shutdown();ShutdownFo3Vats();fo3menuui::Shutdown();
          fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();fo3blinkui::Shutdown();fo3bloodui::Shutdown();gPlayerSeat.Reset();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
@@ -1466,7 +1466,8 @@ private:
         const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
             !sneakDown_&&!activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
             fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
-        gFo3GameplayInputSuppressed=!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
+        // The V.A.T.S. clock owns simulation pause while its controls stay live.
+        gFo3GameplayInputSuppressed=!Fo3VatsFocus()&&!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
         if(gFo3GameplayInputSuppressed){
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
@@ -1788,13 +1789,13 @@ private:
         hitch.Mark("resident+save");
         // Acquisition latches this even when the whole reservation completes
         // between frames. Rebase locomotion and require neutral raw controls.
-        if(gFo3ResidentXrClock.Paused()){
+        if(gFo3ResidentXrClock.Paused()&&!Fo3VatsFocus()){
             lastFrameTime_=0;residentInputBarrier_.Allow(true,false);
         }
         const bool focusBlocked=sessionState_!=XR_SESSION_STATE_FOCUSED||!frameState.shouldRender;
         if(focusBlocked&&!gFo3FocusPaused)PauseFo3ResidentGameplayTime();
         gFo3FocusPaused=focusBlocked;
-        if(focusBlocked){gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
+        if(focusBlocked){CancelFo3Vats();gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
         // Sample even on non-rendered/invalid-view frames. Resumption establishes
         // a fresh baseline before any gameplay consumer; XR tracking stays raw.
         (void)Fo3GameplayNow();
@@ -1867,6 +1868,7 @@ private:
                             (unsigned long long)GetFo3LoadingGeneration(),bootCallUs/1000.0);
                 }
                 if(IsFo3LoadingVisible()) {
+                    CancelFo3Vats();
                     loadingGpu.Begin(gSceneLoadFrame);
                     const uint64_t assetsStarted=fqloadprofile::NowUs();
                     fo3loadingvr::AdvanceAssets();
@@ -1913,6 +1915,8 @@ private:
                         gCurrentCellFormId,gExteriorWorldspaceQ1890);
                     scriptPlayer.SetScriptPlayerHeading(gQ210Head[3]);
                     if(!scriptMenu)fo3worldscript::SpeechTick();
+                    if(!scriptMenu&&!Fo3PipboyFocus())
+                        scriptPlayer.RestoreActionPoints(float(seconds)*scriptPlayer.Definitions().weapons.vats.restoreRate);
                     const auto beforeScripts=scriptPlayer.Revision();
                     if(!scriptMenu&&!Fo3PipboyFocus())scriptPlayer.AdvanceAid(seconds);
                     // Discover resident identities at 4 Hz or a publication change;
@@ -2057,12 +2061,19 @@ private:
                 gVrHeadTracking=headTracking;
                 gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
-                bool dialogueControls=false;
+                const bool vatsOwned=UpdateFo3Vats(double(frameState.predictedDisplayTime)*1e-9,gameplaySeconds,
+                    fingerTriggerValue_[0],fingerTriggerValue_[1],activateDownQ1700_,pipBackDown_,
+                    sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid);
+                if(vatsOwned){
+                    activateLatched_=true;
+                    if(!Fo3VatsFocus())residentInputBarrier_.Allow(true,false);
+                }
+                bool dialogueControls=vatsOwned;
                 const bool movieControls=Fo3MovieFocus();
                 UpdateFo3Movie(gameplaySeconds,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,
                     !Fo3GameplayBlocked()&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED,
                     q210RightValid&&sessionState_==XR_SESSION_STATE_FOCUSED,gQ210Head);
-                if(!Fo3GameplayBlocked()) {
+                if(!Fo3GameplayBlocked()&&!vatsOwned) {
                     // Reload takes precedence over the left-wrist Pip-Boy gesture.
                     // Cancel even a primed activation so the physical magazine can
                     // pass in front of the player's face without being holstered.
@@ -2117,13 +2128,15 @@ private:
                         q210LeftValid?fingerTriggerValue_[0]:0,q210LeftValid&&barterConfirmDown_);
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                     WeaponUpdate(gameplaySeconds,(dialogueControls||gPlayerSeat.Active()||seatConsumeB_)?false:pipBackDown_);
+                    if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
+                }
+                if(vatsOwned||!Fo3GameplayBlocked()){
                     DeliverFo3ScriptSounds();
                     for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                         XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
                         XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
                         xrApplyHapticFeedback(session_,&info,reinterpret_cast<XrHapticBaseHeader*>(&pulse));gWeaponHaptic[hand]=0;
                     }
-                    if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 }
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
@@ -2135,7 +2148,7 @@ private:
                                                 q1890VirtualHead.position.z); }
                 const auto interactionsStarted=fqopaque::Clock::now();
                 if(IsFo3LoadingVisible())ResetFo3Pipboy();
-                if(!Fo3GameplayBlocked()) {
+                if(!Fo3GameplayBlocked()&&!vatsOwned) {
                     // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
                     UpdateFo3InteriorDoorsQ2400();
                     UpdateDoorAimQ1700(gameplaySeconds);
@@ -2266,7 +2279,7 @@ private:
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
                     frame.trackingScale=Fo3PlayerTrackingScale();
-                    frame.modal=gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    frame.modal=Fo3VatsFocus()||gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
                     XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset*frame.trackingScale;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
@@ -2673,7 +2686,7 @@ private:
             if(spacewarpProducerReady_&&glGetError()!=GL_NO_ERROR)motionDepthReady=false;
             const auto motionLateUiBefore=fqgl::counters.draws;
             if(!IsFo3LoadingVisible()) {
-                Q230RenderHealthHud(viewProjection.m);
+                if(!Fo3VatsFocus())Q230RenderHealthHud(viewProjection.m);
                 if(Fo3TerminalFocus())RenderFo3Terminal(viewProjection.m);
             }
 
@@ -2753,15 +2766,15 @@ private:
                 // The right-hand interaction HUD remains; prototype controller
                 // markers, build labels and the world grid are no longer drawn.
                 if (hand == 1) {
-                    if(WeaponHeld()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible())fo3ammoui::Render(mvp.m);
-                    if (doorAimActiveQ1700_) {
+                    if(WeaponHeld()&&!Fo3VatsFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible())fo3ammoui::Render(mvp.m);
+                    if (doorAimActiveQ1700_&&!Fo3VatsFocus()) {
                         if (doorPromptValidQ1850_ && !GetFo3LootPanel().reference) {
                             RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data(),doorPromptCrime_);
                         }
 
                     }
                     const auto& loot=GetFo3LootPanel();
-                    if (loot.reference) {
+                    if (loot.reference&&!Fo3VatsFocus()) {
                         const float yaw=lootPanelYaw_;
                         Mat4 panelModel{};
                         panelModel.m[0]=std::cos(yaw);panelModel.m[2]=-std::sin(yaw);
@@ -2825,12 +2838,13 @@ private:
             }
             // Final colour HUD pass, after world, hands, prompts, loot and post.
             // One head-relative pose/queue snapshot shared by both stereo eyes.
-            if(!IsFo3LoadingVisible()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())) {
+            if(!IsFo3LoadingVisible()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())) {
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
                 fo3xpui::Render(notificationMvp.m);
                 if(!gFo3PauseOpen&&!(gPlayerSession&&fo3player::EarlyFirstPerson(gPlayerSession->player))){fo3compassui::Render(notificationMvp.m);fo3sneakui::Render(notificationMvp.m);}
             }
+            if(Fo3VatsFocus()&&!IsFo3LoadingVisible())RenderFo3Vats(viewProjection.m);
             // Modal lockpicking is last among world/hand/ordinary HUD draws.
             // It has fresh self-occlusion depth, independent of nearby models.
             if(Fo3LockpickFocus()&&gPlayerSession) {

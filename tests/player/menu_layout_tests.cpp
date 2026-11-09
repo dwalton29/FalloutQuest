@@ -1,6 +1,7 @@
 #include "data/fo3-bsa-archive.h"
 #include "ui/menu/fo3-menu-appearance-layout.h"
 #include "ui/menu/fo3-menu-layout.h"
+#include "ui/menu/fo3-menu-vats-layout.h"
 #include "ui/menu/fo3-menu-strings.h"
 #include "ui/menu/fo3-menu-texture-paths.h"
 #include <cassert>
@@ -78,7 +79,7 @@ int main(int argc, char **argv) {
          {"menus\\main\\stats_menu.xml", "menus\\main\\inventory_menu.xml",
           "menus\\main\\map_menu.xml", "menus\\barter_menu.xml",
           "menus\\dialog\\dialog_menu.xml", "menus\\message_menu.xml",
-          "menus\\quantity_menu.xml", "menus\\chargen\\race_sex_menu.xml"}) {
+          "menus\\quantity_menu.xml", "menus\\chargen\\race_sex_menu.xml", "menus\\vats_menu.xml"}) {
       Layout l;
       assert(l.Load(path, read));
       l.strings = [](const std::string &key) -> Value {
@@ -186,6 +187,35 @@ int main(int argc, char **argv) {
         assert(l.N("RSM_scroll_up_target","visible")&&l.N("RSM_scroll_down_target","visible"));
         assert(std::any_of(race.begin(),race.end(),[&](const Draw& d){
           return l.Nodes()[d.node].name=="RSM_selection_indicator"&&d.box.w>0;
+        }));
+      }
+      if(name=="VATSMenu"){
+        l.width=420;l.height=260;
+        const auto head=BindVatsLimb(l,{"Head",73,.6f,true,"up"});
+        const auto marker=l.Find("chance_bracket",head);
+        assert(l.S(marker,"filename")=="Interface\\VATS\\vats_head_divider.dds");
+        assert(l.S(l.Find("chance_to_hit",head),"string")=="73%");
+        assert(l.S(l.Find("limb_name",head),"string")=="Head");
+        assert(Near(l.N(l.Find("meter",head),"_Value"),.6f));
+        l.Reset();
+        l.width=1280;l.height=900;
+        BindVatsChrome(l,"HP 100","AP 58/75",1,1,.23f,"Raider",.7f,{"Shot  Head"},"",true);
+        const auto vats=l.Paint();
+        for(const auto* art:{"glow_general_button_rt.dds","glow_general_button_a.dds","glow_general_button_b.dds"})
+          assert(std::any_of(vats.begin(),vats.end(),[&](const auto& d){
+            return d.file==art&&d.alpha>0&&d.box.x>=0&&d.box.x+d.box.w<=l.width;
+          }));
+        for(const auto* text:{"AP 58/75","HP 100","Raider","Shot  Head","Accept","Return"}){
+          const bool present=std::any_of(vats.begin(),vats.end(),[&](const auto& d){return d.text==text&&d.alpha>0;});
+          if(!present){
+            std::cerr<<"Missing original VATS text "<<text<<'\n';
+            for(const auto& d:vats)if(d.type=="text")
+              std::cerr<<l.Nodes()[d.node].name<<" ["<<d.text<<"] alpha="<<d.alpha<<" xy="<<d.box.x<<","<<d.box.y<<'\n';
+          }
+          assert(present);
+        }
+        assert(std::any_of(vats.begin(),vats.end(),[](const auto& d){
+          return d.file=="Interface\\VATS\\vats_bar.dds"&&d.box.w>0;
         }));
       }
       const auto draw = l.Paint();

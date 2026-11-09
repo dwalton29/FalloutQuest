@@ -272,6 +272,7 @@ struct State {
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
   std::unordered_map<uint32_t,float> actorDamage;
+  std::unordered_map<uint64_t,float> actorLimbDamage; // REFR and BPTD part type -> fraction lost.
   PagedStateMap<ActorState> actors;
 };
 struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor,name;};
@@ -713,6 +714,7 @@ public:
   bool PickupWorldWeapon(uint64_t id);
   bool UpdateWorldWeapon(uint64_t id, const fo3weapon::WorldPose &pose);
   bool FireWeapon(uint64_t id);
+  bool FireVatsRound(uint64_t id,float actionPoints);
   bool CanReloadWeapon(uint64_t id) const;
   bool ReloadWeapon(uint64_t id);
   bool EjectMagazine(uint64_t id);
@@ -735,7 +737,10 @@ public:
   bool SetActorAIValue(uint32_t reference,uint32_t valueId,float value);
   bool WeaponHit(uint64_t instance,uint32_t target,float fraction=1);
   bool ApplyWeaponHit(uint32_t base,uint32_t target,float damage);
-  bool ApplyAttack(uint32_t attacker,uint32_t weapon,uint32_t target,float damage);
+  bool ApplyAttack(uint32_t attacker,uint32_t weapon,uint32_t target,float damage,
+                   const fo3weapon::BodyPart* part=nullptr);
+  const std::vector<fo3weapon::BodyPart>* ActorBodyParts(uint32_t reference) const;
+  float ActorLimbCondition(uint32_t reference,uint8_t part) const;
   bool Essential(uint32_t reference) const;
   bool PrepareActorInventory(uint32_t reference);
   bool EquipActorWeapon(uint32_t reference,uint64_t instance);

@@ -172,6 +172,36 @@ struct Flight {bool active=false;uint64_t instance=0;uint32_t projectile=0,base=
 std::array<Flight,64> flights{};
 uint32_t randomState=0x463351;
 float Random(){randomState^=randomState<<13;randomState^=randomState>>17;randomState^=randomState<<5;return (randomState&0xffffff)/float(0x1000000);}
+void ActorImpact(fo3player::Player& p,uint32_t attacker,uint32_t target,
+                 uint32_t base,float damage,uint8_t region,V origin,
+                 const fo3weapon::BodyPart* part=nullptr){
+  if(!p.ApplyAttack(attacker,base,target,damage,part))return;
+  if(attacker==fo3player::PlayerRef&&target!=fo3player::PlayerRef){
+    const double eventTime=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==target){
+      actor.playerDetection.Hit(p.Definitions().sneakSettings,eventTime,{origin.x,origin.y,origin.z});
+      actor.runtime.lastThreat=actor.playerDetection.lastKnown;
+      actor.runtime.nextThink=0;
+      break;
+    }
+  }
+  if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");
+  if(target!=fo3player::PlayerRef)Q230ActorHitReaction(target,region);
+  Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",
+           attacker,base,target,unsigned(region),damage,p.ActorHealth(target));
+}
+void HeldShotEffects(const fo3player::Player& p,const fo3weapon::Definition& d,double now){
+  if(d.soundLevel<=2){
+    const auto& settings=p.Definitions().sneakSettings;
+    gPlayerDetectionAction=fo3sneak::Setting(settings,d.soundLevel==0?"iSoundLevelLoud":d.soundLevel==1?"iSoundLevelNormal":"iSoundLevelSilent");
+    gPlayerDetectionActionUntil=now+fo3sneak::Setting(settings,"fDetectionActionTimer");
+  }
+  const auto projectile=p.Definitions().weapons.projectiles.find(d.projectile);
+  if(projectile!=p.Definitions().weapons.projectiles.end())flashUntil=now+projectile->second.flashDuration;
+  fo3audio::SoundEvent(d.fire3D?d.fire3D:d.fire2D);
+  Pulse(1,std::clamp(d.rumbleRight,.15f,.65f));
+  recoil=1;
+}
 bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float damage,uint32_t attacker=0x14){
   if(!gPlayerSession)return false;
   auto&p=gPlayerSession->player;uint32_t target=0;uint8_t region=0;float nearest=limit;
@@ -211,9 +241,7 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
   Fo3WorldSurfaceHit surface;
   const bool worldHit=TraceFo3WorldSurface(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,attacker,target,&surface);
   if(target&&(!worldHit||surface.distance>=nearest)){
-    if(p.ApplyAttack(attacker,base,target,damage)){
-      if(attacker==0x14&&target!=0x14){const double eventTime=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==target){actor.playerDetection.Hit(p.Definitions().sneakSettings,eventTime,{origin.x,origin.y,origin.z});actor.runtime.lastThreat=actor.playerDetection.lastKnown;actor.runtime.nextThink=0;break;}}
-      if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");if(target!=0x14)Q230ActorHitReaction(target,region);Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
+    ActorImpact(p,attacker,target,base,damage,region,origin);
     return true;
   }
   if(worldHit){
@@ -521,7 +549,7 @@ void WeaponUpdate(double now,bool backButton){
         if(Fo3DialogueFocus())EndFo3Dialogue("player weapon fire");
         const auto id=s->id;const auto form=s->formId;
         const float shotDamage=p.WeaponDamage(id);
-        if(p.FireWeapon(id)){if(d.soundLevel<=2){const auto& settings=p.Definitions().sneakSettings;gPlayerDetectionAction=fo3sneak::Setting(settings,d.soundLevel==0?"iSoundLevelLoud":d.soundLevel==1?"iSoundLevelNormal":"iSoundLevelSilent");gPlayerDetectionActionUntil=now+fo3sneak::Setting(settings,"fDetectionActionTimer");}const auto projectile=p.Definitions().weapons.projectiles.find(d.projectile);if(projectile!=p.Definitions().weapons.projectiles.end())flashUntil=now+projectile->second.flashDuration;Shoot(id,d,*m,shotDamage);fo3audio::SoundEvent(d.fire3D?d.fire3D:d.fire2D);Pulse(1,std::clamp(d.rumbleRight,.15f,.65f));recoil=1;Log("FIRE",id,form);}
+        if(p.FireWeapon(id)){HeldShotEffects(p,d,now);Shoot(id,d,*m,shotDamage);Log("FIRE",id,form);}
         else{fo3audio::SoundEvent(d.dry);Pulse(1,.06f);Log("EMPTY",id,form);}
         s=p.Weapon(id);
       }

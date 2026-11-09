@@ -4,7 +4,7 @@
 #include <unordered_set>
 #include <functional>
 namespace fo3weapon {
-bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT"||t=="NPC_"||t=="CREA"||t=="LVLN"||t=="LVLC"||t=="FACT"||t=="CSTY";}
+bool Relevant(const std::string&t){return t=="BPTD"||t=="PROJ"||t=="STAT"||t=="NPC_"||t=="CREA"||t=="LVLN"||t=="LVLC"||t=="FACT"||t=="CSTY";}
 bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   Definition o;bool data=false,dnam=false;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){
@@ -14,6 +14,7 @@ bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
     if(t=="DNAM"&&n>=136){
       o.animation=u(0);o.animationMult=f(4);o.flags=b[12];o.grip=b[13];o.ammoUse=b[14];o.reload=b[15];
       o.minSpread=f(16);o.spread=f(20);o.projectile=u(36);o.pellets=b[42];o.minRange=f(44);o.maxRange=f(48);
+      o.vatsChance=b[40];o.vatsAP=f(68);o.limbDamageMult=f(116);
       o.attackAnimation=b[41];o.flags2=u(56);o.attackMult=f(60);o.rate=f(64);o.rumbleLeft=f(72);o.rumbleRight=f(76);o.rumbleDuration=f(80);
       o.degradationOverride=f(84);o.shotsPerSecond=f(88);o.reloadTime=f(92);o.skill=u(104);o.delayMin=f(128);o.delayMax=f(132);dnam=true;
     }
@@ -27,6 +28,30 @@ bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   out=std::move(o);return out.valid;
 }
 void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint8_t>&p){
+  if(t=="BPTD"){
+    std::vector<BodyPart> parts;
+    BodyPart part;
+    std::string editor;
+    fo3esm::WalkSubrecords(p,[&](const char* tag,const uint8_t* b,uint32_t n){
+      const std::string key(tag,4);
+      if(key=="EDID")editor=fo3esm::ZString(b,n);
+      else if(key=="BPTN"){part={};part.name=fo3esm::ZString(b,n);}
+      else if(key=="BPNN")part.node=fo3esm::ZString(b,n);
+      else if(key=="BPNT")part.target=fo3esm::ZString(b,n);
+      else if(key=="BPND"&&n>=9){
+        part.damageMult=fo3esm::ReadF32(b);part.flags=b[4];part.type=b[5];
+        part.healthPercent=b[6];part.chance=b[8];
+        if(part.type<=14&&!part.name.empty()&&std::isfinite(part.damageMult)&&part.damageMult>=0)
+          parts.push_back(std::move(part));
+        part={};
+      }
+    });
+    if(!parts.empty()){
+      o.bodyParts[id]=std::move(parts);
+      if(editor=="DefaultBodyPartData")o.humanoidBodyParts=id;
+    }
+    return;
+  }
   Projectile q;Definitions::Actor actor;actor.creature=t=="CREA";Definitions::CombatStyle style;
   bool actorData=false;bool valid=false;std::string model,editor;
   Definitions::LevelledActor levelled;bool chance=false,listFlags=false,listValid=true;
@@ -79,7 +104,22 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
     if(k=="MODL")model=fo3esm::ZString(b,n);
     if(k=="NAM1")q.flashModel=fo3esm::ZString(b,n);
     if(t=="PROJ"&&k=="DATA"&&n>=68){q.flags=fo3esm::ReadU16(b);q.type=fo3esm::ReadU16(b+2);q.gravity=fo3esm::ReadF32(b+4);q.speed=fo3esm::ReadF32(b+8);q.range=fo3esm::ReadF32(b+12);q.explosion=fo3esm::ReadU32(b+36);q.flashDuration=fo3esm::ReadF32(b+44);q.impactForce=fo3esm::ReadF32(b+52);valid=true;}
-    if(t=="GMST"&&k=="DATA"&&n==4){float v=fo3esm::ReadF32(b);if(std::isfinite(v)&&v>=0){if(editor=="fDamageToWeaponGunMult")o.damageGun=v;if(editor=="fDamageToWeaponEnergyMult")o.damageEnergy=v;if(editor=="fDamageToWeaponLauncherMult")o.damageLauncher=v;
+    if(t=="GMST"&&k=="DATA"&&n==4){
+      if(editor=="iVatsTargetAngle"){
+        const auto angle=fo3esm::ReadU32(b);if(angle>0&&angle<=90)o.vats.targetAngle=int(angle);
+      }
+      const std::pair<const char*,float*> settings[]={
+        {"fActionPointsAttackPistol",&o.vats.pistolAP},{"fActionPointsAttackRifle",&o.vats.rifleAP},
+        {"fActionPointsAttackLauncher",&o.vats.launcherAP},{"fActionPointsRestoreRate",&o.vats.restoreRate},
+        {"fVATSMaxChance",&o.vats.maxChance},{"fVATSMaxEngageDistance",&o.vats.maxDistance},
+        {"fVATSHitChanceMult",&o.vats.hitMult},{"fVATSSkillFactor",&o.vats.skillFactor},
+        {"fVATSDistanceFactor",&o.vats.distanceFactor},{"fVATSSpreadMult",&o.vats.spreadMult},
+        {"fVATSShotBurstTime",&o.vats.burst},{"fVATSShotLongBurstTime",&o.vats.longBurst},
+        {"fVATSPlaybackDelay",&o.vats.playbackDelay}};
+      const float setting=fo3esm::ReadF32(b);
+      if(std::isfinite(setting)&&setting>=0)for(const auto& item:settings)
+        if(editor==item.first){*item.second=setting;break;}
+      float v=fo3esm::ReadF32(b);if(std::isfinite(v)&&v>=0){if(editor=="fDamageToWeaponGunMult")o.damageGun=v;if(editor=="fDamageToWeaponEnergyMult")o.damageEnergy=v;if(editor=="fDamageToWeaponLauncherMult")o.damageLauncher=v;
       if(editor=="fDamageSkillBase")o.skillBase=v;
       if(editor=="fDamageSkillMult")o.skillMult=v;
       if(editor=="fAVDUnarmedDamageBase")o.unarmedBase=v;

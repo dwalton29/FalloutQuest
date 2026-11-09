@@ -19,7 +19,9 @@ sEffectsVolume sVoiceVolume sNext sMale sFemale sRace sNone sComplexion
 sRSMSex sRSMFace sRSMHair sRSMCustomize sRSMHairStyle sRSMHairColor
 sRSMFacialHair sRSMEyeColor sRSMPreset sRSMRandomize sRSMRedAbbrev
 sRSMGreenAbbrev sRSMBlueAbbrev sRSMGeneral sRSMConfirmDone sRSMCharacter
-sRSMConfirmRandomize'''.split()
+sRSMConfirmRandomize sActionPointsShort sActionPointsShoot sReturn
+sVatsAiming sVatsAimed sVatsBodyPart sVatsTarget sVATSMessageLowAP
+sVATSMessageZeroChance sVATSMessageNoAmmo'''.split()
 
 
 def recover(path):

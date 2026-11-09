@@ -2,6 +2,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "weapons/fo3-weapon-interaction.h"
 #include "weapons/fo3-weapon-hit.h"
+#include "weapons/fo3-vats-state.h"
 #include "weapons/fo3-weapon-holsters.h"
 #include "weapons/fo3-reload-policy.h"
 #include <cassert>
@@ -244,8 +245,62 @@ void BodyAccess(){
   assert(player.Weapon(pistol)->condition==.7f&&player.Weapon(gun)->condition==.4f);
   assert(!fo3weapon::Holstered(player,true,pistol,0,[](uint32_t){return false;}));
 }
+void VatsTests(){
+  using namespace fo3vats;
+  auto c=Fixture();
+  c.rules.apBase=50;
+  c.weapons.actors[100].health=100;c.pipboy.targets[200].base=100;c.actorPlacements[200].base=100;
+  c.weapons.humanoidBodyParts=300;
+  c.weapons.bodyParts[300].push_back({"Head","Bip01 Neck","Bip01 Head",1,0,20,30,2});
+  auto& weapon=c.items.at(0x434f).weapon;
+  weapon.maxRange=768;weapon.vatsChance=50;weapon.flags2=8;weapon.vatsAP=17;
+  Player p(c);
+  assert(p.Add(0x434f,1)&&p.Add(0x4241,12));
+  const auto id=p.Snapshot().inventory.front().id;
+  assert(p.Equip(id)&&p.ReloadWeapon(id));
+  const auto& part=p.ActorBodyParts(200)->front();
+  const auto& settings=c.weapons.vats;
+  assert(Cost(settings,weapon)==17&&Burst(settings,weapon)==1);
+  assert(Chance(settings,weapon,part,0,50,true)==95);
+  assert(Chance(settings,weapon,part,192,50,true)>Chance(settings,weapon,part,384,50,true));
+  assert(!Chance(settings,weapon,part,192,50,false));
+  assert(AimScore({0,0,0},{1,0,0},{2,0,0},.95f)==1);
+  assert(AimScore({0,0,0},{1,0,0},{0,0,2},.95f)<0);
+  Input inputs;
+  assert(!inputs.Sample(1,1,true,true).enter);
+  inputs.Sample(0,0,false,false);
+  assert(inputs.Sample(1,0,false,false).enter);
+  assert(inputs.Sample(1,1,false,false).select);
+  assert(!inputs.Sample(1,1,false,false).select);
+  assert(inputs.Sample(1,0,true,false).confirm);
+  assert(inputs.Sample(0,0,false,true).cancel);
+  fo3vats::Session queue;queue.Open(id);
+  assert(!queue.Confirm());
+  assert(queue.Queue({200,1,3,80,17},50,2)==QueueResult::Added);
+  assert(queue.ReservedAP()==17&&queue.ReservedRounds()==2);
+  assert(queue.Queue({200,1,1,80,17},50,2)==QueueResult::NoAmmo);
+  assert(queue.Queue({200,1,1,80,17},30,12)==QueueResult::LowAP);
+  assert(queue.Confirm()&&queue.Current()->part==1);
+  const auto before=p.Revision();
+  assert(!p.FireVatsRound(id,60)&&p.Revision()==before&&p.Weapon(id)->loadedRounds==12);
+  assert(p.FireVatsRound(id,17)&&p.ActionPoints()==33&&p.Weapon(id)->loadedRounds==11);
+  assert(p.ApplyAttack(PlayerRef,0x434f,200,5,&part));
+  assert(p.ActorHealth(200)==90&&p.ActorLimbCondition(200,1)==.5f);
+  queue.Fired();assert(queue.Current()&&queue.roundsFired==1);
+  assert(p.FireVatsRound(id,0)&&p.ActionPoints()==33&&p.Weapon(id)->loadedRounds==10);
+  queue.Fired();assert(!queue.Current());
+  const auto save="/tmp/fq-vats-"+std::to_string(getpid());
+  std::string error;
+  assert(p.Save(save,error)&&U32(Read(save),4)==37);
+  Player restored(c);
+  if(!restored.Restore(save,error)){std::cerr<<error<<'\n';std::abort();}
+  unlink(save.c_str());
+  assert(restored.ActionPoints()==33&&restored.ActorLimbCondition(200,1)==.5f);
+  assert(restored.ResetActorHealth(200)&&restored.ActorLimbCondition(200,1)==1);
+}
 int main(int argc,char**argv) {
   ReloadTests();
+  VatsTests();
   BodyAccess();
   // Gameplay bullets do not pause merely because VR weapon input is blocked.
   const auto normal=fo3weapon::FrameAccessFor(true,false,false,false,true);
@@ -348,6 +403,16 @@ int main(int argc,char**argv) {
   if(argc>1) {
     Catalog c;std::string error;
     assert(LoadCatalog(argv[1],c,error));
+    const auto& original=c.weapons;
+    assert(original.vats.restoreRate==4&&original.vats.rifleAP==25&&original.vats.pistolAP==20);
+    assert(fo3vats::Cost(original.vats,c.items.at(0x434f).weapon)==17);
+    assert(fo3vats::Cost(original.vats,c.items.at(0xc0327).weapon)==28);
+    assert(original.humanoidBodyParts&&original.bodyParts.at(original.humanoidBodyParts).size()==6);
+    const auto roach=c.pipboy.formNames.at("roachbodypartdata");
+    assert(original.bodyParts.at(roach).size()==8);
+    assert(std::any_of(c.pipboy.dialogueActors.begin(),c.pipboy.dialogueActors.end(),[&](const auto& row){
+      return row.second.bodyParts==roach;
+    }));
     Ownership(c);
     // Original-data checkpoint: valid MQ01 entry snapshot, original paid topic.
     {auto start=c;auto& q=start.initial.pipboy.quests[0x14e87];q.stage=10;q.running=true;q.stages.insert(10);

@@ -101,6 +101,11 @@ bool Player::FireWeapon(uint64_t id) {
   ++revision_;
   return true;
 }
+bool Player::FireVatsRound(uint64_t id,float actionPoints){
+  if(!std::isfinite(actionPoints)||actionPoints<0||actionPoints>ActionPoints())return false;
+  if(!FireWeapon(id))return false;
+  return actionPoints==0||SpendActionPoints(actionPoints);
+}
 bool Player::CanReloadWeapon(uint64_t id)const{
   const auto* s=Weapon(id);if(!s||!s->equipped||s->condition<=0)return false;
   const auto& d=catalog_->items.at(s->formId).weapon;
@@ -355,8 +360,10 @@ bool Player::ResetActorHealth(uint32_t reference) {
   if(health<0)return false;
   if(health==0)return true;
   // Preserve death, combat and package state. ResetHealth is not Resurrect.
-  // The original also restores condition AVs; no limb damage state exists yet.
-  if(state_.actorDamage.erase(reference))++revision_;
+  bool changed=state_.actorDamage.erase(reference)!=0;
+  for(uint32_t part=0;part<=14;++part)
+    changed=(state_.actorLimbDamage.erase((uint64_t(reference)<<32)|part)!=0)||changed;
+  if(changed)++revision_;
   return true;
 }
 float Player::ActorHealth(uint32_t reference) const {
@@ -409,16 +416,39 @@ float Player::DamageResistance(uint32_t target) const {
   // Armour condition and skill do not yet modify equipped armour rating.
   return std::clamp(dr,0.f,catalog_->weapons.drMax);
 }
-bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float damage) {
+const std::vector<fo3weapon::BodyPart>* Player::ActorBodyParts(uint32_t reference) const {
+  const auto* stats=ActorStatistics(reference);
+  if(!stats)return nullptr;
+  const auto* traits=ActorCategory(reference,1);
+  const uint32_t id=stats->creature?(traits?traits->bodyParts:0):catalog_->weapons.humanoidBodyParts;
+  const auto found=catalog_->weapons.bodyParts.find(id);
+  return found==catalog_->weapons.bodyParts.end()?nullptr:&found->second;
+}
+float Player::ActorLimbCondition(uint32_t reference,uint8_t part) const {
+  const auto found=state_.actorLimbDamage.find((uint64_t(reference)<<32)|part);
+  return found==state_.actorLimbDamage.end()?1.f:1.f-found->second;
+}
+bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float damage,
+                         const fo3weapon::BodyPart* part) {
   const auto weapon=catalog_->items.find(base);const float health=ActorHealth(target);
   if(attacker==target||weapon==catalog_->items.end()||!weapon->second.weapon.valid||health<=0||!std::isfinite(damage)||damage<=0)return false;
   if(attacker!=0x14&&ActorHealth(attacker)<0)return false;
-  damage*=1-DamageResistance(target)/100;
+  damage*=(1-DamageResistance(target)/100)*(part?part->damageMult:1.f);
   // Essential actors retain health until unconscious behaviour is supported.
   const float applied=std::min(damage,std::max(0.f,health-(Essential(target)?1.f:0.f)));
   if(applied<=0)return false;
   if(target==0x14)return DamageHealth(applied);
-  state_.actorDamage[target]+=applied;
+  auto& total=state_.actorDamage[target];
+  if(part&&part->healthPercent&&part->type<14&&catalog_->actorPlacements.count(target)&&
+     state_.actorLimbDamage.size()<150000){
+    const float capacity=(health+total)*part->healthPercent/100.f;
+    const float factor=weapon->second.weapon.limbDamageMult;
+    if(capacity>0&&std::isfinite(factor)&&factor>0){
+      auto& limb=state_.actorLimbDamage[(uint64_t(target)<<32)|part->type];
+      limb=std::min(1.f,limb+applied*factor/capacity);
+    }
+  }
+  total+=applied;
   SetActorHostile(target,attacker);
   const bool died=applied>=health&&!Essential(target);
   if(died){if(auto* actor=state_.actors.Edit(target)){actor->dead=true;actor->packageWaitSeconds=0;}}

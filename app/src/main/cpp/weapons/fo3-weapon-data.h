@@ -13,6 +13,8 @@ struct Definition {
   uint32_t fire3D=0,fire2D=0,dry=0,equip=0,unequip=0,criticalEffect=0;
   uint8_t flags=0,grip=255,reload=255,attackAnimation=255,ammoUse=0,pellets=0,clip=0;
   uint16_t damage=0,criticalDamage=0;
+  uint8_t vatsChance=0;
+  float vatsAP=0,limbDamageMult=1;
   float animationMult=1,attackMult=1,minSpread=0,spread=0,minRange=0,maxRange=0;
   float rate=0,shotsPerSecond=0,reloadTime=0,delayMin=0,delayMax=0;
   float rumbleLeft=0,rumbleRight=0,rumbleDuration=0,degradationOverride=0,criticalMult=0;
@@ -34,6 +36,18 @@ struct Projectile {
   std::string model,flashModel;
   bool Hitscan() const {return flags&1;}
 };
+struct BodyPart {
+  std::string name,node,target;
+  uint8_t type=0,flags=0,healthPercent=0,chance=0;
+  float damageMult=1;
+};
+struct VatsSettings {
+  // Retail EXE GMST defaults. Fallout3.esm overrides AP costs and burst times.
+  float pistolAP=1,rifleAP=1,launcherAP=1,restoreRate=1;
+  float maxChance=95,maxDistance=5000,hitMult=1,skillFactor=1,distanceFactor=2,spreadMult=1;
+  float burst=.43f,longBurst=.75f,playbackDelay=3;
+  int targetAngle=15;
+};
 struct Definitions {
   struct Actor {
     uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;
@@ -51,6 +65,9 @@ struct Definitions {
     uint32_t restrictions=0;uint16_t flags=0;bool valid=false;
   };
   std::unordered_map<uint32_t,Actor> actors;
+  std::unordered_map<uint32_t,std::vector<BodyPart>> bodyParts;
+  uint32_t humanoidBodyParts=0;
+  VatsSettings vats;
   struct LevelledActorEntry {uint16_t level=0,count=0;uint32_t actor=0;};
   struct LevelledActor {uint8_t chanceNone=0,flags=0;uint32_t chanceGlobal=0;bool valid=false;std::vector<LevelledActorEntry> entries;};
   std::unordered_map<uint32_t,LevelledActor> levelledActors;
