@@ -290,7 +290,11 @@ bool fo3anim::DecodeModelHierarchy(const std::vector<uint8_t> &bytes, Skeleton &
 static bool DecodeProperty(const std::vector<uint8_t>& bytes,const NifHeader& h,
     uint32_t interpolator,uint32_t controller,const std::string& type,fo3anim::PropertyTrack& out){
   using namespace fo3anim;
-  if(interpolator>=h.numBlocks||controller>=h.numBlocks||BlockType(h,controller)!=type)return false;
+  if(interpolator>=h.numBlocks)return false;
+  // Standalone weapon KFs bind visibility by node/type and omit the
+  // controller reference. Model sequences still validate explicit links.
+  if((controller>=h.numBlocks||BlockType(h,controller)!=type)&&
+     !(controller==INVALID_REF&&type=="NiVisController"))return false;
   const bool emitter=type=="NiPSysEmitterCtlr";
   const bool boolean=type=="NiVisController"||(emitter&&BlockType(h,interpolator)=="NiBoolInterpolator"),color=type=="NiMaterialColorController";
   if(!boolean&&!color&&!emitter&&type!="NiAlphaController")return false;

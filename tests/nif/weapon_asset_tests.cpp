@@ -41,6 +41,34 @@ void Synthetic() {
 }
 int main(int argc, char **argv) {
   Synthetic();
+  if(argc==3&&std::string(argv[1])=="--bb-bat"){
+    const std::string root=argv[2];
+    const auto fp=Read(root+"/skeleton.nif");
+    const auto gun=Read(root+"/bbgun01.nif");
+    const auto aim=Read(root+"/2hraim.kf");
+    fo3weapon::Asset bb;
+    assert(bb.Decode(gun,fp,aim)&&bb.Reload(Read(root+"/2hrreloade.kf")));
+    assert(bb.cartonNode>=0&&bb.hasCartonGrip&&!bb.hasMagazineGrip&&bb.reloadSounds[0]=="WPNBBGunReload");
+    fo3anim::Clip aimed,prime;
+    assert(fo3anim::DecodeClip(aim,aimed)&&fo3anim::DecodeClip(Read(root+"/2hrattackright.kf"),prime));
+    fo3anim::Pose held,cycled;
+    assert(fo3anim::Sample(bb.nodes,aimed,.1,held)&&fo3anim::Sample(bb.nodes,prime,.75,cycled));
+    const int lever=fo3anim::FindBone(bb.nodes,"##BBLever");
+    assert(lever>=0&&held.delta[lever]!=cycled.delta[lever]);
+    assert(std::any_of(held.properties.begin(),held.properties.end(),[&](const auto& property){
+      return property.bone==bb.cartonNode&&property.kind==fo3anim::PropertyKind::Visibility&&property.value[0]==0;
+    }));
+    std::vector<Fo3StaticNifMesh> meshes;
+    assert(LoadFo3StaticNifMeshes(root+"/bbgun01.nif",meshes));
+    assert(std::count_if(meshes.begin(),meshes.end(),[&](const auto& mesh){
+      return bb.Descendant(mesh.shapeBlock,bb.cartonNode);
+    })==1);
+    fo3weapon::Asset bat;
+    assert(bat.Decode(Read(root+"/baseballbat.nif"),fp,Read(root+"/2hmaim.kf"),true));
+    assert(bat.hasSupport&&fo3anim::FindBone(bat.nodes,"ProjectileNode")<0);
+    std::cout<<"Original BB carton visibility, reload alignment, lever animation and bat grips passed\n";
+    return 0;
+  }
   if (argc == 2) {
     const std::string root = argv[1];
     fo3anim::Skeleton skeleton;

@@ -22,7 +22,7 @@ struct ModelNodes {
   // ProjectileNode's authored local +Y is forward, not a grip-to-muzzle ray.
   std::array<float, 3> MuzzleForward() const;
 };
-bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out);
+bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out,bool requireMuzzle=true);
 // No filename/model-name classification: these are FO3 WEAP animation types.
 // Unknown/heavy families require their own verified authored attachments.
 std::string AimPath(const Definition &definition);

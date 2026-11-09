@@ -70,6 +70,33 @@ void ReloadTests() {
   assert(!fo3weapon::InsertionZone({0,.8f,0},{0,0,0},{.2f,.1f,.1f}));
   assert(!fo3weapon::InsertionZone({NAN,0,0},{0,0,0},{.2f,.1f,.1f}));
 }
+void CartonAndBat(Catalog c,uint32_t bb,uint32_t bat){
+  c.initial.inventory.clear();
+  c.initial.worldWeapons.clear();
+  const auto& definition=c.items.at(bb).weapon;
+  assert(definition.CartonReload()&&definition.clip==100);
+  assert(c.items.at(bat).weapon.TwoHandMelee()&&c.items.at(bat).weapon.BackHolster());
+  Player p(c);
+  assert(p.Add(bb,1)&&p.Equip(p.Snapshot().inventory.back().id));
+  const auto rifle=p.EquippedWeapon()->id;
+  assert(!p.LoadWeaponCarton(rifle)&&p.Add(definition.ammo,75));
+  assert(p.LoadWeaponCarton(rifle)&&p.Weapon(rifle)->loadedRounds==75&&p.AmmoReserve(definition.ammo)==0);
+  assert(p.FireWeapon(rifle)&&p.Add(definition.ammo,80));
+  assert(p.LoadWeaponCarton(rifle)&&p.Weapon(rifle)->loadedRounds==100&&p.AmmoReserve(definition.ammo)==54);
+  assert(!p.LoadWeaponCarton(rifle)&&p.AmmoReserve(definition.ammo)==54);
+  assert(p.FireWeapon(rifle)&&p.ReloadWeapon(rifle)&&p.AmmoReserve(definition.ammo)==53);
+  assert(p.Add(bat,1)&&p.Equip(p.Snapshot().inventory.back().id));
+  const auto club=p.EquippedWeapon()->id;
+  assert(!p.FireWeapon(club)&&!p.LoadWeaponCarton(club));
+  assert(fo3weapon::Holstered(p,true,club,0,[](uint32_t){return true;})->id==club);
+  fo3weapon::WorldPose pose;pose.cell=1;
+  const auto save="/tmp/fq-bat-"+std::to_string(getpid());
+  std::string error;
+  assert(p.DropWeapon(club,pose)&&p.Save(save,error));
+  Player restored(c);assert(restored.Restore(save,error));unlink(save.c_str());
+  assert(restored.PickupWorldWeapon(club)&&restored.EquippedWeapon()->id==club);
+  assert(restored.Weapon(rifle)->loadedRounds==100&&restored.AmmoReserve(definition.ammo)==53);
+}
 void Ownership(Catalog c) {
   // Isolate the test inventory, preserving original item/projectile/rule definitions.
   c.initial.inventory.clear();c.initial.nextStackId=1;
@@ -338,6 +365,17 @@ static void UnarmedGesture(){
 int main(int argc,char**argv) {
   UnarmedGesture();
   ReloadTests();
+  {
+    auto c=Fixture();
+    auto bb=c.items.at(0x434f);bb.formId=0x4323;bb.weapon.animation=5;bb.weapon.reload=4;
+    bb.weapon.attackAnimation=32;bb.weapon.clip=100;c.items[bb.formId]=bb;
+    auto bat=bb;bat.formId=0x421c;bat.weapon.animation=2;bat.weapon.clip=0;c.items[bat.formId]=bat;
+    CartonAndBat(c,bb.formId,bat.formId);
+    const auto r=fo3vr::Identity();
+    assert(fo3weapon::CartonAligned({.05f,0,0},r,{},r));
+    assert(!fo3weapon::CartonAligned({.25f,0,0},r,{},r));
+    assert(!fo3weapon::CartonAligned({},fo3vr::Axis({1,0,0},fo3vr::Pi),{},r));
+  }
   VatsTests();
   BodyAccess();
   // Gameplay bullets do not pause merely because VR weapon input is blocked.
@@ -441,6 +479,20 @@ int main(int argc,char**argv) {
   if(argc>1) {
     Catalog c;std::string error;
     assert(LoadCatalog(argv[1],c,error));
+    CartonAndBat(c,c.pipboy.formNames.at("weapbbgun"),c.pipboy.formNames.at("weapbaseballbat"));
+    for(const auto* name:{"cg02weapbbgun","weapuniqueblackbartsbbgun"})
+      assert(c.items.at(c.pipboy.formNames.at(name)).weapon.CartonReload());
+    const auto& hitLines=c.pipboy.topics.at(c.pipboy.formNames.at("hit"));
+    const auto quest=c.pipboy.formNames.at("genericplayer");
+    const auto hurt=std::find_if(hitLines.begin(),hitLines.end(),[&](const auto& line){
+      return line.quest==quest&&!line.responses.empty();
+    });
+    assert(hurt!=hitLines.end());
+    for(const auto* voice:{"playervoicemale","playervoicefemale"}) {
+      const auto id=c.pipboy.formNames.at(voice);
+      const auto request=fo3pipdata::VoicePath(c.pipboy,*hurt,hurt->responses.front(),id);
+      assert(request.rfind("@voice:"+c.pipboy.voices.at(id)+":_",0)==0);
+    }
     const auto& original=c.weapons;
     assert(original.vats.restoreRate==4&&original.vats.rifleAP==25&&original.vats.pistolAP==20);
     assert(fo3vats::Cost(original.vats,c.items.at(0x434f).weapon)==17);

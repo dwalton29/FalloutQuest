@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include "fo3-weapon-holsters.h"
 #include "fo3-weapon-assets.h"
 #include "rendering/mesh/fo3-static-nif.h"
@@ -8,10 +9,12 @@
 namespace fo3weapon {
 // Authored anchors in NIF coordinates. Conversion to metres belongs to the
 // runtime boundary; neither model origin nor controller origin is a grip.
-enum class ReloadFamily { DetachablePistol, DetachableRifle, Cylinder, Tube, InternalMagazine, EnergyCell, Heavy, RequiresAudit };
+enum class ReloadFamily { DetachablePistol, DetachableRifle, Cylinder, Tube, InternalMagazine, Carton, EnergyCell, Heavy, RequiresAudit };
 struct Asset {
   fo3anim::Skeleton nodes,firstPerson;
   fo3anim::Clip reloadAnimation;
+  fo3anim::Matrix cartonPour=fo3anim::Identity();
+  bool hasCartonGrip=false;
   fo3anim::Matrix magazineInLeft=fo3anim::Identity();
   bool hasMagazineGrip=false;
   std::vector<int> blocks;
@@ -19,25 +22,28 @@ struct Asset {
   std::array<float,3> muzzle{},muzzleForward{},clip{},slide{},support{};
   fo3anim::Matrix weaponToLeft=fo3anim::Identity();
   std::array<std::string,3> reloadSounds{};
-  int clipNode=-1,slideNode=-1;
+  int clipNode=-1,slideNode=-1,cartonNode=-1;
   bool valid=false,hasSupport=false;
   bool Decode(const std::vector<uint8_t>& model,
               const std::vector<uint8_t>& skeleton,
-              const std::vector<uint8_t>& aim) {
+              const std::vector<uint8_t>& aim,bool melee=false) {
     *this={};
     fo3anim::Skeleton fp;fo3anim::Clip a;fo3anim::Pose p;
     ModelNodes authored;
-    if(!DecodeModelNodes(model,authored)||
+    if(!DecodeModelNodes(model,authored,!melee)||
        !fo3anim::DecodeSkeleton(skeleton,fp)||!fo3anim::DecodeClip(aim,a)||
        !fo3anim::Sample(fp,a,.1,p))return false;
     nodes=std::move(authored.hierarchy);blocks=std::move(authored.blockBones);
     const int hand=fo3anim::FindBone(fp,"Bip01 R Hand"),weapon=fo3anim::FindBone(fp,"Weapon");
     const int muzzleNode=fo3anim::FindBone(nodes,"ProjectileNode");
     fo3anim::Matrix inverse;
-    if(hand<0||weapon<0||muzzleNode<0||!fo3anim::Inverse(p.global[hand],inverse))return false;
+    if(hand<0||weapon<0||(!melee&&muzzleNode<0)||!fo3anim::Inverse(p.global[hand],inverse))return false;
     handToWeapon=fo3anim::Multiply(inverse,p.global[weapon]);
-    muzzle=fo3anim::Point(nodes.bindGlobal[muzzleNode],{});
-    muzzleForward=fo3anim::Point(nodes.bindGlobal[muzzleNode],{0,1,0},true);
+    if(muzzleNode>=0){
+      muzzle=fo3anim::Point(nodes.bindGlobal[muzzleNode],{});
+      muzzleForward=fo3anim::Point(nodes.bindGlobal[muzzleNode],{0,1,0},true);
+    }
+    cartonNode=fo3anim::FindBone(nodes,"##BBCarton");
     clipNode=fo3anim::FindBone(nodes,"##Clip");
     if(clipNode<0)clipNode=fo3anim::FindBone(nodes,"##Magazine");
     slideNode=fo3anim::FindBone(nodes,"##Slide");
@@ -59,24 +65,39 @@ struct Asset {
   }
   bool Reload(const std::vector<uint8_t>& bytes) {
     fo3anim::Clip animation;if(!fo3anim::DecodeClip(bytes,animation))return false;
-    reloadAnimation=animation;hasMagazineGrip=false;
+    reloadAnimation=animation;hasMagazineGrip=hasCartonGrip=false;reloadSounds={};
     size_t i=0;float contact=-1;
     for(const auto&key:animation.textKeys)if(key.text.compare(0,7,"Sound: ")==0&&i<reloadSounds.size()){
       if(i==1)contact=key.time;
       reloadSounds[i++]=key.text.substr(7);
     }
+    int prop=clipNode;
+    if(cartonNode>=0){
+      // The middle of the authored visible carton interval is the held pour.
+      for(const auto& track:animation.properties){
+        if(track.kind!=fo3anim::PropertyKind::Visibility||track.bone!=nodes.bones[cartonNode].name)continue;
+        const auto first=std::find_if(track.values.keys.begin(),track.values.keys.end(),
+                                     [](const auto& key){return key.value[0]>0;});
+        if(first==track.values.keys.end())continue;
+        const auto end=std::find_if(first,track.values.keys.end(),[](const auto& key){return key.value[0]==0;});
+        if(end==track.values.keys.end())continue;
+        contact=(first->time+end->time)*.5f;prop=cartonNode;break;
+      }
+    }
     const int left=fo3anim::FindBone(firstPerson,"Bip01 L Hand"),weapon=fo3anim::FindBone(firstPerson,"Weapon");
     fo3anim::Pose hands,model;fo3anim::Matrix inverse;
-    if(std::isfinite(animation.frequency)&&animation.frequency>0&&contact>=animation.start&&left>=0&&weapon>=0&&clipNode>=0&&
+    if(std::isfinite(animation.frequency)&&animation.frequency>0&&contact>=animation.start&&left>=0&&weapon>=0&&prop>=0&&
        fo3anim::Sample(firstPerson,animation,(contact-animation.start)/animation.frequency,hands)&&
        fo3anim::Sample(nodes,animation,(contact-animation.start)/animation.frequency,model)&&
        fo3anim::Inverse(hands.global[left],inverse)){
-      magazineInLeft=fo3anim::Multiply(fo3anim::Multiply(inverse,hands.global[weapon]),model.delta[size_t(clipNode)]);
-      hasMagazineGrip=true;
+      magazineInLeft=fo3anim::Multiply(fo3anim::Multiply(inverse,hands.global[weapon]),model.delta[size_t(prop)]);
+      if(prop==cartonNode){hasCartonGrip=true;cartonPour=model.global[size_t(prop)];}
+      else hasMagazineGrip=true;
     }
-    return i==3;
+    return hasCartonGrip||i==3;
   }
   ReloadFamily ReloadInteraction(const Definition&d)const {
+    if(d.CartonReload()&&hasCartonGrip)return ReloadFamily::Carton;
     if(d.animation==4||d.animation==7)return ReloadFamily::EnergyCell;
     if(d.animation>=8)return ReloadFamily::Heavy;
     // Reload A plus authored detachable component and charging-action node.

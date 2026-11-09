@@ -26,6 +26,7 @@ namespace fo3audio {
 namespace {
 constexpr int RadioConversationEvent=19;
 constexpr int LoadingEffectEvent=20;
+constexpr int VoiceEffectEvent=21;
 struct Event {
   Event() = default;
   Event(int k, uint32_t form, bool enabled, std::string editor = {})
@@ -122,7 +123,7 @@ bool Playable(const std::string &p) {
 void Push(Event e) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
   if (!runtime.worker.joinable() || runtime.stop ||
-      (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16)))
+      (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16 || e.kind==VoiceEffectEvent)))
     return;
   if(e.kind==LoadingEffectEvent){
     if(e.name.empty()){
@@ -602,6 +603,11 @@ void Worker() {
         if(path.empty()&&missing.insert(asset->second.path).second)__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUDIO missing menu loop: %s",asset->second.path.c_str());}
       call(menuLoop,path,gain,true);continue;
     }
+    if(e.kind==VoiceEffectEvent){
+      const auto path=resolve(e.name);
+      if(!path.empty())call(effect,path,1,true);
+      continue;
+    }
     uint32_t id = 0;
     if(e.kind==16){id=catalog.Footstep(e.id&255u,e.id>>8u);} else if(e.kind==11||(e.kind==12&&e.name.empty())){id=e.id;} else if (e.kind == 5||e.kind==12) {
       auto n = catalog.names.find(e.name);
@@ -757,6 +763,9 @@ void BroadcastDone(int channel, uint32_t generation) {
 void PreloadSound(uint32_t soundForm){if(soundForm)Push({12,soundForm,false});}
 void PreloadSound(const std::string&editorId){if(!editorId.empty())Push({12,0,false,editorId});}
 void SoundEvent(uint32_t soundForm) { if(soundForm) Push({11,soundForm,true}); }
+void VoiceEffect(const std::string& request){
+  if(request.rfind("@voice:",0)==0)Push({VoiceEffectEvent,0,true,request});
+}
 void SoundAt(uint32_t form,float distance,float pan) {
   if(!form||!std::isfinite(distance)||distance<0||!std::isfinite(pan))return;
   Event event{11,form,true};event.distance=distance;event.pan=std::clamp(pan,-1.f,1.f);

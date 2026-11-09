@@ -176,6 +176,9 @@ static void StateAndPerception() {
   c.pipboy.dialogueActors[200].aiData.resize(19);assert(!AI(c.pipboy,200).valid);
   s={};s.BeginCombat(0x14);
   assert(MayPlayHitReaction(s));
+  assert(!StrongHitCanStagger(s,.04f,1)&&StrongHitCanStagger(s,.20f,1));
+  s.nextStagger=2;
+  assert(!StrongHitCanStagger(s,.20f,1.99)&&StrongHitCanStagger(s,.20f,2));
   s.pendingAttack=true;assert(!MayPlayHitReaction(s));
   s.pendingAttack=false;s.reloadUntil=2.5;assert(!MayPlayHitReaction(s));
   s.reloadUntil=0;assert(MayPlayHitReaction(s));

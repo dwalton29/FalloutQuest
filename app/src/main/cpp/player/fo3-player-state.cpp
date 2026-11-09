@@ -2136,7 +2136,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         const auto item = catalog_->items.find(w.instance.formId);
         if (!w.instance.id || w.instance.id >= next.nextStackId ||
             !ids.insert(w.instance.id).second || item == catalog_->items.end() ||
-            item->second.kind != ItemKind::Weapon || !item->second.weapon.Firearm() ||
+            item->second.kind != ItemKind::Weapon || !item->second.weapon.Physical() ||
             !item->second.playable || item->second.script || item->second.questItem ||
             item->second.cannotDrop || !std::isfinite(w.instance.condition) ||
             w.instance.condition < 0 || w.instance.condition > 1 ||

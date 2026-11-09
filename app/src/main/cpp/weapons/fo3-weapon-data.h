@@ -23,6 +23,10 @@ struct Definition {
   bool Automatic() const {return flags&2;}
   bool Firearm() const {return valid&&animation>=3&&animation<=9&&ammo&&clip&&ammoUse&&pellets;}
   bool LongGun() const {return animation>=5&&animation<=9;}
+  bool TwoHandMelee() const {return valid&&animation==2;}
+  bool Physical() const {return Firearm()||TwoHandMelee();}
+  bool BackHolster() const {return LongGun()||TwoHandMelee();}
+  bool CartonReload() const {return Firearm()&&animation==5&&reload==4&&attackAnimation==32;}
   Family Classification() const {
     switch(animation){case 0:return Family::Unarmed;case 1:case 2:return Family::Melee;
     case 3:return Family::Pistol;case 4:return Family::EnergyPistol;case 5:case 6:return Family::Rifle;
@@ -84,6 +88,7 @@ struct Definitions {
   std::unordered_map<uint32_t,std::string> models;
   float damageGun=0,damageEnergy=0,damageLauncher=0;
   float skillBase=0,skillMult=0,conditionBase=0,conditionMult=0;
+  float meleeConditionBase=.5f,meleeConditionMult=.5f;
   float unarmedBase=0,unarmedMult=0;
   float npcHealthLevel=0,npcHealthEndurance=0;
   float detectionDistance=0,drMax=85;

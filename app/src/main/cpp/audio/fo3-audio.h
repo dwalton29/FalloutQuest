@@ -38,6 +38,7 @@ void Open(uint32_t base);
 void Close(uint32_t base);
 void Scroll();
 void SoundEvent(uint32_t soundForm);
+void VoiceEffect(const std::string& request);
 void SoundAt(uint32_t soundForm,float distance,float pan);
 void PreloadSound(uint32_t soundForm);
 void PreloadSound(const std::string& editorId);

@@ -813,7 +813,7 @@ bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<fl
 }
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-void Q230ActorHitReaction(uint32_t target,uint8_t region) {
+void Q230ActorHitReaction(uint32_t target,uint8_t region,float healthFractionLost) {
   if(!gPlayerSession||gPlayerSession->player.ActorHealth(target)<=0)return;
   const double now=std::chrono::duration<double>(
     Fo3GameplayNow().time_since_epoch()).count();
@@ -825,10 +825,7 @@ void Q230ActorHitReaction(uint32_t target,uint8_t region) {
     auto& s=actor.runtime;
     // A hit cannot indefinitely cancel a wind-up or restart a reload.
     // Let the original combat event finish; the damage and hostility still apply.
-    if(!fo3npc::MayPlayHitReaction(s)){
-      Q6H_LOGI("NPC HIT REACTION SKIP actor=%08X reason=attack-or-reload",target);
-      return;
-    }
+    if(!fo3npc::StrongHitCanStagger(s,healthFractionLost,now))return;
     std::array<bool,3> available{};
     for(size_t i=0;i<3;++i)available[i]=!actor.authoredHitClips[slot][i].tracks.empty();
     const int variant=fo3npc::HitVariant(available,s.hitSequence++);
@@ -842,6 +839,7 @@ void Q230ActorHitReaction(uint32_t target,uint8_t region) {
     // attribution or a paused combat reload.
     s.hitUntil=now+std::min(std::clamp(duration,.08,1.5),
                              s.activity==fo3npc::Activity::Combat?.15:.35);
+    s.nextStagger=s.hitUntil+.85;
     s.animation=fo3npc::Animation::Hit;++s.actionSerial;actor.lastFrame=UINT64_MAX;
     Q6H_LOGI("NPC HIT REACTION actor=%08X region=%u variant=%d duration=%.3f clip=%s",
       target,unsigned(region),variant,s.hitUntil-now,clip.name.c_str());

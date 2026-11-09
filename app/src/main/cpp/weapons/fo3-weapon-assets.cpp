@@ -59,7 +59,7 @@ std::array<float, 3> ModelNodes::MuzzleForward() const {
   for (float &f : v) f /= n;
   return v;
 }
-bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out) {
+bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out,bool requireMuzzle) {
   ModelNodes next;
   if (!fo3anim::DecodeModelHierarchy(bytes, next.hierarchy, next.blockBones)) return false;
   next.muzzle = fo3anim::FindBone(next.hierarchy, "ProjectileNode");
@@ -67,6 +67,7 @@ bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out) {
   if(next.magazine<0)next.magazine=fo3anim::FindBone(next.hierarchy,"##Magazine");
   next.slide = fo3anim::FindBone(next.hierarchy, "##Slide");
   next.bolt = fo3anim::FindBone(next.hierarchy, "##Bolt");
+  if(!requireMuzzle){out=std::move(next);return true;}
   if (next.muzzle < 0) return false;
   const auto direction = next.MuzzleForward();
   if (direction[0] == 0 && direction[1] == 0 && direction[2] == 0) return false;
@@ -76,6 +77,7 @@ bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out) {
 std::string AimPath(const Definition &definition) {
   const char *prefix = nullptr;
   switch (definition.animation) {
+  case 2: prefix = "2hm"; break;
   case 3: case 4: prefix = "1hp"; break;
   case 5: case 7: prefix = "2hr"; break;
   case 6: prefix = "2ha"; break;

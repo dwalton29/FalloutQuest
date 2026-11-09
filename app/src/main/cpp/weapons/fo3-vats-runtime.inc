@@ -278,6 +278,7 @@ bool UpdateFo3Vats(double raw,double game,float lt,float rt,bool a,bool b,bool t
   const auto model=weaponruntime::models.find(stack->formId);
   if(model==weaponruntime::models.end()||!model->second.ready){Finish(false);return was;}
   const auto& weapon=player.Definitions().items.at(stack->formId).weapon;
+  if(!weapon.Firearm()){Finish(false);return was;}
   if(!was){
     if(!chrome.Ensure("menus\\vats_menu.xml",1280,900)){fo3audio::NamedSound("UIVATSEnterFail");return true;}
     PauseFo3ResidentGameplayTime();

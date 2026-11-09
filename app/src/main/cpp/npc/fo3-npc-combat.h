@@ -53,6 +53,12 @@ inline bool Defensive(const fo3pipdata::PackageDefinition* package){return packa
 inline bool MayPlayHitReaction(const RuntimeState& s){
   return s.activity!=Activity::Combat||(!s.pendingAttack&&s.reloadUntil<=0);
 }
+// Small impacts keep their damage and threat response without stopping the
+// actor. Strong hits have a recovery window beyond their visible flinch.
+inline bool StrongHitCanStagger(const RuntimeState& state,float healthLost,double now){
+  return std::isfinite(healthLost)&&healthLost>=.15f&&now>=state.nextStagger&&
+         MayPlayHitReaction(state);
+}
 inline float CombatSetting(const fo3player::Catalog& c,const char* key,float fallback=0){
   const auto it=c.npcCombatSettings.find(key);return it==c.npcCombatSettings.end()?fallback:it->second;
 }

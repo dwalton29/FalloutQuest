@@ -14,6 +14,7 @@
 struct Rig {fo3anim::Matrix scenePlacement=fo3anim::Identity();};
 struct Q230ActorVisual {
  Fo3NpcActorQ230 source;fo3npc::RuntimeState runtime;fo3anim::Skeleton skeleton;fo3anim::Pose pose;
+ std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
  std::vector<Rig> rigs;fo3anim::Matrix dialogueRoot=fo3anim::Identity();
  std::shared_ptr<const fo3rag::Definition> ragdollDefinition;std::shared_ptr<const fo3player::CorpsePose> corpsePose;
  mutable std::shared_ptr<const fo3player::CorpsePose> boundsCorpse;mutable fo3anim::Matrix corpseBoundsScene{};mutable questrender::Bounds cachedCorpseBounds{};

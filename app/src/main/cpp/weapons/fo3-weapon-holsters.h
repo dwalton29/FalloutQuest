@@ -9,8 +9,8 @@ const fo3player::Stack* Holstered(const fo3player::Player& player,bool longGun,
   const fo3player::Stack* best=nullptr;
   for(const auto& stack:player.Snapshot().inventory){
     const auto item=player.Definitions().items.find(stack.formId);
-    if(item==player.Definitions().items.end()||!item->second.weapon.Firearm()||
-       item->second.weapon.LongGun()!=longGun||!ready(stack.formId))continue;
+    if(item==player.Definitions().items.end()||!item->second.weapon.Physical()||
+       item->second.weapon.BackHolster()!=longGun||!ready(stack.formId))continue;
     if(stack.id==active)return &stack;
     if(!best||stack.id==remembered||(best->id!=remembered&&stack.id<best->id))best=&stack;
   }

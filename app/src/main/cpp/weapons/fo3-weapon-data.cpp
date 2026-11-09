@@ -130,6 +130,8 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
       if(editor=="fAVDUnarmedDamageMult")o.unarmedMult=v;
       if(editor=="fDamageGunWeapCondBase")o.conditionBase=v;
       if(editor=="fDamageGunWeapCondMult")o.conditionMult=v;
+      if(editor=="fDamageMeleeWeapCondBase")o.meleeConditionBase=v;
+      if(editor=="fDamageMeleeWeapCondMult")o.meleeConditionMult=v;
       if(editor=="fAVDNPCHealthLevelMult")o.npcHealthLevel=v;
       if(editor=="fAVDNPCHealthEnduranceMult")o.npcHealthEndurance=v;
       if(editor=="fMaxArmorRating")o.drMax=v;

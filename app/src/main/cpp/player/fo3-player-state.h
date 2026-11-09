@@ -738,6 +738,7 @@ public:
   bool ReloadWeapon(uint64_t id);
   bool EjectMagazine(uint64_t id);
   bool LoadMagazine(uint64_t id);
+  bool LoadWeaponCarton(uint64_t instance);
   bool ChamberWeapon(uint64_t id);
   // Explicit development bootstrap; runtime enables only when presentation is ready.
   bool BootstrapDevelopmentWeapon();
@@ -844,6 +845,7 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  bool TransferWeaponAmmo(uint64_t instance,const fo3weapon::Definition&,int32_t capacity,bool ready);
   friend bool LoadCatalog(const std::string&,Catalog&,std::string&);
   friend struct Session;
   explicit Player(std::shared_ptr<const Catalog> catalog);

@@ -1008,7 +1008,7 @@ void EndFo3Dialogue(const char* reason);
 void Q230UpdateActor(Q230ActorVisual&);
 void Q230PrepareRagdolls();
 void Q230CaptureRagdolls();
-void Q230ActorHitReaction(uint32_t target,uint8_t region);
+void Q230ActorHitReaction(uint32_t target,uint8_t region,float healthFractionLost);
 void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
 void Q230CacheCombat(Q230ActorVisual&,const fo3player::Catalog*);
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi);
@@ -2203,7 +2203,7 @@ std::shared_ptr<const fo3doorpick::Bounds> LoadFo3DoorActivation(const std::stri
 bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement);
 
 bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs,
-                     bool requireComplete = false) {
+                     bool requireComplete = false, bool keepWeaponReloadProp = false) {
     outs.clear();
     if(Fo3IsTriggerHelperModel(placement.modelPath)) {
         CpuObject part;part.placement=placement;part.nonvisualResident=true;
@@ -2267,6 +2267,10 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     const auto rigidBody=PrepareFo3RigidBody(placement,*cachedMeshes);
     size_t shapeIndex = 0;
     for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
+        // The original idle hides the BB reload carton. Retain the prop only
+        // in the separately cached physical weapon used by the reload.
+        if(!keepWeaponReloadProp&&placement.baseRecordType=="WEAP"&&
+           cachedMesh.shapeName.rfind("##BBCarton:",0)==0){++shapeIndex;continue;}
         Fo3StaticNifMesh mesh = cachedMesh;
         Fo3SuppressIntactGoreCaps(mesh);
         if(mesh.indices.empty()){++shapeIndex;continue;}
@@ -10741,7 +10745,7 @@ void Q220UpdateLooseGrab(
                 const auto r=gPlayerSession->player.Definitions().references.find(ref);
                 if(r!=gPlayerSession->player.Definitions().references.end()){
                     const auto i=gPlayerSession->player.Definitions().items.find(r->second.base);
-                    if(i!=gPlayerSession->player.Definitions().items.end()&&i->second.weapon.Firearm()){state.previousGrip=grip;return;}
+                    if(i!=gPlayerSession->player.Definitions().items.end()&&i->second.weapon.Physical()){state.previousGrip=grip;return;}
                 }
             }
             state.active = true;

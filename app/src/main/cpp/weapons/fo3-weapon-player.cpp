@@ -7,7 +7,10 @@
 namespace fo3player {
 namespace {
 float Damage(const fo3weapon::Definition& d,const fo3weapon::Definitions& r,float skill,float condition) {
-  return d.damage*(r.skillBase+r.skillMult*std::clamp(skill,0.f,100.f)/100)*(r.conditionBase+r.conditionMult*condition);
+  const bool melee=d.Classification()==fo3weapon::Family::Melee;
+  const float conditionScale=melee?r.meleeConditionBase+r.meleeConditionMult*condition:
+                                   r.conditionBase+r.conditionMult*condition;
+  return d.damage*(r.skillBase+r.skillMult*std::clamp(skill,0.f,100.f)/100)*conditionScale;
 }
 Stack *Find(State &state, uint64_t id) {
   for (auto &s : state.inventory)
@@ -39,7 +42,7 @@ bool Player::PickupWeapon(uint32_t reference) {
   if (!CanPickup(reference)) return false;
   const auto &ref = catalog_->references.at(reference);
   const auto &item = catalog_->items.at(ref.base);
-  if (item.kind != ItemKind::Weapon || !item.weapon.Firearm()) return false;
+  if (item.kind != ItemKind::Weapon || !item.weapon.Physical()) return false;
   const auto id = state_.nextStackId;
   if (!Pickup(reference)) return false;
   // Pickup/Add already preflighted capacity and gave every instance a unique ID.
@@ -50,7 +53,7 @@ bool Player::DropWeapon(uint64_t id, const fo3weapon::WorldPose &pose) {
   if (!s || s->count != 1 || !fo3weapon::ValidPose(pose) ||
       state_.worldWeapons.size() >= 10000) return false;
   const auto &item = catalog_->items.at(s->formId);
-  if (!item.weapon.Firearm() || !item.playable || item.script ||
+  if (!item.weapon.Physical() || !item.playable || item.script ||
       item.questItem || item.cannotDrop) return false;
   Stack instance = *s;
   instance.equipped = false;
@@ -67,12 +70,12 @@ bool Player::PickupWorldWeapon(uint64_t id) {
   if (it == state_.worldWeapons.end() || state_.inventory.size() >= 10000) return false;
   const auto item = catalog_->items.find(it->instance.formId);
   if (item == catalog_->items.end() || item->second.kind != ItemKind::Weapon ||
-      !item->second.weapon.Firearm() || !item->second.playable ||
+      !item->second.weapon.Physical() || !item->second.playable ||
       it->instance.count != 1) return false;
   const Stack instance = it->instance;
   state_.inventory.push_back(instance);
   state_.worldWeapons.erase(it);
-  // Equip only an authored playable firearm; no IDs are allocated or merged.
+  // Preserve the original instance when drawing the picked-up weapon.
   return Equip(id);
 }
 bool Player::UpdateWorldWeapon(uint64_t id, const fo3weapon::WorldPose &pose) {
@@ -114,6 +117,7 @@ bool Player::CanReloadWeapon(uint64_t id)const{
 }
 bool Player::ReloadWeapon(uint64_t id){
   if(!CanReloadWeapon(id))return false;
+  if(catalog_->items.at(Weapon(id)->formId).weapon.CartonReload())return LoadWeaponCarton(id);
   Player candidate=*this;const auto* current=candidate.Weapon(id);
   if((!current->needsAction||current->loadedRounds)&&!candidate.EjectMagazine(id))return false;
   if(!candidate.LoadMagazine(id)||!candidate.ChamberWeapon(id))return false;
@@ -140,7 +144,18 @@ bool Player::LoadMagazine(uint64_t id) {
   if (!s || !s->equipped || s->loadedRounds || !s->needsAction) return false;
   const auto &def = catalog_->items.at(s->formId).weapon;
   if (!def.Firearm()) return false;
-  int32_t rounds = std::min<int32_t>(def.clip, AmmoReserve(def.ammo));
+  return TransferWeaponAmmo(id,def,def.clip,false);
+}
+bool Player::LoadWeaponCarton(uint64_t id){
+  const auto* s=Weapon(id);
+  if(!s||!s->equipped||s->condition<=0)return false;
+  const auto& def=catalog_->items.at(s->formId).weapon;
+  if(!def.CartonReload())return false;
+  if(s->loadedRounds<def.clip&&TransferWeaponAmmo(id,def,def.clip-s->loadedRounds,true))return true;
+  return ChamberWeapon(id);
+}
+bool Player::TransferWeaponAmmo(uint64_t id,const fo3weapon::Definition& def,int32_t capacity,bool ready) {
+  int32_t rounds = std::min(capacity, AmmoReserve(def.ammo));
   if (!rounds) return false;
   const int32_t loaded = rounds;
   for (auto it = state_.inventory.begin(); it != state_.inventory.end() && rounds;) {
@@ -150,7 +165,9 @@ bool Player::LoadMagazine(uint64_t id) {
     rounds -= take;
     if (!it->count) it = state_.inventory.erase(it); else ++it;
   }
-  Find(state_, id)->loadedRounds = static_cast<uint16_t>(loaded);
+  auto* weapon=Find(state_,id);
+  weapon->loadedRounds+=static_cast<uint16_t>(loaded);
+  if(ready)weapon->needsAction=false;
   ++revision_;
   return true;
 }

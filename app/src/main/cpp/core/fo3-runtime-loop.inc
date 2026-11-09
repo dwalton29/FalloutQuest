@@ -1722,6 +1722,35 @@ private:
         doorAimActiveQ1700_ = active;
     }
 
+    void UpdatePlayerHurt(XrTime now) {
+        if(!gPlayerSession||gPlayerSession->saveBlocked||!gSceneReady||
+           gFo3Title.open||IsFo3LoadingVisible()||gSceneLoad.active){
+            hurtOwner_=nullptr;
+            return;
+        }
+        auto& player=gPlayerSession->player;
+        const auto generation=player.ScriptRuntimeGeneration();
+        const float damage=player.Snapshot().healthDamage;
+        const bool samePlayer=hurtOwner_==&player&&hurtGeneration_==generation;
+        const bool hurt=samePlayer&&damage>hurtDamage_&&player.Health()>0;
+        hurtOwner_=&player;hurtGeneration_=generation;hurtDamage_=damage;
+        if(!samePlayer)nextHurt_=0;
+        if(!hurt||now<nextHurt_||gFo3FocusPaused||sessionState_!=XR_SESSION_STATE_FOCUSED)return;
+        const auto& d=player.Definitions().pipboy;
+        const auto quest=d.formNames.find("genericplayer"),topic=d.formNames.find("hit");
+        const auto voice=d.formNames.find(player.PlayerFemale()?"playervoicefemale":"playervoicemale");
+        if(quest==d.formNames.end()||topic==d.formNames.end()||voice==d.formNames.end())return;
+        const auto lines=d.topics.find(topic->second);
+        if(lines==d.topics.end())return;
+        // GenericPlayer owns the original Hit responses for both player voices.
+        std::vector<const fo3pipdata::Info*> choices;
+        for(const auto& line:lines->second)
+            if(line.quest==quest->second&&!line.responses.empty())choices.push_back(&line);
+        if(choices.empty())return;
+        const auto& line=*choices[hurtVoice_++%choices.size()];
+        fo3audio::VoiceEffect(fo3pipdata::VoicePath(d,line,line.responses.front(),voice->second));
+        nextHurt_=now+550000000;
+    }
     void UpdatePlayerDeath(XrTime now) {
         if (!Fo3PlayerDead()) {
             death_={};
@@ -1900,6 +1929,7 @@ private:
                 ++gSceneLoadFrame;
                 fo3loadingvr::gSlideshow.sounds.clear();
                 fo3loadingvr::gAudioFrameGeneration=0;
+                UpdatePlayerHurt(frameState.predictedDisplayTime);
                 UpdatePlayerDeath(frameState.predictedDisplayTime);
                 // All loading work advances once before stereo acquisition.
                 // No scene uploads or preparation are dispatched from an eye.
@@ -3094,6 +3124,11 @@ private:
     fo3scene::ResidentInputBarrier residentInputBarrier_;
     fo3vats::InputRelease vatsRelease_;
     fo3death::Sequence death_;
+    const fo3player::Player* hurtOwner_=nullptr;
+    uint64_t hurtGeneration_=0;
+    float hurtDamage_=0;
+    XrTime nextHurt_=0;
+    size_t hurtVoice_=0;
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
     float playerYaw_{0.0f};
