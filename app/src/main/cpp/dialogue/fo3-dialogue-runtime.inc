@@ -349,7 +349,8 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       if(std::fabs(weights[c])<.001f)weights[c]=0;
     }
     if(actor.facialWeights!=weights){actor.facialWeights=weights;actor.lastFrame=UINT64_MAX;}
-    const uint32_t lookTarget=actor.runtime.scriptLookTarget?actor.runtime.scriptLookTarget:fo3worldscript::SpeechLookTarget(actor.source.refFormId);
+    const uint32_t speechTarget=fo3worldscript::SpeechLookTarget(actor.source.refFormId);
+    const uint32_t lookTarget=actor.runtime.scriptLookTarget?actor.runtime.scriptLookTarget:speechTarget;
     if(!actor.runtime.OwnsAuthoredMotion(gDialogueTime)&&actor.runtime.activity!=fo3npc::Activity::Combat&&(lookTarget||actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];
@@ -375,9 +376,9 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       const float targetX=chat?chatPartner[0]:gQ210Head[0];
       const float targetZ=chat?chatPartner[2]:gQ210Head[2];
       const float desired=std::atan2(-(targetX-x),-(targetZ-z));
-      const bool implicitSpeechTurn=scriptedLook&&!actor.runtime.scriptLookTarget&&
+      const bool turnToListener=scriptedLook&&lookTarget==speechTarget&&
           actor.runtime.scriptSpeechToken&&actor.runtime.speaking;
-      actor.runtime.Face(desired,dt,scriptedLook,actor.runtime.scriptLookRotateBody||implicitSpeechTurn);
+      actor.runtime.Face(desired,dt,scriptedLook,actor.runtime.scriptLookRotateBody||turnToListener);
       actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
     }
   }

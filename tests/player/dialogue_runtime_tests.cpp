@@ -81,7 +81,8 @@ uint64_t DeferFo3DialogueResult(std::unique_ptr<fo3player::ScriptTransactionPlan
 }
 int Fo3DialogueResultStatus(uint64_t ticket){return ticket==deferredSerial?deferredStatus:-1;}
 #include "dialogue/fo3-dialogue-scene-refresh.inc"
-namespace fo3worldscript {uint32_t SpeechLookTarget(uint32_t){return 0;}}
+static uint32_t scriptedSpeechTarget=0;
+namespace fo3worldscript {uint32_t SpeechLookTarget(uint32_t){return scriptedSpeechTarget;}}
 #include "dialogue/fo3-dialogue-runtime.inc"
 #include "npc/fo3-npc-conversation.h"
 static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t,uint32_t=0);
@@ -185,6 +186,13 @@ static void Synthetic(){
     auto lip=std::make_shared<fo3face::Lip>();lip->frames.resize(30);lip->frames[0].speech[0]=.75f;
     fo3audio::face.Start(token);fo3audio::face.Asset(token,lip);fo3audio::face.Position(token,0);Tick();
     assert(actor.facialWeights[0]==.75f);
+    const auto viewer=gQ210Head;const auto yaw=actor.runtime.yaw,returnYaw=actor.runtime.returnYaw;
+    gQ210Head=actor.runtime.position;gQ210Head[2]-=1;
+    actor.runtime.yaw=actor.runtime.returnYaw=2.4f;
+    actor.runtime.scriptLookTarget=scriptedSpeechTarget=fo3player::PlayerRef;
+    Tick();assert(actor.runtime.yaw<2.4f);
+    actor.runtime.scriptLookTarget=scriptedSpeechTarget=0;
+    actor.runtime.yaw=yaw;actor.runtime.returnYaw=returnYaw;gQ210Head=viewer;
     actor.runtime.scriptSpeechToken=0;gPlayerSession->player.SetScriptActorTalking(actor.source.refFormId,false);fo3audio::face.Start(0);
     for(int i=0;i<20;++i)Tick();for(float weight:actor.facialWeights)assert(weight==0);
   }
