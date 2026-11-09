@@ -3,6 +3,7 @@
 #include "fo3-menu-appearance-layout.h"
 #include "fo3-menu-appearance-renderer.h"
 #include "fo3-menu-renderer.h"
+#include "fo3-menu-special-book.h"
 #include "pipboy/fo3-quest-route.h"
 #include "ui/pipboy/fo3-pipboy-state.h"
 namespace fo3menuui {
@@ -891,6 +892,7 @@ inline void Shutdown() {
     *d = {};
   }
   AppearanceFrame().Shutdown();
+  BookFrame().Shutdown();
   Shared().Shutdown();
 }
 

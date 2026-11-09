@@ -1,6 +1,7 @@
 #include "fo3-actor-clip-path.h"
 #include "fo3-response-animation.h"
 #include "fo3-combat-animation.h"
+#include "audio/fo3-animation-sounds.h"
 #include "rendering/performance-capture.h"
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
   actor.animations[0]=actor.clip;
@@ -655,7 +656,20 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   if(responsePose){
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
     const double keyTime=(responseNow-actor.responseStarted)*responseClip->second.frequency+responseClip->second.start;
-    for(const auto& key:responseClip->second.textKeys)if(key.time>actor.responseLastTime&&key.time<=keyTime&&key.text.rfind("Sound: ",0)==0)fo3audio::NamedSound(key.text.substr(7));
+    if(gPlayerSession&&!actor.runtime.offScene&&!IsFo3LoadingVisible()){
+      for(const auto& key:responseClip->second.textKeys){
+        if(key.time<=actor.responseLastTime||key.time>keyTime||key.text.rfind("Sound: ",0)!=0)continue;
+        const auto sound=fo3animsound::Resolve(gPlayerSession->player.Definitions().pipboy,key.text);
+        if(!sound)continue;
+        // Residents in other rooms of the same CELL still animate. An actor
+        // sound key uses the emitter's distance, not a listener-wide effect.
+        const float dx=actor.runtime.position[0]-gQ210Head[0],dy=actor.runtime.position[1]-gQ210Head[1],
+                    dz=actor.runtime.position[2]-gQ210Head[2];
+        const float horizontal=std::hypot(dx,dz),yaw=gQ210Head[3];
+        const float pan=horizontal>0?(dx*std::cos(yaw)-dz*std::sin(yaw))/horizontal:0;
+        fo3audio::SoundAt(sound,std::hypot(horizontal,dy)*FO3_UNITS_PER_METRE,pan);
+      }
+    }
     actor.responseLastTime=keyTime;
 #endif
     fo3anim::BindClip(actor.skeleton,responseClip->second,actor.pose);

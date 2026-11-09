@@ -224,23 +224,37 @@ void UpdateFo3TagSkills(double now,float y,bool a,bool b,bool focused,const floa
     if(result!=fo3tagmenu::Model::Result::None){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
     else if(gTagSkillsEntry.revision!=before)fo3audio::Scroll();
 }
-void UpdateFo3SpecialBook(double now,float x,float y,bool a,bool b,bool focused,const float* head){
+void UpdateFo3SpecialBook(double now,float x,float y,bool a,bool b,bool focused,const float* head,
+    const fo3special::BookTiming* book=nullptr,bool left=false,bool right=false,bool finish=false){
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& player=gPlayerSession->player;const auto owner=player.Snapshot().specialMenuOwner;
+    static const fo3player::Player* previous=nullptr;
+    static uint64_t generation=0;
+    if(previous!=&player||generation!=player.ScriptRuntimeGeneration()){
+        gSpecialBookEntry={};gSpecialBookPanel={};previous=&player;generation=player.ScriptRuntimeGeneration();
+    }
     if(!owner&&!gSpecialBookEntry.owner)return;
     if(owner&&owner!=gSpecialBookEntry.owner){
         gSpecialBookPanel={};const float yaw=head[3];gSpecialBookPanel.yaw=yaw;
         gSpecialBookPanel.anchor={head[0]-std::sin(yaw)*1.5f,head[1]+.12f,head[2]-std::cos(yaw)*1.5f};
     }
     const auto before=gSpecialBookEntry.revision;
-    const auto result=gSpecialBookEntry.Step(player,now,x,y,a,b,focused);
+    const auto result=gSpecialBookEntry.Step(player,now,x,y,a,b,focused,book,left,right,finish);
     gSpecialBookPanel.visible=player.Snapshot().specialMenuOwner!=0;
-    gSpecialBookPanel.title="You're S.P.E.C.I.A.L.!";
-    gSpecialBookPanel.subtitle="Points remaining: "+std::to_string(player.SpecialBookRemaining())+". Left/right or A/B: adjust.";
-    gSpecialBookPanel.choices=gSpecialBookEntry.Choices(player);gSpecialBookPanel.selected=gSpecialBookEntry.cursor.selected;
-    gSpecialBookPanel.revision=player.Revision()+gSpecialBookEntry.revision;
-    if(result!=fo3special::Model::Result::None){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
-    else if(gSpecialBookEntry.revision!=before)fo3audio::Scroll();
+    if(!gSpecialBookEntry.authored){
+        gSpecialBookPanel.title="You're S.P.E.C.I.A.L.!";
+        gSpecialBookPanel.subtitle="Points remaining: "+std::to_string(player.SpecialBookRemaining())+". Left/right or A/B: adjust.";
+        gSpecialBookPanel.choices=gSpecialBookEntry.Choices(player);gSpecialBookPanel.selected=gSpecialBookEntry.cursor.selected;
+        gSpecialBookPanel.revision=player.Revision()+gSpecialBookEntry.revision;
+    }
+    using Result=fo3special::Model::Result;
+    if(result==Result::Turned)fo3audio::NamedSound("OBJBookSpecialPageTurn");
+    else if(result==Result::Edited||result==Result::Confirmed){
+        fo3audio::NamedSound(gSpecialBookEntry.authored&&result==Result::Edited?"OBJBookSpecialNumber":"UIMenuOK");
+        FlushFo3PlayerState();
+    }else if(gSpecialBookEntry.revision!=before){
+        if(gSpecialBookEntry.authored)fo3audio::NamedSound("OBJBookSpecialFocus");else fo3audio::Scroll();
+    }
 }
 void UpdateFo3PlayerName(double now,float x,float y,bool a,bool b,bool focused,const float* head){
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;

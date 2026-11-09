@@ -205,6 +205,7 @@ struct Batch {
   GLuint texture = 0;
   GLsizei first = 0, count = 0;
   float rgb[3]{}, alpha = 1;
+  bool depthWrite = true;
 };
 struct Surface {
   GLuint vao = 0, vbo = 0;
@@ -425,13 +426,15 @@ struct Surface {
                           sizeof(fo3hudassets::Vertex),
                           reinterpret_cast<void *>(3 * sizeof(float)));
   }
-  void Render(const float *mvp) {
+  void Render(const float *mvp, bool depth = false) {
     if (!vao || !mvp || !Shared().program)
       return;
     fo3hudrenderer::CachedStateGuard guard;
     auto &a = Shared();
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
+    if (!depth) {
+      glDisable(GL_DEPTH_TEST);
+      glDepthMask(GL_FALSE);
+    }
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
@@ -443,6 +446,8 @@ struct Surface {
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(vao);
     for (const auto &batch : batches) {
+      if (depth)
+        glDepthMask(batch.depthWrite ? GL_TRUE : GL_FALSE);
       glBindTexture(GL_TEXTURE_2D, batch.texture);
       glUniform4f(a.tint, batch.rgb[0], batch.rgb[1], batch.rgb[2],
                   batch.alpha);

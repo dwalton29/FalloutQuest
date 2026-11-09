@@ -380,6 +380,33 @@ static void CharacterMenus(){
   assert(controls.Step(resumed,.7,0,0,true,false,true)==fo3special::Model::Result::Confirmed);
   assert(!resumed.Snapshot().specialMenuOwner&&resumed.Snapshot().special[0]==7&&resumed.Snapshot().skills[6]==19&&resumed.Snapshot().skills[9]==17);
   assert(resumed.MaxHealth()==160&&resumed.MaxActionPoints()==110);
+  Player illustrated(c);Check(illustrated.ExecuteDialogueResult(request,error,101),error);
+  fo3special::BookTiming timing;timing.forward.fill(.5f);timing.reverse.fill(.5f);
+  fo3special::Model pages;
+  using BookResult=fo3special::Model::Result;
+  double bookNow=0;
+  const auto bookStep=[&](bool left=false,bool right=false,bool done=false,float x=0){
+    bookNow+=.1;
+    return pages.Step(illustrated,bookNow,x,0,false,false,true,&timing,left,right,done);
+  };
+  assert(bookStep(false,true)==BookResult::None&&pages.page==0);
+  assert(bookStep(false,true)==BookResult::None&&pages.page==0);bookStep();
+  assert(bookStep(false,true)==BookResult::Turned&&pages.page==1);
+  assert(bookStep(false,false,false,1)==BookResult::None&&illustrated.SpecialBookRemaining()==5);
+  bookNow+=.5;bookStep();
+  assert(bookStep(false,false,false,1)==BookResult::Edited&&illustrated.Snapshot().specialDraft[0]==6);
+  bookStep();assert(bookStep(true)==BookResult::Turned&&pages.page==0&&!pages.forward);
+  for(unsigned i=1;i<=fo3special::IndexPage;++i){
+    bookNow+=.5;bookStep();
+    assert(bookStep(false,true)==BookResult::Turned&&pages.page==i);
+  }
+  bookNow+=.5;bookStep();
+  assert(bookStep(false,false,true)==BookResult::None&&illustrated.Snapshot().specialMenuOwner);
+  for(unsigned i=1;i<5;++i)assert(illustrated.AdjustSpecialBook(i,1));
+  bookStep();assert(bookStep(false,false,true)==BookResult::Turned&&pages.page==fo3special::BackCover);
+  assert(bookStep()==BookResult::None&&illustrated.Snapshot().specialMenuOwner);
+  bookNow+=.5;assert(bookStep()==BookResult::Confirmed&&!illustrated.Snapshot().specialMenuOwner);
+  assert(illustrated.Snapshot().special[0]==6&&illustrated.Snapshot().special[4]==6);
   // A menu request is part of the same transaction as the triggering script.
   Player atomic(c);fo3pipdata::ResultScript end;end.source="UnknownCommand";
   assert(!atomic.PrepareDialogueTransaction(request,end,error,101)&&!atomic.Snapshot().specialMenuOwner);
@@ -752,7 +779,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   };
   auto arrival=[&](const char* package){actorArrival("cg01dadref",package);};
   p.SetScriptEventDiagnostic([&](const std::string& message){if(message.find(std::to_string(d.formNames.at("cg01script")))!=std::string::npos||message.find(std::to_string(d.formNames.at("cg02script")))!=std::string::npos||message.find("DIALOGUE")!=std::string::npos)std::cerr<<message<<"\n";});
-  unsigned modalTicks=0;bool allocated=false,followed=false,packageGreeting=false,resetSeen=false,radioSeen=false;
+  unsigned modalTicks=0;bool allocated=false,followed=false,packageGreeting=false,resetSeen=false,radioSeen=false,sawPartySound=false;
   for(unsigned frame=0;frame<4000;++frame){
     const auto child=p.Snapshot().pipboy.quests.find(baby);
     if(p.Snapshot().pipboy.quests.count(birthday)&&p.Snapshot().pipboy.quests.at(birthday).stage>=12)break;
@@ -815,6 +842,10 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
       assert(p.EditAppearance(draft)&&p.ConfirmAppearance()&&p.PlayerRace()==draft.race);
     }
     p.SetScriptRuntimeClock(frame*.1,.1);p.PumpWorldAwareGameMode(.1,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);});
+    uint32_t sound;
+    while(p.PollScriptSound(sound))if(sound==d.formNames.at("qstpartyclapping2d")){
+      assert(sawBirthday&&!p.Snapshot().playerToddler);sawPartySound=true;
+    }
     fo3player::ScriptMessage message;
     while(p.PollScriptMessage(message))if(message.owner==quest){
       assert(!chose&&message.buttons.size()==2);
@@ -870,7 +901,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   assert(birth.stage==100&&!birth.running&&birth.stages.count(61)&&birth.stages.count(62)&&birth.stages.count(65)&&birth.stages.count(80));
   if(!p.Snapshot().pipboy.quests.count(birthday)||p.Snapshot().pipboy.quests.at(birthday).stage<12)std::cerr<<"Birthday stopped; toddler "<<p.Snapshot().pipboy.quests.at(baby).stage<<" birthday "<<(p.Snapshot().pipboy.quests.count(birthday)?p.Snapshot().pipboy.quests.at(birthday).stage:0)<<"\n";
   assert(sawMovie&&sawBirthday&&allocated&&followed&&p.Snapshot().pipboy.quests.at(baby).stage==100&&!p.Snapshot().playerToddler&&p.Snapshot().playerScale==1);
-  assert(packageGreeting&&resetSeen&&radioSeen&&radioPrepared);
+  assert(packageGreeting&&resetSeen&&radioSeen&&radioPrepared&&sawPartySound);
   bool radioDisabled=true;Check(p.ReferenceDisabled(d.formNames.at("radiovault101ref"),radioDisabled,error),error);assert(!radioDisabled);
   assert(!p.PlayerControlDisabled(0)&&!p.PlayerControlDisabled(5)&&p.PlayerControlDisabled(2));
   assert(!fo3player::EarlyFirstPerson(p));

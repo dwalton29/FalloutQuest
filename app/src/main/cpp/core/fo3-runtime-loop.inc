@@ -2133,8 +2133,12 @@ private:
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3TagSkills(gameplaySeconds,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
+                    const auto* book=Fo3SpecialBookFocus()&&!IsFo3LoadingVisible()&&fo3menuui::BookFrame().Ensure()
+                        ?&fo3menuui::BookFrame().timing:nullptr;
                     UpdateFo3SpecialBook(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
-                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
+                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head,
+                        book,q210LeftValid&&fingerTriggerValue_[0]>.65f,q210RightValid&&fingerTriggerValue_[1]>.65f,
+                        q210LeftValid&&barterConfirmDown_);
                     UpdateFo3PlayerName(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3LevelUp(gameplaySeconds,
@@ -2753,7 +2757,9 @@ private:
                         fo3menuui::Appearance(keyboard.m,fo3chargen::menu,*fo3chargen::controls,
                             gPlayerSession->player,gFo3AppearanceTexture,fo3chargen::textureUv);
                     else fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
-                }else if(!appearance)fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
+                }else if(Fo3SpecialBookFocus()&&gSpecialBookEntry.authored&&panel.visible)
+                    fo3menuui::BookFrame().Draw(keyboard.m,gSpecialBookEntry,gPlayerSession->player,eye.width,eye.height);
+                else if(!appearance)fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
                 if(Fo3PlayerNameFocus()){
                     model.m[13]+=.65f;
                     const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);
