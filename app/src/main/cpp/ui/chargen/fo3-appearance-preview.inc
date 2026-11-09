@@ -1,6 +1,7 @@
 #include "ui/chargen/fo3-appearance-menu.h"
 
 namespace fo3chargen {
+using ::fo3chargen::Menu;
 struct PreviewKey {
     fo3character::Appearance appearance;
     uint32_t screen=0;
