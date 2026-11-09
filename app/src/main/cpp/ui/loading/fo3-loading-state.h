@@ -62,6 +62,15 @@ inline uint64_t GetFo3LoadingGeneration() {
     return gFo3LoadingGeneration.load(std::memory_order_acquire);
 }
 
+// An animation key is audible only after its generation has put a frame
+// on the headset. The final covered frame is already silent.
+inline bool IsFo3LoadingAudioCurrent(uint64_t generation) {
+    const int phase = gFo3LoadingPhase.load(std::memory_order_acquire);
+    return generation != 0 && phase != FO3_LOADING_IDLE && phase != FO3_LOADING_POST &&
+        GetFo3LoadingGeneration() == generation &&
+        gFo3LoadingPresentedFrames.load(std::memory_order_acquire) != 0;
+}
+
 inline uint32_t GetFo3LoadingPresentedFrames() {
     return gFo3LoadingPresentedFrames.load(std::memory_order_acquire);
 }

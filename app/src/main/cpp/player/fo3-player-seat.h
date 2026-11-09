@@ -38,10 +38,11 @@ inline bool Targets(const fo3furniture::Slot& slot,const fo3anim::Skeleton& skel
  const double duration=(program.enter.stop-program.enter.start)/program.enter.frequency;
  const auto retained=fo3furniture::Root(program.enter,duration);
  const auto loopRoot=program.LoopRoot(retained);
+ const auto alignment=program.Frame(slot.alignment);
  auto eye=[&](const fo3anim::Clip& clip,double time,const fo3anim::Transform* root,Pose& out){
   fo3anim::Pose pose;fo3anim::BindClip(skeleton,clip,pose);if(!fo3anim::Sample(skeleton,clip,time,pose,nullptr,fo3anim::RootPolicy::Furniture,root,fo3anim::Playback::Clamp))return false;
-  const auto local=fo3anim::Point(pose.delta[size_t(head)],bindEye);out.eye=fo3anim::Point(slot.alignment,local);
-  const auto orientation=pose.accumulation>=0?fo3anim::Multiply(slot.alignment,fo3anim::ToMatrix(pose.local[size_t(pose.accumulation)])):slot.alignment;
+  const auto local=fo3anim::Point(pose.delta[size_t(head)],bindEye);out.eye=fo3anim::Point(alignment,local);
+  const auto orientation=pose.accumulation>=0?fo3anim::Multiply(alignment,fo3anim::ToMatrix(pose.local[size_t(pose.accumulation)])):alignment;
   out.yaw=std::atan2(-orientation[4],orientation[5]);return true;
  };
  if(!eye(program.loop,0,&loopRoot,sit)||!eye(program.exit,(program.exit.stop-program.exit.start)/program.exit.frequency,&retained,stand))return false;

@@ -56,6 +56,13 @@ inline fo3anim::Transform Root(const fo3anim::Clip& clip,double time,const fo3an
 struct Program {
   fo3anim::Clip enter,loop,exit;
   float loopHeading=0;
+  std::array<float,3> entryOrigin{};
+  fo3anim::Matrix Frame(const fo3anim::Matrix& marker)const{
+    auto frame=marker;
+    const auto origin=fo3anim::Point(marker,{-entryOrigin[0],-entryOrigin[1],-entryOrigin[2]});
+    std::copy(origin.begin(),origin.end(),frame.begin()+12);
+    return frame;
+  }
   bool Valid()const{return !enter.tracks.empty()&&!loop.tracks.empty()&&!exit.tracks.empty()&&enter.cycle==2&&exit.cycle==2;}
   void Prepare(){
     loopHeading=0;
@@ -104,7 +111,11 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
         if(!program){
           auto ready=std::make_shared<Program>();
           if(!clip(begin,ready->enter)||!clip(idle,ready->loop)||!clip(end,ready->exit)||!ready->Valid())return {};
-          ready->Prepare();program=std::move(ready);
+          ready->Prepare();
+          // Stool KFs already place their first accumulation root at the
+          // FRN approach in model space. Anchor that root to the marker once.
+          if(m.reference==15)ready->entryOrigin=Root(ready->enter,0).translation;
+          program=std::move(ready);
         }
         return program;
       };
@@ -125,8 +136,9 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       if(eat&&markers.size()>1){
         // Several FRN markers can lead to one chair. Reserve the occupied
         // entry endpoint, so a booth with separated seats supports both actors.
-        const auto& entry=(slot.program?slot.program:slot.childProgram)->enter;
-        const auto end=fo3anim::Point(slot.alignment,Root(entry,(entry.stop-entry.start)/entry.frequency).translation);
+        const auto& program=*(slot.program?slot.program:slot.childProgram);
+        const auto& entry=program.enter;
+        const auto end=fo3anim::Point(program.Frame(slot.alignment),Root(entry,(entry.stop-entry.start)/entry.frequency).translation);
         const auto shared=std::find_if(seats.begin(),seats.end(),[&](const auto& existing){
           return std::hypot(end[0]-existing.second[0],end[1]-existing.second[1])<35.f&&
                  std::abs(end[2]-existing.second[2])<20.f;

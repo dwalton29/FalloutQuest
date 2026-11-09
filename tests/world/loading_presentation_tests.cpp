@@ -48,11 +48,20 @@ int main(int argc,char**argv) {
     assert(near(menu.fadeSeconds,0.9f) && menu.overlayPath=="Interface\\Custom.NIF");
     BeginFo3Loading(1,2);
     assert(!ShouldDelayFo3TransitionConsume());
+    const auto firstLoad=GetFo3LoadingGeneration();
+    assert(!IsFo3LoadingAudioCurrent(firstLoad));
     MarkFo3TransitionWorkStarted();
     for(unsigned i=0;i<100;++i)MarkFo3LoadingFramePresented(false);
-    assert(IsFo3LoadingVisible());
+    assert(IsFo3LoadingVisible() && IsFo3LoadingAudioCurrent(firstLoad));
     NotifyFo3TransitionComplete();assert(IsFo3LoadingVisible());
+    assert(!IsFo3LoadingAudioCurrent(firstLoad));
     MarkFo3LoadingFramePresented(false);assert(!IsFo3LoadingVisible());
+    BeginFo3Loading(3,4);
+    const auto secondLoad=GetFo3LoadingGeneration();
+    MarkFo3LoadingFramePresented();
+    assert(!IsFo3LoadingAudioCurrent(firstLoad) && IsFo3LoadingAudioCurrent(secondLoad));
+    CancelFo3Loading();
+    assert(!IsFo3LoadingAudioCurrent(secondLoad));
     if(argc==3) {
         auto read=[](const char* path){std::ifstream f(path);assert(f.good());return std::string(std::istreambuf_iterator<char>(f),{});};
         menu=fo3loadingmenu::Definition{};fo3loadingmenu::ReadXml(read(argv[1]),menu);fo3loadingmenu::ReadIni(read(argv[2]),menu);

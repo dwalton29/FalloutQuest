@@ -1897,6 +1897,7 @@ private:
                 fo3loadingvr::SetHead(loadingHead.position.x,loadingHead.position.y,loadingHead.position.z,
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
+                fo3loadingvr::gSlideshow.sounds.clear();
                 UpdatePlayerDeath(frameState.predictedDisplayTime);
                 // All loading work advances once before stereo acquisition.
                 // No scene uploads or preparation are dispatched from an eye.
@@ -2512,7 +2513,10 @@ private:
         static uint64_t pendingPlayableGeneration=0;
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
-            if(wasLoading)MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
+            if(wasLoading) {
+                MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
+                if(!gFo3Title.open)fo3loadingvr::SubmitAudioCues();
+            }
             if (wasLoading && !IsFo3LoadingVisible()) {
                 fo3audio::StopLoadingSound();
                 pendingPlayableGeneration=GetFo3LoadingGeneration();

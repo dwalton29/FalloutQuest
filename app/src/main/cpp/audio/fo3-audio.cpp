@@ -72,7 +72,7 @@ void JNICALL DialoguePositionNative(JNIEnv*, jobject, jint token,jint millisecon
   for(auto& lane:runtime.dialogueFace)lane.Position(uint32_t(token),milliseconds);
 }
 jboolean JNICALL LoadingCurrentNative(JNIEnv*,jobject,jlong generation){
-  return IsFo3LoadingVisible()&&GetFo3LoadingGeneration()==uint64_t(generation)?JNI_TRUE:JNI_FALSE;
+  return IsFo3LoadingAudioCurrent(uint64_t(generation))?JNI_TRUE:JNI_FALSE;
 }
 bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
   if (!env || !activity) return false;
@@ -327,6 +327,7 @@ void Worker() {
     if (!list.empty())
       path = list[std::uniform_int_distribution<size_t>(0, list.size() -
                                                                1)(random)];
+    if(IsLoadingScreenEffect(path)!=forLoading)return std::string{};
     auto loose = Loose(path);
     if (!loose.empty() && Playable(loose))
       return loose;
@@ -576,12 +577,12 @@ void Worker() {
     if(e.kind==LoadingEffectEvent){
       if(e.name.empty()){
         playLoading("",1,0);
-      }else if(IsFo3LoadingVisible()&&e.loadingGeneration==GetFo3LoadingGeneration()){
+      }else if(IsFo3LoadingAudioCurrent(e.loadingGeneration)){
         const auto named=catalog.names.find(e.name);
         const auto asset=named==catalog.names.end()?catalog.sounds.end():catalog.sounds.find(named->second);
         if(asset!=catalog.sounds.end()){
           const auto path=resolve(asset->second.path,true);
-          if(!path.empty()&&IsFo3LoadingVisible()&&e.loadingGeneration==GetFo3LoadingGeneration()){
+          if(!path.empty()&&IsFo3LoadingAudioCurrent(e.loadingGeneration)){
             __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING AUDIO cue=%s generation=%llu",
                 e.name.c_str(),static_cast<unsigned long long>(e.loadingGeneration));
             playLoading(path,asset->second.gain,e.loadingGeneration);
@@ -776,9 +777,10 @@ void NamedSound(const std::string &editorId) {
     Push({5, 0, true, editorId});
 }
 void LoadingSound(const std::string& editorId) {
-  if(editorId.empty()||editorId.size()>128||!IsFo3LoadingVisible())return;
+  const auto generation=GetFo3LoadingGeneration();
+  if(editorId.empty()||editorId.size()>128||!IsFo3LoadingAudioCurrent(generation))return;
   Event event{LoadingEffectEvent,0,true,editorId};
-  event.loadingGeneration=GetFo3LoadingGeneration();
+  event.loadingGeneration=generation;
   Push(std::move(event));
 }
 void StopLoadingSound(){Push({LoadingEffectEvent,0,false});}

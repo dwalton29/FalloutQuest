@@ -122,6 +122,14 @@ int main(int argc,char** argv){
     assert(Q240CrowdStepAllowed(mover,{1,0,20},crowd)); // Close staging is not physical overlap.
     crowd[1].runtime.position=Q240ScenePosition({30,0,20});
     assert(!Q240CrowdStepAllowed(mover,{1,0,20},crowd));
+    auto seats=std::make_shared<fo3furniture::Scene>();
+    fo3furniture::Slot slot;slot.program=std::make_shared<fo3furniture::Program>();
+    slot.alignment[12]=30;slot.alignment[14]=20;seats->slots.push_back(slot);
+    auto& sitting=crowd[1].runtime.furniture;sitting.scene=seats;sitting.slot=0;
+    sitting.phase=fo3furniture::Phase::Loop;sitting.retainedRoot.translation={25,0,0};
+    assert(Q240CrowdStepAllowed(mover,{1,0,20},crowd));
+    sitting.phase=fo3furniture::Phase::Approach;
+    assert(!Q240CrowdStepAllowed(mover,{1,0,20},crowd));
   }
 
   CongestionRoutes();
@@ -135,6 +143,12 @@ int main(int argc,char** argv){
   for(int i=0;i<100&&!packageTargets[1].aiPathGame.empty();++i)Q240AdvancePath(packageTargets[1],.1f,i*.1);
   assert(packageTargets[1].aiPathGame.empty()&&packageTargets[1].runtime.hasLastRoamDestination);
   assert(packageTargets[1].runtime.procedure==fo3npc::Procedure::Waiting);
+  catalog.pipboy.packages[50].type=15;
+  gPlayerSession=std::make_unique<Session>(catalog);
+  packageTargets={actor,follower};
+  for(int i=0;i<100&&!packageTargets[1].aiPathGame.empty();++i)Q240AdvancePath(packageTargets[1],.1f,i*.1);
+  assert(packageTargets[1].aiPathGame.empty()&&packageTargets[1].aiPackage==50);
+  assert(!packageTargets[1].runtime.hasLastRoamDestination);
   auto initial=std::make_shared<fo3furniture::Scene>(),batch=std::make_shared<fo3furniture::Scene>();
   fo3furniture::State resident,arrival;resident.scene=initial;arrival.scene=batch;
   fo3furniture::JoinResidentActivities(arrival,resident);

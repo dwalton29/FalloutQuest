@@ -12,9 +12,9 @@ static bool Q230DoorMoving(const Q2400InteriorDoorState& state) {
   return state.collisionSceneSerial==gQ2400DoorSceneSerial&&
     (state.q2401NifAnimation?state.q2401Moving:(state.targetOpen?state.progress<.999f:state.progress>.001f));
 }
-static bool Q230MovingDoorBlocks(const std::array<float,3>& origin,const std::array<float,3>& direction,float step) {
+static uint32_t Q230BlockingMovingDoor(const std::array<float,3>& origin,const std::array<float,3>& direction,float step) {
   bool moving=false;for(const auto& entry:gQ2400InteriorDoors)if(Q230DoorMoving(entry.second)){moving=true;break;}
-  if(!moving)return false;
+  if(!moving)return 0;
   // A door activated by someone else has temporarily absent world collision
   // during its animation. Retain original closed bounds as a conservative
   // navigation barrier until settlement, including after a route replan.
@@ -25,9 +25,9 @@ static bool Q230MovingDoorBlocks(const std::array<float,3>& origin,const std::ar
     gQ230DoorBoundsScene=gQ2400DoorSceneSerial;
   }
   for(const auto& bounds:gQ230DoorBounds){const auto state=gQ2400InteriorDoors.find(bounds.reference);
-    float hit=0;if(state!=gQ2400InteriorDoors.end()&&Q230DoorMoving(state->second)&&fo3interaction::Box(origin,direction,bounds.lo,bounds.hi,step,hit))return true;
+    float hit=0;if(state!=gQ2400InteriorDoors.end()&&Q230DoorMoving(state->second)&&fo3interaction::Box(origin,direction,bounds.lo,bounds.hi,step,hit))return bounds.reference;
   }
-  return false;
+  return 0;
 }
 static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,float step,float segment) {
   Q230UpdateActor(actor);std::array<float,3> origin{};
@@ -39,8 +39,11 @@ static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,fl
   }
   // Trace the authored route from the root, independent of animated lean.
   origin[0]=actor.runtime.position[0];origin[2]=actor.runtime.position[2];
-  if(Q230MovingDoorBlocks(origin,{dx,dy,dz},step))return true;
   auto& pending=actor.runtime.navigationDoor;
+  if(const auto door=Q230BlockingMovingDoor(origin,{dx,dy,dz},step)){
+    pending=door;
+    return true;
+  }
   if(pending) {
     const auto state=gQ2400InteriorDoors.find(pending);
     if(state!=gQ2400InteriorDoors.end()&&Q230DoorMoving(state->second))return true;

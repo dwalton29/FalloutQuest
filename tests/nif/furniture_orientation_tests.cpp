@@ -22,6 +22,35 @@ int main(int argc,char** argv){
  for(int k=0;k<3;++k)assert(std::abs(end.global[1][12+k]-loop.global[1][12+k])<.0001f);
  test.loop.tracks.clear();test.Prepare();assert(test.loopHeading==0); // Unrelated/sparse programs get no invented turn.
  if(argc<3){std::cout<<"Furniture continuation frame and accumulated pivot tests passed\n";return 0;}
+ if(std::string(argv[1])=="--stool"){
+  const std::string base=argv[2];
+  fo3anim::Skeleton skeleton;assert(fo3anim::DecodeSkeleton(Read(base+"/skeleton.nif"),skeleton));
+  fo3pipdata::Definitions definitions;definitions.furniture[1]={"dinerstool01.nif","",0x40000001,true};
+  auto& placement=definitions.targets[2];placement.cell=3;placement.base=1;
+  const std::pair<const char*,const char*> clips[]={
+    {"sitdownstool","stoolenter.kf"},{"stooldynamicidle","dynamicidle_sitstool.kf"},{"standupstoolnormal","stoolexit.kf"}};
+  uint32_t id=10;for(const auto& [name,path]:clips){definitions.formNames[name]=id;definitions.idleModels[id++]=path;}
+  const auto scene=fo3furniture::BuildScene(definitions,3,0,[&](const std::string& path,auto& bytes){bytes=Read(base+"/"+path);return !bytes.empty();},true);
+  assert(scene->slots.size()==1);
+  const auto& slot=scene->slots.front();const auto& program=*slot.program;
+  const auto frame=program.Frame(slot.alignment);
+  const auto approach=fo3anim::Point(frame,fo3furniture::Root(program.enter,0).translation);
+  for(int axis=0;axis<3;++axis)assert(std::abs(approach[axis]-slot.alignment[12+axis])<.01f);
+  const double duration=(program.enter.stop-program.enter.start)/program.enter.frequency;
+  const auto retained=fo3furniture::Root(program.enter,duration);
+  const auto seat=fo3anim::Point(frame,retained.translation);
+  // DinerStool01's authored cushion spans about 30 model units.
+  assert(std::hypot(seat[0],seat[1])<15.f);
+  const auto entry=Sample(skeleton,program.enter,duration);const auto loopRoot=program.LoopRoot(retained);
+  const auto idle=Sample(skeleton,program.loop,0,&loopRoot),exit=Sample(skeleton,program.exit,0,&retained);
+  const int pelvis=fo3anim::FindBone(skeleton,"Bip01 Pelvis");assert(pelvis>=0);
+  for(int axis=0;axis<3;++axis){
+    assert(std::abs(entry.global[pelvis][12+axis]-idle.global[pelvis][12+axis])<2.f);
+    assert(std::abs(entry.global[pelvis][12+axis]-exit.global[pelvis][12+axis])<.02f);
+  }
+  std::cout<<"Original DinerStool01 marker and KF align through entry, sit and exit\n";
+  return 0;
+ }
  if(std::string(argv[1])=="--children"){
   const std::string base=argv[2];
   fo3anim::Skeleton skeleton;assert(fo3anim::DecodeSkeleton(Read(base+"/skeleton.nif"),skeleton));

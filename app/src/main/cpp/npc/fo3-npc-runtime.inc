@@ -363,7 +363,7 @@ static bool Q230CrowdStep(const Q230ActorVisual&,const std::array<float,3>&);
 static bool Q230RoamEndpointOccupied(uint32_t self,const std::array<float,3>& point){
   for(const auto& other:gQ230NpcActors){
     if(other.source.refFormId==self||other.runtime.offScene||!other.runtime.Alive())continue;
-    const auto here=Q240GamePosition(other);
+    const auto here=Q240CrowdPosition(other);
     if(std::fabs(here[2]-point[2])>90.f)continue; // Megaton's stacked walkways
     if(Q240PlanarDistance(point,here)<70.f)return true;
     if((other.runtime.activity==fo3npc::Activity::Package||other.runtime.activity==fo3npc::Activity::Combat) &&
@@ -616,6 +616,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   ++fqactor::npc.actors;
   const double elapsed=std::chrono::duration<double>(Fo3GameplayNow()-actor.animationStart).count();
   fo3anim::SampleTimings timings;
+  const fo3furniture::Program* animatedFurniture=nullptr;
   {
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(!actor.ragdollStarted)
@@ -661,6 +662,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     if(!fo3anim::Sample(actor.skeleton,responseClip->second,responseNow-actor.responseStarted,actor.pose,&timings,
       fo3anim::ControlsAccumulationRoot(responseClip->second)?fo3anim::RootPolicy::Furniture:fo3anim::RootPolicy::Locomotion))return;
   }else if(furniturePose){
+    animatedFurniture=program;
     const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?program->enter:furniture.phase==fo3furniture::Phase::Exit?program->exit:program->loop;
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
@@ -704,6 +706,11 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     root[12]=actor.runtime.position[0]-root[0]*x-root[8]*z;
     root[13]=actor.runtime.position[1]-y;
     root[14]=actor.runtime.position[2]-root[2]*x-root[10]*z;
+  }
+  if(animatedFurniture&&!actor.rigs.empty()&&animatedFurniture->entryOrigin!=std::array<float,3>{}){
+    const auto frame=fo3anim::Multiply(root,actor.rigs[0].scenePlacement);
+    const auto corrected=animatedFurniture->Frame(frame);
+    for(int axis=12;axis<15;++axis)root[axis]+=corrected[axis]-frame[axis];
   }
   actor.dialogueRoot=root;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST

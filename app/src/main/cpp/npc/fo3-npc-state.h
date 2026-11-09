@@ -30,7 +30,7 @@ struct RuntimeState {
   uint32_t sandboxLastTarget=0,sandboxCycles=0;
   double sandboxNext=0;
   double roamWaitUntil=0;
-  double crowdBlockedSince=-1,sandboxBlockedUntil=0;
+  double crowdBlockedSince=-1,sandboxBlockedUntil=0,portalOnlyUntil=0;
   float crowdProgressDistance=0;
   std::array<float,3> crowdDestination{};
   uint32_t sandboxBlockedTarget=0;

@@ -46,14 +46,23 @@ static std::array<float,3> Q240ScenePosition(const std::array<float,3>& game) {
 static float Q240PlanarDistance(const std::array<float,3>& a,const std::array<float,3>& b) {
   const float dx=a[0]-b[0],dy=a[1]-b[1];return std::sqrt(dx*dx+dy*dy);
 }
+static std::array<float,3> Q240CrowdPosition(const Q230ActorVisual& actor) {
+  if(!actor.stateRestored)return {actor.source.x,actor.source.y,actor.source.z};
+  const auto& furniture=actor.runtime.furniture;
+  if(furniture.phase==fo3furniture::Phase::Loop){
+    const auto* slot=furniture.Selected();
+    if(const auto* program=furniture.SelectedProgram())
+      return fo3anim::Point(program->Frame(slot->alignment),furniture.retainedRoot.translation);
+  }
+  return Q240GamePosition(actor);
+}
 template<class Actors>
 static bool Q240CrowdStepAllowed(const Q230ActorVisual& actor,
     const std::array<float,3>& point,const Actors& actors){
   const auto here=Q240GamePosition(actor);
   for(const auto& other:actors){
     if(other.source.refFormId==actor.source.refFormId||other.runtime.offScene||!other.runtime.Alive())continue;
-    const auto at=other.stateRestored?Q240GamePosition(other):
-      std::array<float,3>{other.source.x,other.source.y,other.source.z};
+    const auto at=Q240CrowdPosition(other);
     if(std::fabs(at[2]-point[2])>fo3npc::MovementPolicy::CrowdHeight)continue;
     const float before=Q240PlanarDistance(here,at),after=Q240PlanarDistance(point,at);
     // Actors from an old overlapping save can separate, but only one actor
@@ -237,8 +246,7 @@ static Q240RouteCosts Q240ResidentRouteCosts(uint32_t self,const Actors& actors)
   for(const auto& other:actors){
     if(other.source.refFormId==self||other.runtime.offScene||!other.runtime.Alive())continue;
     if(costs.points.size()+2>128)break; // Bounded Quest route snapshot.
-    costs.Add(other.stateRestored?Q240GamePosition(other):
-      std::array<float,3>{other.source.x,other.source.y,other.source.z});
+    costs.Add(Q240CrowdPosition(other));
     if(other.aiPathIndex<other.aiPathGame.size())costs.Add(other.aiPathGame[other.aiPathIndex]);
   }
   return costs;
@@ -1046,7 +1054,7 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   size_t goal=actor.aiPathIndex;
   // Bounded string-pulling over the original triangle corridor; a failed
   // farther shortcut does not discard the route or its final authored point.
-  for(size_t i=goal+1;i<actor.aiPathGame.size()&&i<=actor.aiPathIndex+8;++i)
+  for(size_t i=goal+1;now>=actor.runtime.portalOnlyUntil&&i<actor.aiPathGame.size()&&i<=actor.aiPathIndex+8;++i)
     if(Q240CorridorLine(actor,current,i))goal=i;
   const auto targetScene=Q240ScenePosition(actor.aiPathGame[goal]);
   actor.runtime.destination={targetScene[0],actor.runtime.position[1],targetScene[2]};
@@ -1093,29 +1101,36 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   const float velocity=actor.runtime.speed+std::clamp(desiredSpeed-actor.runtime.speed,
     -fo3npc::MovementPolicy::Braking*dt,fo3npc::MovementPolicy::Acceleration*dt);
   const float step=std::min(distance,std::max(.02f,velocity)*dt),fraction=step/distance;
+  bool worldBlocked=false;
 #ifdef FO3_NPC_PATH_BLOCKED
-  bool q226Blocked=false;
-  { FQ_PERF_SCOPE(NpcObstruction);
-    q226Blocked=FO3_NPC_PATH_BLOCKED(actor,dx/distance,0,dz/distance,step,distance);
+  {
+    FQ_PERF_SCOPE(NpcObstruction);
+    worldBlocked=FO3_NPC_PATH_BLOCKED(actor,dx/distance,0,dz/distance,step,distance);
   }
-  if(q226Blocked){waitOrRecover();return;}
-#else
-  (void)waitOrRecover;
+  if(worldBlocked&&(actor.runtime.navigationDoor||goal>actor.aiPathIndex)){
+    // A valid centreline shortcut can still clip resident geometry. Walk
+    // the next authored portal before trying to skip past it again.
+    if(!actor.runtime.navigationDoor)actor.runtime.portalOnlyUntil=now+1.;
+    waitOrRecover();return;
+  }
 #endif
   auto nextGame=current;
-  nextGame[0]+=(actor.aiPathGame[goal][0]-current[0])*fraction;
-  nextGame[1]+=(actor.aiPathGame[goal][1]-current[1])*fraction;
+  const float forwardX=(actor.aiPathGame[goal][0]-current[0])/distance*step;
+  const float forwardY=(actor.aiPathGame[goal][1]-current[1])/distance*step;
+  nextGame[0]+=forwardX;
+  nextGame[1]+=forwardY;
   int lateral=0;
+  bool crowdAllowed=true;
 #ifdef FO3_NPC_CROWD_STEP
   const float remaining=Q240PlanarDistance(current,actor.aiPathGame.back());
   // Small forward steps between sidesteps must not hide a stalled endpoint.
   if(actor.runtime.crowdBlockedSince>=0&&(remaining+16<actor.runtime.crowdProgressDistance||
      Q240PlanarDistance(actor.runtime.crowdDestination,actor.aiPathGame.back())>1))actor.runtime.crowdBlockedSince=-1;
-  const bool q226CrowdAllowed=[&](){
+  {
     FQ_PERF_SCOPE(NpcCrowd);
-    return FO3_NPC_CROWD_STEP(actor,nextGame);
-  }();
-  if(!q226CrowdAllowed){
+    crowdAllowed=FO3_NPC_CROWD_STEP(actor,nextGame);
+  }
+  if(!crowdAllowed&&!worldBlocked){
     if(actor.runtime.crowdBlockedSince<0){actor.runtime.crowdBlockedSince=now;actor.runtime.crowdProgressDistance=remaining;actor.runtime.crowdDestination=actor.aiPathGame.back();}
     if(now-actor.runtime.crowdBlockedSince>=2){
       auto& state=actor.runtime;
@@ -1124,46 +1139,61 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
         state.nextPath=0;state.combatMovement=fo3npc::CombatAction::Acquire;state.coverUntil=-1;
       }else{
         const auto p=catalog.pipboy.packages.find(actor.aiPackage);
-        if(p!=catalog.pipboy.packages.end()&&(p->second.type==12||(p->second.type==5&&p->second.location.radius>0))){
-          const auto* slot=state.furniture.Selected();
-          if(slot){state.sandboxBlockedTarget=slot->reference;state.sandboxBlockedUntil=now+5;state.furniture.Clear();}
-          state.lastRoamDestination=actor.aiPathGame.back();state.hasLastRoamDestination=true;
-          actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.aiRepathAt=now+.5;
+        if(p!=catalog.pipboy.packages.end()){
+          const bool roaming=p->second.type==12||(p->second.type==5&&p->second.location.radius>0);
+          if(roaming){
+            const auto* slot=state.furniture.Selected();
+            if(slot){state.sandboxBlockedTarget=slot->reference;state.sandboxBlockedUntil=now+5;state.furniture.Clear();}
+            state.lastRoamDestination=actor.aiPathGame.back();state.hasLastRoamDestination=true;
+          }
+          // Replan a crowded approach with current occupancy while keeping
+          // its package and authored destination, including conversations.
+          if(roaming||!state.furniture.Active()){
+            actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+            actor.aiRepathAt=now+.5;
+          }
         }
       }
       state.crowdBlockedSince=-1;state.speed=0;state.animation=fo3npc::Animation::Idle;state.procedure=fo3npc::Procedure::Waiting;return;
     }
-    // Yield around a resident only on this original corridor surface, with a
-    // real world-collision check. Per-actor side preference prevents mirrored
-    // head-on actors from both picking the same physical side.
-    const int preferred=(actor.source.refFormId&1u)?1:-1;
-    for(int side:{preferred,-preferred}){
-      auto candidate=current;
-      candidate[0]+=(actor.aiPathGame[goal][1]-current[1])/distance*step*side;
-      candidate[1]-=(actor.aiPathGame[goal][0]-current[0])/distance*step*side;
-      bool onSurface=false;
-      if(actor.navigationGraph&&actor.aiPathIndex<actor.aiPathSurfaces.size()){
-        const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
-        const auto& mesh=*actor.navigationGraph->meshes[surface.first];
-        const auto projected=Q240ClosestPoint(mesh,surface.second,candidate);
-        onSurface=Q240PlanarDistance(candidate,projected)<.01f;
-        candidate[2]=projected[2];
-      }
-      if(!onSurface||!FO3_NPC_CROWD_STEP(actor,candidate))continue;
-#ifdef FO3_NPC_PATH_BLOCKED
-      const auto scene=Q240ScenePosition(candidate);
-      const float cx=scene[0]-actor.runtime.position[0],cz=scene[2]-actor.runtime.position[2];
-      if(FO3_NPC_PATH_BLOCKED(actor,cx/step,0,cz/step,step,step))continue;
-#endif
-      nextGame=candidate;lateral=side;break;
-    }
-    if(!lateral){
-    // Crowd waiting is transient; never demote the authored package or run
-    // static wall/door recovery because another resident is in the way.
-    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
-    actor.runtime.procedure=fo3npc::Procedure::Waiting;return;}
   }
 #endif
+  if(worldBlocked||!crowdAllowed){
+    // Try forward diagonals and then lateral steps on this exact NAVM
+    // triangle. Reject any candidate that still intersects world or actor
+    // collision, including the inside corner of a booth.
+    const int preferred=(actor.source.refFormId&1u)?1:-1;
+    for(float forward:{.70710678f,0.f}){
+      const float sideways=forward>0?forward:1.f;
+      for(int side:{preferred,-preferred}){
+        auto candidate=current;
+        candidate[0]+=forwardX*forward+forwardY*side*sideways;
+        candidate[1]+=forwardY*forward-forwardX*side*sideways;
+        if(!actor.navigationGraph||actor.aiPathIndex>=actor.aiPathSurfaces.size())continue;
+        const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
+        const auto& mesh=*actor.navigationGraph->meshes[surface.first];
+        const auto projected=Q240GroundPoint(mesh,surface.second,candidate);
+        if(Q240PlanarDistance(candidate,projected)>=.01f)continue;
+        candidate[2]=projected[2];
+#ifdef FO3_NPC_CROWD_STEP
+        if(!FO3_NPC_CROWD_STEP(actor,candidate))continue;
+#endif
+#ifdef FO3_NPC_PATH_BLOCKED
+        const auto scene=Q240ScenePosition(candidate);
+        const float cx=scene[0]-actor.runtime.position[0],cz=scene[2]-actor.runtime.position[2];
+        if(FO3_NPC_PATH_BLOCKED(actor,cx/step,0,cz/step,step,step))continue;
+#endif
+        nextGame=candidate;lateral=side;break;
+      }
+      if(lateral)break;
+    }
+    if(!lateral){
+      if(worldBlocked){waitOrRecover();return;}
+      if(goal>actor.aiPathIndex)actor.runtime.portalOnlyUntil=now+1.;
+      actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
+      actor.runtime.procedure=fo3npc::Procedure::Waiting;return;
+    }
+  }
   std::vector<float> crossings;
   if(!lateral)Q240CorridorLine(actor,current,goal,&crossings);
   for(float crossing:crossings){if(crossing>fraction+.00001f)break;++actor.aiPathIndex;}
@@ -1410,7 +1440,7 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
       // Exit's residual is authored. Bake it once into the world root before
       // ordinary locomotion resumes; every new cycle reanchors to FRN.
       const auto end=fo3furniture::Root(program->exit,duration,&f.retainedRoot);
-      const auto endpoint=fo3anim::Multiply(f.Selected()->alignment,fo3anim::ToMatrix(end));
+      const auto endpoint=fo3anim::Multiply(program->Frame(f.Selected()->alignment),fo3anim::ToMatrix(end));
       actor.runtime.position=Q240ScenePosition({endpoint[12],endpoint[13],endpoint[14]});actor.runtime.yaw=actor.runtime.returnYaw=std::atan2(-endpoint[4],endpoint[5]);
       f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiSequence=0;actor.aiRepathAt=0;actor.runtime.nextPackageEvaluation=0;actor.aiLastUpdate=now;actor.lastFrame=UINT64_MAX;
     }return true;
