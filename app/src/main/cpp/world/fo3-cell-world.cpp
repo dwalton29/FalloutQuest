@@ -41,8 +41,8 @@ extern void PumpFo3AndroidEventsQ1860();
 bool LoadFo3CellPlacements(uint32_t cellFormId,
                            std::vector<Fo3WorldPlacement>& outPlacements,
                            const fo3world::ReferenceStateSnapshot* referenceState = nullptr,
-                           bool candidateSelection = false, bool retainRadios = false) {
-    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState, candidateSelection, retainRadios);
+                           bool candidateSelection = false, bool retainSwitches = false) {
+    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState, candidateSelection, retainSwitches);
 }
 
 // Placement metadata is compiled separately; LAND shares only explicit CPU

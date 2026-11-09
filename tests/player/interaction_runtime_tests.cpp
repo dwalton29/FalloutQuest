@@ -143,7 +143,7 @@ bool BeginFo3PlayerSit(uint32_t ref){if(!CanFo3PlayerSit(ref))return false;++sea
 struct {bool active=false;} gSceneLoad;
 uint32_t gExteriorWorldspaceQ1890=0;
 std::unordered_map<uint32_t,int> gQ2400InteriorDoors;
-std::unordered_set<uint32_t> gFo3RetainedRadios;
+std::unordered_set<uint32_t> gFo3RetainedSwitches;
 fo3shoulder::Gesture gShoulderGesture;
 namespace weaponruntime {bool held=false,support=false,magazine=false,charging=false;}
 #include "world/fo3-resident-interaction-runtime.inc"
@@ -507,9 +507,9 @@ int main() {
     Check(Fo3ResidentInteractionHazard(1007)==Hazard::LooseObject&&gQ223DynamicBodies.count(1007),"sleeping/moving loose-body ownership rejects");
     gQ2400InteriorDoors[1008]=1;
     Check(Fo3ResidentInteractionHazard(1008)==Hazard::SwingDoor&&gQ2400InteriorDoors.count(1008),"local door state remains untouched");
-    gFo3RetainedRadios.insert(1009);
-    Check(Fo3ResidentInteractionHazard(1009)==Hazard::RetainedRadio,"retained radio owns its collision update");
-    gFo3RetainedRadios.clear();
+    gFo3RetainedSwitches.insert(1009);
+    Check(Fo3ResidentInteractionHazard(1009)==Hazard::RetainedSwitch,"retained radio owns its collision update");
+    gFo3RetainedSwitches.clear();
     GpuObject local;local.refFormId=1009;local.q220LooseObject=false;local.q2400SwingDoor=true;gObjects.push_back(local);
     Check(Fo3ResidentInteractionHazard(1009)==Hazard::SwingDoor,"uncached live swing door rejects");
     gObjects.back().q2400SwingDoor=false;gObjects.back().q220LooseObject=true;

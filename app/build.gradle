@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 342
-        versionName '0.188.0-vr-unarmed'
+        versionCode 343
+        versionName '0.189.0-seamless-goat'
 
         ndk {
             abiFilters 'arm64-v8a'

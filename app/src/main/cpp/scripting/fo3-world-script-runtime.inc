@@ -404,7 +404,8 @@ void Events(){
         if(Fo3ResidentFrameBlocked())return;
     }
     std::vector<uint32_t> refs;
-    for(const auto& object:gObjects)if(object.refFormId&&!loaded.count(object.refFormId))refs.push_back(object.refFormId);
+    for(const auto& object:gObjects)
+        if(object.refFormId&&!loaded.count(object.refFormId)&&!Fo3WorldReferenceHidden(object.refFormId))refs.push_back(object.refFormId);
     for(const auto& actor:gQ230NpcActors)if(!actor.runtime.offScene&&!loaded.count(actor.source.refFormId))refs.push_back(actor.source.refFormId);
     std::sort(refs.begin(),refs.end());refs.erase(std::unique(refs.begin(),refs.end()),refs.end());
     for(uint32_t id:refs){if(Event(id,"OnLoad",0))loaded.insert(id);if(Fo3ResidentFrameBlocked())return;}
@@ -547,7 +548,7 @@ void Animate(){
             gPlayerSession->player.FinishScriptAnimation(entry.first,clip.name);
         // Collision targets come from BHK's targetBlock, never nearest geometry.
         // Publish at 10 Hz and once at the precise settled endpoint.
-        if(first&&(state.lastCollision<0||elapsed-state.lastCollision>=.1||ended)){
+        if(first&&!Fo3WorldReferenceHidden(entry.first)&&(state.lastCollision<0||elapsed-state.lastCollision>=.1||ended)){
             Fo3DoorCollisionPose collision;
             for(uint32_t block:GetFo3ScriptCollisionTargets(entry.first)){
                 if(block>=asset.blockBones.size())continue;

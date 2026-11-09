@@ -67,7 +67,7 @@ void synthetic(const std::string& path){
  assert(!LoadFo3WorldspacePlacements({100,200,100,100,1},after,&state));
  assert(!LoadFo3InteriorCellPlacementsQ1700(999999,after,&state,true));
  assert(LoadFo3InteriorCellPlacementsQ1700(200,before,&state,true,true));
- const auto* retained=find(before,406);assert(retained&&retained->retainedRadio&&retained->baseRecordType=="TACT");
+ const auto* retained=find(before,406);assert(retained&&retained->retainedSwitch&&retained->baseRecordType=="TACT");
  auto broadcast=state;broadcast.states[406]=fo3world::ReferenceEnableState::Enabled;
  assert(LoadFo3InteriorCellPlacementsQ1700(200,after,&broadcast,true,true));
  assert(find(after,406)&&fo3scene::SameResidentPlacement(*retained,*find(after,406)));
@@ -108,6 +108,17 @@ void original(){
  state.states[refId]=fo3world::ReferenceEnableState::Disabled;
  assert(LoadFo3WorldspacePlacements(selection,after,&state)&&!find(after,refId));
  assert(LoadFo3InteriorCellPlacementsQ1700(0x3a2a,after,nullptr));const auto* suit=find(after,0x6c588);assert(suit&&suit->baseFormId==0x6c587&&suit->modelPath=="Armor\\VaultSuitArmor\\M\\ArmorMounted.NIF");
+ constexpr uint32_t classroom=0x28138,slides=0x692c8,projector=0x8f77d;
+ assert(LoadFo3InteriorCellPlacementsQ1700(classroom,before,nullptr,false,true));
+ const auto* exam=find(before,slides);const auto* idle=find(before,projector);
+ assert(exam&&exam->retainedSwitch&&idle&&idle->retainedSwitch);
+ state.states[slides]=fo3world::ReferenceEnableState::Enabled;
+ state.states[projector]=fo3world::ReferenceEnableState::Disabled;
+ assert(LoadFo3InteriorCellPlacementsQ1700(classroom,after,&state,false,true));
+ assert(find(after,slides)&&fo3scene::SameResidentPlacement(*exam,*find(after,slides)));
+ assert(find(after,projector)&&fo3scene::SameResidentPlacement(*idle,*find(after,projector)));
+ assert(LoadFo3InteriorCellPlacementsQ1700(classroom,after,&state)&&find(after,slides)&&!find(after,projector));
+ std::cout<<"Original classroom retains both authored projector variants before and during the exam\n";
  std::cout<<"Original Moira display selects the authored mounted world model\n";
  std::cout<<"Original MS11 detonator model/pose selection and collision input honor saved snapshots\n";
 }

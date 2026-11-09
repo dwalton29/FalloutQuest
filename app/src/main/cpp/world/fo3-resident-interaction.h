@@ -18,7 +18,7 @@ struct ResidentInteractionActivity {
 };
 enum class ResidentInteractionHazard : uint8_t {
     None, UnknownReference, Actor, LooseObject, HeldObject, CollectedObject,
-    SwingDoor, Furniture, RetainedRadio
+    SwingDoor, Furniture, RetainedSwitch
 };
 enum class ResidentInteractionAdmissionResult : uint8_t {
     Ready, InvalidAffected, Busy, UnsupportedReference, WrongTicket

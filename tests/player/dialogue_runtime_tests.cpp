@@ -47,14 +47,13 @@ void DialogueGain(float){}
 template<class T> void RadioState(const T&){}
 }
 #include "world/fo3-scene-publication.h"
-struct Fo3DoorCollisionPose {bool enabled=true;};
 bool gSceneReady=true,gShadowDirtyQ1050=false;
 struct {void Changed(){++revision;}unsigned revision=0;} gFo3VisualPublication;
-std::unordered_set<uint32_t> gFo3RetainedRadios,gFo3DormantRadios;
+std::unordered_set<uint32_t> gFo3RetainedSwitches,gFo3DormantSwitches;
 std::unordered_map<uint32_t,bool> radioCollision;
-bool SetFo3ScriptCollisionPose(uint32_t ref,const Fo3DoorCollisionPose& pose){
+bool SetFo3RetainedCollisionEnabled(uint32_t ref,bool enabled){
   const auto state=radioCollision.find(ref);if(state==radioCollision.end())return false;
-  state->second=pose.enabled;return true;
+  state->second=enabled;return true;
 }
 struct {bool active=false;} gSceneLoad,gQ230NpcArrival;
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
@@ -413,7 +412,7 @@ static void OriginalBirthdayRelease(const fo3player::Catalog& original){
   const auto q=original.pipboy.formNames.at("cg02"),dad=original.pipboy.formNames.at("cg02dadref"),radio=original.pipboy.formNames.at("radiovault101ref");
   for(unsigned mode:{0u,1u,2u,3u}){
     const bool success=mode!=0,refresh=mode==2,inPlace=mode==3;refreshAllowed=refresh;
-    if(inPlace){gFo3RetainedRadios.insert(radio);gFo3DormantRadios.insert(radio);radioCollision[radio]=false;}
+    if(inPlace){gFo3RetainedSwitches.insert(radio);gFo3DormantSwitches.insert(radio);radioCollision[radio]=false;}
     auto c=original;auto& stage=c.initial.pipboy.quests[q];stage.stage=10;stage.running=true;stage.stages={5,6,7,8,10};
     c.initial.referenceEnabled[dad]=true;c.initial.referenceEnabled[radio]=false;c.initial.disabledControls=0x2f;
     gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
@@ -432,8 +431,8 @@ static void OriginalBirthdayRelease(const fo3player::Catalog& original){
     const auto refreshes=sceneRefreshes;voice.AudioDone(token,true,ctx,p);
     if(inPlace){
       assert(!loading&&sceneRefreshes==refreshes&&!deferredResult&&radioCollision.at(radio)&&
-        !gFo3DormantRadios.count(radio)&&gShadowDirtyQ1050&&gFo3VisualPublication.revision);
-      gFo3RetainedRadios.clear();gFo3DormantRadios.clear();radioCollision.clear();
+        !gFo3DormantSwitches.count(radio)&&gShadowDirtyQ1050&&gFo3VisualPublication.revision);
+      gFo3RetainedSwitches.clear();gFo3DormantSwitches.clear();radioCollision.clear();
     }else {
       assert(voice.phase==fo3dialogue::Phase::Results&&deferredResult);
       assert(p.PlayerControlDisabled(0)&&p.Snapshot().pipboy.quests.at(q).stage==10&&!voice.infoCompleted);
@@ -470,11 +469,55 @@ static void OriginalPhotoHandoff(const fo3player::Catalog& original){
   assert(!gFo3ReferenceState->Enabled(dad,!(c.references.at(dad).flags&0x800u))&&gFo3ReferenceState->Enabled(nextDad,!(c.references.at(nextDad).flags&0x800u))&&Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));
   loading=false;gObjects.clear();std::cout<<"Original photo endpoint publishes exam setup, actor changes, move and movie atomically; failed scene queue rolls back\n";
 }
+static void OriginalExamRelease(const fo3player::Catalog& original){
+  auto c=original;const auto& d=c.pipboy;std::string error;
+  const auto quest=d.formNames.at("cg03"),teacher=d.formNames.at("cg03mrbrotchref");
+  const auto slides=d.formNames.at("cg03goatslidesref"),topic=d.formNames.at("cg03brotchspeech");
+  const auto idle=std::find_if(c.enableParents.begin(),c.enableParents.end(),[&](const auto& link){
+    return link.second.reference==slides&&(link.second.flags&1u);
+  });
+  assert(idle!=c.enableParents.end());const auto projector=idle->first;
+  auto& stage=c.initial.pipboy.quests[quest];stage.stage=55;stage.running=true;stage.stages={40,42,50,55};
+  const auto talking=fo3dialogue::VariableKey(d,"CG03MrBrotchREF.talking");
+  c.initial.pipboy.dialogueVariables[talking]=1;
+  gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+  const auto& at=d.targets.at(teacher);gCurrentCellFormId=at.cell;gExteriorWorldspaceQ1890=at.world;
+  p.SetScriptPlayerLocation(at.x,at.y+40,at.z,at.cell,at.world);
+  gObjects={{slides,false,false,false,"ACTI"},{projector,false,false,false,"ACTI"}};
+  gFo3RetainedSwitches={slides,projector};gFo3DormantSwitches={slides};
+  radioCollision={{slides,false},{projector,true}};
+  gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());gFo3ScenePublication.Publish(gFo3ReferenceState);
+  const auto refreshes=sceneRefreshes;
+  refreshAllowed=deferAllowed=true;
+  auto start=p.PrepareQuestStageTransaction(quest,60,error);assert(start);
+  assert(PublishFo3DialogueReferences(p,*start,error)&&!loading&&!deferredResult);
+  assert(p.PlayerControlDisabled(0)&&gFo3DormantSwitches.count(projector)&&!gFo3DormantSwitches.count(slides));
+  assert(radioCollision.at(slides)&&!radioCollision.at(projector));
+
+  fo3dialogue::Session voice;ConfigureFo3DialogueSession(voice);
+  fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;
+  assert(fo3dialogue::ReferenceContext(p,teacher,ctx.speaker)&&fo3dialogue::ReferenceContext(p,fo3player::PlayerRef,ctx.target));
+  assert(voice.StartSelectedTopic(topic,0x34906,ctx,p)&&!voice.Subtitle(d).empty());
+  assert(p.Snapshot().pipboy.quests.at(quest).stage==70&&!p.PlayerControlDisabled(0));
+  assert(!loading&&sceneRefreshes==refreshes&&!deferredResult);
+  assert(gFo3DormantSwitches.count(slides)&&!gFo3DormantSwitches.count(projector));
+  assert(!radioCollision.at(slides)&&radioCollision.at(projector));
+  voice.AudioDone(voice.audioToken,true,ctx,p);
+  assert(!voice.Active()&&voice.infoCompleted&&voice.Subtitle(d).empty());
+  assert(p.DispatchReferenceEvent(teacher,"SayToDone",topic,error)==fo3player::ScriptEventResult::Executed);
+  assert(p.Snapshot().pipboy.dialogueVariables.at(talking)==0);
+  ctx.talking=false;
+  assert(voice.Start(ctx,p));
+  gFo3RetainedSwitches.clear();gFo3DormantSwitches.clear();radioCollision.clear();gObjects.clear();
+  refreshAllowed=deferAllowed=false;
+  std::cout<<"Original G.O.A.T. switches projectors without a scene reload and Brotch accepts post-exam dialogue\n";
+}
 static void OriginalBirthHandoff(const char* path){
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
   OriginalIntercomApproach(c,path);
   OriginalBirthdayRelease(c);
   OriginalPhotoHandoff(c);
+  OriginalExamRelease(c);
   const auto birth=c.pipboy.formNames.at("cg00"),baby=c.pipboy.formNames.at("cg01"),dad=c.pipboy.formNames.at("cg00dadref");
   // Boundary precondition: the preceding end-of-birth fade reached stage 90.
   auto& stage=c.initial.pipboy.quests[birth];stage.stage=90;stage.running=true;stage.stages.insert(90);

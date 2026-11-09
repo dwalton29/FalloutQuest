@@ -33,7 +33,7 @@ fo3scene::ResidentInteractionHazard Fo3ResidentInteractionHazard(uint32_t refere
         if(hand.refFormId==reference)return Hazard::HeldObject;
     if(player.IsCollected(reference))return Hazard::CollectedObject;
     if(gQ223DynamicBodies.count(reference)||catalog.items.count(ref->second.base))return Hazard::LooseObject;
-    if(gFo3RetainedRadios.count(reference))return Hazard::RetainedRadio;
+    if(gFo3RetainedSwitches.count(reference))return Hazard::RetainedSwitch;
     if(gQ2400InteriorDoors.count(reference))return Hazard::SwingDoor;
     if(catalog.pipboy.furniture.count(ref->second.base))return Hazard::Furniture;
     for(const auto& object:gObjects)if(object.refFormId==reference) {

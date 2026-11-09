@@ -49,12 +49,10 @@ static bool CanRemoveFo3DialogueInventory(uint32_t reference){
   for(const auto& object:gObjects)if(object.refFormId==reference&&(object.q230NpcActor||object.physicalWeapon||object.q2400SwingDoor||object.baseRecordType=="FURN"))return false;
   return true;
 }
-static bool Fo3RetainedRadioResult(const fo3player::Player& player,
-                                   const fo3player::ScriptTransactionPlan& plan){
+static bool Fo3RetainedSwitchResult(const fo3player::ScriptTransactionPlan& plan){
     const auto& changed=plan.AffectedReferences();
-    const auto& transmitters=player.Definitions().pipboy.transmitters;
     return !changed.empty()&&std::all_of(changed.begin(),changed.end(),[&](uint32_t ref){
-        return gFo3RetainedRadios.count(ref)&&transmitters.count(ref);
+        return gFo3RetainedSwitches.count(ref);
     });
 }
 bool PreviewFo3DialogueReferences(const fo3player::Player& player,
@@ -64,7 +62,7 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
   }
   std::vector<uint32_t> live;
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890))return !Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active;
-  if(Fo3RetainedRadioResult(player,plan))return !Fo3ResidentAssetLaneBlocked();
+  if(Fo3RetainedSwitchResult(plan))return !Fo3ResidentAssetLaneBlocked();
   for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
   for(const auto& object:gObjects)live.push_back(object.refFormId);
   return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error)||
@@ -85,8 +83,9 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
   // Single render-thread turn; validate and allocate before logical publication.
   if(!player.CanCommitScriptTransaction(plan))return false;
   if(!PreviewFo3DialogueReferences(player,plan,error)){
-    // Transmitters can publish through the resident resource exchange.
-    if(!gExteriorWorldspaceQ1890&&Fo3RadioOnlyResult(player,plan))return false;
+    // Ready switches can retry in place. Unprepared transmitters can use the
+    // resident resource exchange.
+    if(Fo3RetainedSwitchResult(plan)||(!gExteriorWorldspaceQ1890&&Fo3RadioOnlyResult(player,plan)))return false;
     return PublishFo3DialogueSceneRefresh(player,plan,error);
   }
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890)){
@@ -100,29 +99,28 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
     gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(snapshot);
     Q6H_LOGI("SCRIPT CELL HANDOFF queued canonical state and reference snapshot for full scene load");return true;
   }
-  if(Fo3RetainedRadioResult(player,plan)){
+  if(Fo3RetainedSwitchResult(plan)){
     auto snapshot=plan.CandidateReferences();
-    auto hidden=gFo3DormantRadios;
-    const auto apply=[&](uint32_t ref,bool enabled){
-      Fo3DoorCollisionPose pose;pose.enabled=enabled;
-      return SetFo3ScriptCollisionPose(ref,pose);
-    };
+    auto hidden=gFo3DormantSwitches;
+    const auto& references=player.Definitions().references;
     for(const auto ref:plan.AffectedReferences()){
-      if(snapshot->Enabled(ref,false))hidden.erase(ref);
+      const auto original=references.find(ref);
+      const bool authored=original!=references.end()&&!(original->second.flags&0x800u);
+      if(snapshot->Enabled(ref,authored))hidden.erase(ref);
       else hidden.insert(ref);
     }
     const auto& affected=plan.AffectedReferences();
     auto next=affected.begin();
     for(;next!=affected.end();++next)
-      if(!apply(*next,!hidden.count(*next)))break;
+      if(!SetFo3RetainedCollisionEnabled(*next,!hidden.count(*next)))break;
     if(next!=affected.end()||!player.CommitScriptTransaction(plan)){
-      for(auto i=affected.begin();i!=next;++i)apply(*i,!gFo3DormantRadios.count(*i));
-      error="retained radio collision or reference publication failed";return false;
+      for(auto i=affected.begin();i!=next;++i)SetFo3RetainedCollisionEnabled(*i,!gFo3DormantSwitches.count(*i));
+      error="retained switch collision or reference publication failed";return false;
     }
-    gFo3DormantRadios.swap(hidden);
+    gFo3DormantSwitches.swap(hidden);
     gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(std::move(snapshot));
     gFo3VisualPublication.Changed();gShadowDirtyQ1050=true;
-    Q6H_LOGI("SCRIPT RADIO PUBLISHED IN PLACE refs=%zu",affected.size());
+    Q6H_LOGI("SCRIPT SWITCH PUBLISHED IN PLACE refs=%zu",affected.size());
     return true;
   }
   auto removed=gFo3ScriptRemovedItems;

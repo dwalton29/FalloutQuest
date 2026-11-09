@@ -2438,6 +2438,16 @@ bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& re
     InvalidateDerivedCollisionCachesQ17();gHkManifoldValidQ800=false;Q225RebuildDynamicGrid();return true;
 }
 
+bool SetFo3RetainedCollisionEnabled(uint32_t reference,bool enabled){
+    // Collisionless NIFs are prepared too. They have no physical pose to change.
+    if(gQ1820NegativeCollisionPlacementCache.count(reference))return true;
+    const auto existing=gDoorCollisionPoses.find(reference);
+    Fo3DoorCollisionPose pose;
+    if(existing!=gDoorCollisionPoses.end())pose=existing->second;
+    pose.enabled=enabled;
+    return SetFo3ScriptCollisionPose(reference,pose);
+}
+
 bool TraceFo3WorldSurface(float ox,float oy,float oz,float dx,float dy,float dz,
                          float distance,uint32_t ignoreReference,uint32_t ignoreTarget,Fo3WorldSurfaceHit* out){
     if(!out)return false;*out={};

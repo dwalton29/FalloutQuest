@@ -1543,7 +1543,8 @@ private:
         }
         lastFrameTime_ = frameTime;
         const double seatNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
-        const bool seatInput=headTracked&&sessionState_==XR_SESSION_STATE_FOCUSED&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&!Fo3GameplayBlocked()&&!Fo3TerminalFocus()&&!Fo3PipboyFocus()&&!Fo3DialogueFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3BarterFocus()&&!gFo3PauseOpen;
+        const bool seatInput=headTracked&&sessionState_==XR_SESSION_STATE_FOCUSED&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&!Fo3GameplayBlocked()&&!Fo3TerminalFocus()&&!Fo3PipboyFocus()&&!Fo3DialogueFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3BarterFocus()&&!gFo3PauseOpen&&
+            (!gPlayerSession||!gPlayerSession->player.PlayerControlDisabled(0));
         const bool seatBack=pipBackDown_&&!seatBackDown_;seatBackDown_=pipBackDown_;
         if(!pipBackDown_)seatConsumeB_=false;
         if(gPlayerSeat.seated&&seatInput&&seatBack)seatConsumeB_=true;

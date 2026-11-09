@@ -625,7 +625,7 @@ struct GpuObject {
     bool physicalWeapon = false;
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
-    bool scriptAnimated=false,scriptVisible=true,retainedRadio=false;
+    bool scriptAnimated=false,scriptVisible=true,retainedSwitch=false;
     bool geneScreen=false;
     std::array<float,4> geneUv{};
     bool nonvisualResident=false;
@@ -2712,7 +2712,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
       }
     }
     gpu.doorActivation=cpu.doorActivation;
-    gpu.retainedRadio=cpu.placement.retainedRadio;
+    gpu.retainedSwitch=cpu.placement.retainedSwitch;
     gpu.refFormId = cpu.placement.refFormId;
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
@@ -3231,7 +3231,7 @@ bool Q1050UpdateSunShadow() {
                 std::abs(object.q1970GridY - q1970ShadowGridY) > 1) continue;
         }
         if (object.alphaBlend || !object.vao || object.vertexCount<=0 ||
-            (object.retainedRadio&&Fo3WorldReferenceHidden(object.refFormId))) continue;
+            (object.retainedSwitch&&Fo3WorldReferenceHidden(object.refFormId))) continue;
         glUniform1f(gShadowAlphaTestLocationQ1050,object.alphaTest?1.0f:0.0f);
         glUniform1f(gShadowAlphaThresholdLocationQ1050,object.alphaThreshold);
         glBindTexture(GL_TEXTURE_2D,object.diffuse);
@@ -3685,9 +3685,9 @@ std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 // Disabled inventory displays keep their immutable GPU resources until normal
 // scene retirement, while render, targeting and collision share the removal.
 std::unordered_set<uint32_t> gFo3ScriptRemovedItems;
-std::unordered_set<uint32_t> gFo3RetainedRadios, gFo3DormantRadios;
+std::unordered_set<uint32_t> gFo3RetainedSwitches, gFo3DormantSwitches;
 bool Fo3WorldReferenceHidden(uint32_t reference){
-    return gFo3DormantRadios.count(reference)||gFo3ScriptRemovedItems.count(reference)||
+    return gFo3DormantSwitches.count(reference)||gFo3ScriptRemovedItems.count(reference)||
         (gPlayerSession&&gPlayerSession->player.IsCollected(reference));
 }
 void RefreshFo3RemovedCollisionRefs(){
@@ -5251,12 +5251,13 @@ bool ProcessQ74TransitionRequest() {
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
     gObjects = std::move(replacement);
-    gFo3RetainedRadios.clear();gFo3DormantRadios.clear();
-    for(const auto& object:gObjects)if(object.retainedRadio&&gFo3RetainedRadios.insert(object.refFormId).second){
-        if(!gFo3ReferenceState||!gFo3ReferenceState->Enabled(object.refFormId,false)){
-            Fo3DoorCollisionPose pose;pose.enabled=false;
-            SetFo3ScriptCollisionPose(object.refFormId,pose);
-            gFo3DormantRadios.insert(object.refFormId);
+    gFo3RetainedSwitches.clear();gFo3DormantSwitches.clear();
+    for(const auto& object:gObjects)if(object.retainedSwitch&&gFo3RetainedSwitches.insert(object.refFormId).second){
+        bool disabled=true;
+        std::string error;
+        if(!gPlayerSession||!gPlayerSession->player.ReferenceDisabled(object.refFormId,disabled,error)||disabled){
+            SetFo3RetainedCollisionEnabled(object.refFormId,false);
+            gFo3DormantSwitches.insert(object.refFormId);
         }
     }
     // Worker was published before this swap; defer missing XEMI binding until
@@ -12158,7 +12159,8 @@ size_t Q215SuppressPlayerGoreCaps(Fo3StaticNifMesh& mesh) {
 }
 
 void Q230DeleteNpcActors() {
-    EndFo3Dialogue("actor unload");
+    // Lane zero may belong to scripted speech across a same-cell refresh.
+    if(Fo3DialogueFocus())EndFo3Dialogue("actor unload");
     for (auto& actor : gQ230NpcActors) {fo3rigid::Live().RemoveRagdoll(actor.source.refFormId);Q74DeleteGpuObjects(actor.objects);}
     gQ230NpcActors.clear();
     gQ230HealthBars.Clear();

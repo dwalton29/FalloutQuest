@@ -18,6 +18,7 @@ struct GpuObject {
  float q2400DoorTransform[16]{},materialAlpha=1,emissiveColor[3]{},specularColor[3]{};
 };
 std::vector<GpuObject> gObjects;
+bool Fo3WorldReferenceHidden(uint32_t){return false;}
 struct Publication {uint64_t revision=1;uint64_t Revision()const{return revision;}} gFo3VisualPublication;
 constexpr float FO3_UNITS_PER_METRE=1;
 uint64_t gFo3ResidentGameplayTicket=0;int saves=0;
@@ -340,13 +341,15 @@ int main(int argc,char** argv){try{
  Check(p.QueueScriptAction(idle),"queue authored package idle");fo3worldscript::Actions();Check(gQ230NpcActors.back().responseIdle==701,"package idle reaches resident animation adapter");
  fo3worldscript::SpeechTick(); // Initialize the independent session generation.
  fo3script::Action say;say.kind=fo3script::ActionKind::SayTo;say.reference=40;say.form=500;say.flags=fo3player::PlayerRef;
+ say.forceSubtitle=true;
  Check(p.QueueScriptAction(say),"queue original SayTo");fo3worldscript::Actions();fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(40)&&fo3audio::path=="sound/original.ogg","authored audio owns speech");
- Check(!fo3worldscript::AllowsPlayerDialogue(),"player-directed speech remains protected");
+ Check(!fo3worldscript::AllowsPlayerDialogue()&&fo3worldscript::scriptSubtitle.visible,"player-directed speech shows its subtitle and holds dialogue focus");
  const auto token=fo3audio::token;Check(gQ230NpcActors.back().runtime.scriptSpeechToken==token,"script lip owner follows the actual voice token");fo3audio::completion=(uint64_t(token+1)<<1)|1;fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(40)&&!p.Snapshot().pipboy.dialogueVariables.count((uint64_t(40)<<32)|1),"unrelated completion cannot publish INFO results");
  fo3audio::completion=(uint64_t(token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(40)&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"completion releases speaking actor and lip token even after Session::End clears actor");
+ Check(fo3worldscript::AllowsPlayerDialogue()&&!fo3worldscript::scriptSubtitle.visible,"completed scripted speech clears its subtitle and releases player dialogue");
  Check(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|1)==1&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==1,"INFO end precedes source filtered SayToDone");
  Check(p.SetDialogueVariable((uint64_t(40)<<32)|2,0),"clear SayToDone marker");
  Check(fo3worldscript::PackageEvent(40,850,false),"adopt original dialogue package");
