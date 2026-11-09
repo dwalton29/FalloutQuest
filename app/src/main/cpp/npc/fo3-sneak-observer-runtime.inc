@@ -8,13 +8,14 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
  const float distance=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
  const bool exterior=gExteriorWorldspaceQ1890!=0;
  const float limit=fo3sneak::Setting(settings,"fSneakMaxDistance")*(exterior?fo3sneak::Setting(settings,"fSneakExteriorDistanceMult"):1);
- if(distance>=limit){observer.Step(settings,-INFINITY,hostile,now,point);return;}
+ if(distance>=limit){observer.Step(settings,-INFINITY,hostile,now,point);
+   player.SetScriptActorDetectedPlayer(actor.source.refFormId,observer.detected);return;}
  const float planar=std::hypot(dx,dz),bearing=std::atan2(-dx,-dz);
  const float cone=fo3sneak::Setting(settings,"fDetectionViewCone")*.5f*3.14159265359f/180;
  const bool front=planar<.01f||std::abs(fo3npc::Angle(bearing-actor.runtime.yaw-actor.runtime.headYaw))<=cone;
  const bool los=front&&Q230Sight(actor,0x14,point);
  fo3sneak::Evidence e;e.distance=distance;
- e.exterior=exterior;e.los=los;e.light=Q230PlayerLightLevel(point,now);e.perception=stats->perception;
+ e.exterior=exterior;e.los=los;e.light=Q230PlayerLightLevel(point,now);e.perception=stats->perception;player.ActorAIValue(actor.source.refFormId,6,e.perception);
  e.skill=player.EffectiveSkill(size_t(fo3player::Skill::Sneak));player.ActorValue(fo3player::PlayerRef,49,e.chameleon);e.sneaking=player.IsSneaking();e.moving=gPlayerDetectionSpeed>.05f;
  const float walking=player.Definitions().npcBaseSpeed/FO3_UNITS_PER_METRE*(e.sneaking?fo3sneak::Setting(settings,"fMoveSneakMult"):1);
  e.running=e.moving&&walking>0&&gPlayerDetectionSpeed>walking;e.alert=observer.phase!=fo3sneak::Phase::Normal;
@@ -23,5 +24,6 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
  for(const auto& stack:player.Snapshot().inventory)if(stack.equipped){const auto item=player.Definitions().items.find(stack.formId);if(item!=player.Definitions().items.end()&&item->second.kind==fo3player::ItemKind::Armour&&(item->second.bipedMask&4))e.armourWeight+=item->second.weight;}
  e.action=now<=gPlayerDetectionActionUntil?gPlayerDetectionAction:0;
  observer.Step(settings,fo3sneak::Value(settings,e),hostile,now,point);
+ player.SetScriptActorDetectedPlayer(actor.source.refFormId,observer.detected);
  if(hostile&&observer.phase!=fo3sneak::Phase::Normal&&(observer.detected||observer.value>fo3sneak::Setting(settings,"fSneakNoticedMin")))actor.runtime.lastThreat=observer.lastKnown;
 }

@@ -497,57 +497,52 @@ static uint64_t Q230OutfitHash(uint64_t n) {
     n=(n^(n>>27))*UINT64_C(0x94d049bb133111eb);
     return n^(n>>31);
 }
-static bool Q230ResolveLevelledOutfit(
+static void Q230ResolveLevelledOutfit(
         FILE* f, const std::unordered_map<uint32_t,Locator>& locators,
         uint32_t listId, uint64_t seed, bool female,
         std::unordered_set<uint32_t>& visiting,
-        Fo3NpcVisualItemQ230& result, unsigned depth=0u) {
-    if(depth>=12u || !visiting.insert(listId).second)return false;
+        std::vector<Fo3NpcVisualItemQ230>& outfit, unsigned& budget, unsigned depth=0u) {
+    if(!budget)return;
+    --budget;
+    if(depth>=12u || !visiting.insert(listId).second)return;
     const auto erase=[&](){visiting.erase(listId);};
     const auto it=locators.find(listId);
-    if(it==locators.end()){erase();return false;}
+    if(it==locators.end()){erase();return;}
     Q230LevelList list;
-    if(!Q230ReadLevelList(f,it->second,list)){erase();return false;}
-    // The appearance loader does not yet own NPC gameplay/stat levels. Resolve
-    // only the level-1 equipment shared by the inspected Megaton LVLI records;
-    // never silently award a high-level outfit before actor level is known.
+    if(!Q230ReadLevelList(f,it->second,list)){erase();return;}
+    const auto roll=Q230OutfitHash(seed^(uint64_t(listId)<<16));
+    if(roll%100u < list.chanceNone){erase();return;}
+    const bool useAll=list.flags&4u;
     constexpr uint16_t appearanceLevel=1u;
     uint16_t bestLevel=0u;
     std::vector<const Q230LevelEntry*> eligible;
     for(const auto& entry:list.entries){
-        if(entry.level>appearanceLevel)continue;
-        if(!(list.flags&1u)){
+        if(!useAll&&entry.level>appearanceLevel)continue;
+        if(!useAll&&!(list.flags&1u)){
             if(entry.level<bestLevel)continue;
             if(entry.level>bestLevel){bestLevel=entry.level;eligible.clear();}
         }
         eligible.push_back(&entry);
     }
-    if(eligible.empty()){erase();return false;}
-    const auto roll=Q230OutfitHash(seed^(uint64_t(listId)<<16));
-    if(roll%100u < list.chanceNone){erase();return false;}
-    const auto chosen=eligible[Q230OutfitHash(roll^UINT64_C(0x9e3779b9))%eligible.size()];
-    const auto child=locators.find(chosen->form);
-    bool resolved=false;
-    if(child!=locators.end()&&!(child->second.flags&0x20u)){
-        if(child->second.type=="LVLI") {
-            resolved=Q230ResolveLevelledOutfit(f,locators,chosen->form,
-                Q230OutfitHash(seed^chosen->form),female,visiting,result,depth+1);
+    if(!useAll&&!eligible.empty()){
+        const auto* chosen=eligible[Q230OutfitHash(roll^UINT64_C(0x9e3779b9))%eligible.size()];
+        eligible.assign(1,chosen);
+    }
+    for(const auto* entry:eligible){
+        const auto child=locators.find(entry->form);
+        if(child==locators.end()||(child->second.flags&0x20u))continue;
+        if(child->second.type=="LVLI"){
+            Q230ResolveLevelledOutfit(f,locators,entry->form,
+                Q230OutfitHash(seed^entry->form),female,visiting,outfit,budget,depth+1);
         }else if(child->second.type=="ARMO"){
             Linked linked;
-            if(ParseLinked(f,child->second,linked,female)&&linked.bipedMask){
-                result.formId=chosen->form;
-                result.recordType="ARMO";
-                result.editorId=linked.editorId;
-                result.fullName=linked.fullName;
-                result.count=chosen->count;
-                result.bipedMask=linked.bipedMask;
-                result.modelPath=female&&!linked.model3.empty()?linked.model3:linked.model;
-                resolved=!result.modelPath.empty();
-            }
+            if(!ParseLinked(f,child->second,linked,female)||!linked.bipedMask)continue;
+            auto model=female&&!linked.model3.empty()?linked.model3:linked.model;
+            if(!model.empty())outfit.push_back({entry->form,entry->count,"ARMO",linked.editorId,
+                linked.fullName,std::move(model),linked.bipedMask});
         }
     }
     erase();
-    return resolved;
 }
 
 } // namespace
@@ -641,22 +636,17 @@ bool LoadFo3CellActors(
             if(it!=locators.end()){
                 if(it->second.type=="LVLI"){
                     item.recordType="LVLI";
-                    // Preserve the original LVLI reference; the resolved
-                    // armour is a separate appearance-only entry.
+                    // Preserve the original LVLI reference; resolved
+                    // armour entries supply the appearance assembler.
                     actor.inventory.push_back(std::move(item));
                     if(inv.second>0){
                         std::unordered_set<uint32_t> visiting;
-                        Fo3NpcVisualItemQ230 worn;
                         const uint64_t seed=Q230OutfitHash(
                             (uint64_t(actor.refFormId)<<32)^uint64_t(inv.first)^
                             (uint64_t(inventorySlot)<<8));
-                        if(Q230ResolveLevelledOutfit(f,locators,inv.first,seed,
-                                actor.female,visiting,worn)){
-                            Q230_LOGI("NPC LVLI OUTFIT actor=%08X source=%08X selected=%08X mask=%08X model=%s",
-                                actor.refFormId,inv.first,worn.formId,worn.bipedMask,
-                                worn.modelPath.c_str());
-                            actor.inventory.push_back(std::move(worn));
-                        }
+                        unsigned budget=1024;
+                        Q230ResolveLevelledOutfit(f,locators,inv.first,seed,
+                            actor.female,visiting,actor.inventory,budget);
                     }
                     ++inventorySlot;
                     continue;

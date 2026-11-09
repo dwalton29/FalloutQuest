@@ -746,6 +746,12 @@ void Finalize(Definitions &d) {
   for(const auto& trigger:d.triggerPrimitives)retain.insert(trigger.first);
   for(const auto& transmitter:d.transmitters)retain.insert(transmitter.first);
   for(auto& actor:d.referenceScripts)retain.insert(actor.first);
+  for(const auto& object:d.objectReferenceScripts){
+    const auto placed=d.targets.find(object.first);
+    if(placed!=d.targets.end()&&placed->second.linkedReference){
+      retain.insert(object.first);retain.insert(placed->second.linkedReference);
+    }
+  }
   for(const auto& route:d.actorPatrols)for(const auto& point:route.second)retain.insert(point.reference);
   for(const auto& entry:d.packages) {
     const auto keep=[&](const PackageLocation& location) {

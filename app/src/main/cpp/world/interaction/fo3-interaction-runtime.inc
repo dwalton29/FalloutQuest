@@ -458,7 +458,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         gLootPanel.title=catalog.actorInventories.count(base)?catalog.actorInventories.at(base).name:catalog.containers.at(base).name;
         for (const auto& stack:*player.ContainerContents(target.reference)) {
             const auto& item=catalog.items.at(stack.formId);
-            if (!item.name.empty()) gLootPanel.rows.push_back({stack.id,item.name,stack.count,
+            if (item.playable && !item.name.empty()) gLootPanel.rows.push_back({stack.id,item.name,stack.count,
                 player.CanTakeContainerStack(target.reference,stack.id),player.ContainerStackOwnership(target.reference,stack.id).Theft()});
         }
         gLootPanelRevision=player.Revision();

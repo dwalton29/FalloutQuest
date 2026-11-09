@@ -30,7 +30,7 @@ bool Player::PrepareContainer(uint32_t id) {
   const bool actor=catalog_->actorInventories.count(catalog_->references.at(id).base)!=0;
   if(!PrepareInventory(id,actor))return false;
   if(actor){
-    if(auto* saved=state_.actors.Edit(id))saved->equippedWeapon=0;
+    if(auto* saved=state_.actors.Edit(id)){saved->equippedWeapon=0;saved->weaponLocked=false;}
   }
   if(actor)for(auto& s:state_.containers.at(id)) {
     const auto& d=catalog_->items.at(s.formId).weapon;
@@ -230,7 +230,10 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   if (catalog_->items.at(s->formId).kind == ItemKind::Weapon) {
     if (state_.inventory.size() >= 10000 || s->count != 1)
       return false;
-    auto actor=state_.actors.find(id);if(actor!=state_.actors.end()&&actor->second.equippedWeapon==stack)state_.actors.Edit(id)->equippedWeapon=0;
+    auto actor=state_.actors.find(id);
+    if(actor!=state_.actors.end()&&actor->second.equippedWeapon==stack){
+      auto* saved=state_.actors.Edit(id);saved->equippedWeapon=0;saved->weaponLocked=false;
+    }
     state_.inventory.push_back(*s);
     state_.inventory.back().equipped=false;
     state_.inventory.back().ownership={};

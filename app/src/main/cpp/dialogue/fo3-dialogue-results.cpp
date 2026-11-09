@@ -65,7 +65,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   if(forms)forms->Reset();
   if(script.source.empty()&&!script.compiled.empty()){error="compiled-only result";return false;}
   auto lower=[](std::string s){for(auto& c:s)c=char(std::tolower((unsigned char)c));return s;};
-  std::unordered_map<std::string,uint32_t> referenceLocals;
+  struct ReferenceLocal {uint32_t form;std::string query;};
+  std::unordered_map<std::string,ReferenceLocal> referenceLocals;
   std::unordered_set<std::string> referenceDeclarations;
   bool referencePreamble=true;
   unsigned conditionalDepth=0;
@@ -78,7 +79,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   }}
   auto form=[&](std::string n){
     if(lower(n)=="player")return fo3player::PlayerRef;
-    auto local=referenceLocals.find(lower(n));if(local!=referenceLocals.end())return local->second;
+    auto local=referenceLocals.find(lower(n));if(local!=referenceLocals.end())return local->second.form;
     n=lower(n);auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
     if(forms&&!forms->Add(f->second,n))return uint32_t(0);
     return f->second;
@@ -105,9 +106,16 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       std::istringstream assignment(line);std::string verb,target,to,value;
       assignment>>verb>>target>>to>>value;
       if(referenceDeclarations.count(target)){
-        if(to!="to"||value!="getlinkedref"||(assignment>>extra)){error="unsupported reference assignment";return false;}
-        auto placed=d.targets.find(owner);if(placed==d.targets.end()||!placed->second.linkedReference){error="terminal linked reference unavailable";return false;}
-        referenceLocals[target]=placed->second.linkedReference;continue;
+        if(to=="to"&&!(assignment>>extra)){
+          if(value=="getactionref"){referenceLocals[target]={ActionReference,value};continue;}
+          if(value=="getself"){referenceLocals[target]={owner,value};continue;}
+          if(value=="getlinkedref"){
+            const auto placed=d.targets.find(owner);
+            if(placed!=d.targets.end()){referenceLocals[target]={placed->second.linkedReference,value};continue;}
+          }
+        }
+        if(!conditionalDepth){error="unsupported reference assignment";return false;}
+        cmd.type=CommandType::Unavailable;cmd.expression=line;out.push_back(std::move(cmd));continue;
       }
     }
     referencePreamble=false;
@@ -116,6 +124,16 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     if(op=="if"||op=="elseif") {
       cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
       std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
+      // Bind block-local reference aliases in expressions as well as commands.
+      for(size_t pos=0;pos<cmd.expression.size();){
+        if(!std::isalnum(static_cast<unsigned char>(cmd.expression[pos]))&&cmd.expression[pos]!='_'){++pos;continue;}
+        const auto end=cmd.expression.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_",pos);
+        const auto size=(end==std::string::npos?cmd.expression.size():end)-pos;
+        const auto alias=referenceLocals.find(cmd.expression.substr(pos,size));
+        if(alias==referenceLocals.end()){pos+=size;continue;}
+        const auto& query=alias->second.query;
+        cmd.expression.replace(pos,size,query);pos+=query.size();
+      }
     } else if(op=="else"||op=="endif")cmd.type=op=="else"?CommandType::Else:CommandType::EndIf;
     else if(op=="player.sexchange"){
       cmd.type=CommandType::PlayerSex;cmd.index=2;
@@ -166,6 +184,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     }else if(op=="ignorecrime"||(op.size()>12&&op.substr(op.size()-12)==".ignorecrime")){
       const auto dot=op.find('.');cmd.type=CommandType::IgnoreCrime;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid IgnoreCrime";return false;}
+    }else if(op=="setalert"||(op.size()>9&&op.substr(op.size()-9)==".setalert")){
+      const auto dot=op.find('.');cmd.type=CommandType::SetAlert;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a)||(a!="0"&&a!="1")){error="invalid SetAlert";return false;}cmd.value=a=="1";
     }else if(op=="setrestrained"||(op.size()>14&&op.substr(op.size()-14)==".setrestrained")){
       const auto dot=op.find('.');cmd.type=CommandType::Restrain;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetRestrained";return false;}
@@ -238,9 +259,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="setav"||(op.size()>6&&op.substr(op.size()-6)==".setav")){
       cmd.type=CommandType::SetActorValue;cmd.form=op=="setav"?owner:form(op.substr(0,op.size()-6));
       if(!(in>>a>>b)){error="missing actor value";return false;}
-      if(a=="aggression"||a=="assistance"){
-        cmd.type=CommandType::SetActorAIValue;cmd.index=a=="aggression"?0:57;
-        if(!cmd.form||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>(cmd.index==0?3:2)){
+      const auto av=fo3av::ID(a);
+      if(fo3av::AIMax(av)>=0){
+        cmd.type=CommandType::SetActorAIValue;cmd.index=av;
+        if(!cmd.form||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>fo3av::AIMax(av)){
           error="invalid AI actor value";return false;}
       }else{
       if(a.size()!=10||a.substr(0,8)!="variable"||a[8]<'0'||a[8]>'1'||a[9]<'0'||a[9]>'9'||!number(b,cmd.value)){error="unsupported actor value";return false;}
@@ -430,6 +452,17 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       }
     }
     else if(op=="player.removeallitems")cmd.type=CommandType::RemoveAllItems;
+    else if(op=="useweapon"||(op.size()>10&&op.substr(op.size()-10)==".useweapon")){
+      const auto dot=op.find('.');cmd.type=CommandType::UseWeapon;
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      std::string target,shots,crouch,hold,hit,damage;
+      if(!(in>>a>>b>>target>>shots>>crouch>>hold>>hit>>damage)||!cmd.form||
+         form(b)!=cmd.form||!(cmd.index=form(a))||!(cmd.variable=form(target))||
+         !number(shots,cmd.value)||cmd.value<1||cmd.value>32||std::floor(cmd.value)!=cmd.value||
+         crouch!="0"||hold!="0"||hit!="1"||damage!="0"){
+        error="unsupported UseWeapon firing procedure";return false;
+      }
+    }
     else if(op=="player.equipitem"||op=="player.unequipitem"){
       cmd.type=op=="player.equipitem"?CommandType::EquipItem:CommandType::UnequipItem;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid equipment item";return false;}
@@ -439,6 +472,12 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
         if(in>>c){if(c!="0"&&c!="1"){error="invalid equipment message flag";return false;}cmd.index=c=="1";}
         else in.clear();
       }else in.clear();
+    } else if(op=="equipitem"||(op.size()>10&&op.substr(op.size()-10)==".equipitem")){
+      cmd.type=CommandType::EquipItem;cmd.variable=1;const auto dot=op.find('.');
+      cmd.index=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.index||!(in>>a)||!(cmd.form=form(a))){error="invalid actor equipment item";return false;}
+      if(in>>b){if(b!="0"&&b!="1"){error="invalid equipment locking flag";return false;}cmd.value=b=="1";}
+      else in.clear();
     } else if(op=="addspell"||op=="removespell"||
         (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="addspell"||op.substr(op.find('.')+1)=="removespell"))){
       const auto dot=op.find('.');

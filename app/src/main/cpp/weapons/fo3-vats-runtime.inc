@@ -22,6 +22,7 @@ fo3vats::Session session;
 View view;
 Document chrome;
 std::array<Document,14> limbDocs;
+std::array<fo3menu::Box,14> limbLabelBounds;
 uint32_t cell=0,worldspace=0;
 uint64_t generation=0;
 const fo3player::Player* owner=nullptr;
@@ -220,7 +221,24 @@ void Prepare(const fo3player::Player& player){
         (uint64_t(limb.chance)<<1)^(uint64_t(limb.condition*1000)<<9)^uint64_t(selected);
     if(doc.revision==state)continue;
     doc.Begin(player);
-    fo3menu::BindVatsLimb(doc.layout,{limb.part->name,limb.chance,limb.condition,selected,Alignment(limb.part->type)});
+    const int row=fo3menu::BindVatsLimb(doc.layout,{limb.part->name,limb.chance,limb.condition,selected,Alignment(limb.part->type)});
+    const auto textBounds=[&](const char* name){
+      const int text=doc.layout.Find(name,row);
+      auto box=doc.layout.Bounds(text);
+      const int align=int(doc.layout.N(text,"justify"));
+      box.x-=box.w*(align==2?1.f:align==1?.5f:0.f);
+      return box;
+    };
+    auto bounds=doc.layout.Bounds(doc.layout.Find("meter",row));
+    const auto include=[&](const fo3menu::Box& b){
+      const float right=std::max(bounds.x+bounds.w,b.x+b.w);
+      const float bottom=std::max(bounds.y+bounds.h,b.y+b.h);
+      bounds.x=std::min(bounds.x,b.x);bounds.y=std::min(bounds.y,b.y);
+      bounds.w=right-bounds.x;bounds.h=bottom-bounds.y;
+    };
+    include(textBounds("chance_to_hit"));
+    if(selected)include(textBounds("limb_name"));
+    limbLabelBounds[limb.part->type]=bounds;
     doc.Build();doc.revision=state;
   }
 }
@@ -311,14 +329,36 @@ void RenderFo3Vats(const float* vp){
   const V head{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
   draw(chrome,head+V{-s*1.28f,0,-c*1.28f},.001f);
   if(session.phase!=fo3vats::Phase::Aiming)return;
-  for(bool selected:{false,true})for(const auto& limb:view.limbs){
+  // Use the centre view for both eyes so a readout has the same visibility in stereo.
+  std::array<fo3menu::Box,14> occupied{};
+  size_t count=0;
+  for(bool selected:{true,false})for(const auto& limb:view.limbs){
     if((limb.part->type==view.selected)!=selected)continue;
     if(!selected&&std::any_of(view.limbs.begin(),view.limbs.end(),[&](const auto& other){
       return other.part->type==view.selected&&other.part->name==limb.part->name;
     }))continue;
     const V toward=limb.point-head;
     const float distance=fo3vr::Length(toward);
-    if(distance<.15f)continue;
-    draw(limbDocs[limb.part->type],limb.point-toward*(.035f/distance),distance*.00065f);
+    const float depth=-s*toward.x-c*toward.z;
+    if(depth<.15f)continue;
+    auto& doc=limbDocs[limb.part->type];
+    if(!doc.ready)continue;
+    const V anchor=limb.point-toward*(.035f/distance);
+    const float scale=depth*.00034f;
+    const float z=depth*(1-.035f/distance);
+    const auto bounds=limbLabelBounds[limb.part->type];
+    const fo3menu::Box box{
+        ((anchor.x-head.x)*c-(anchor.z-head.z)*s+(bounds.x-doc.layout.width*.5f)*scale)/z,
+        (anchor.y-head.y+(doc.layout.height*.5f-bounds.y-bounds.h)*scale)/z,
+        bounds.w*scale/z,bounds.h*scale/z};
+    const auto end=occupied.begin()+count;
+    if(!selected&&std::any_of(occupied.begin(),end,[&](const auto& b){
+      constexpr float gap=.006f;
+      return box.x<b.x+b.w+gap&&b.x<box.x+box.w+gap&&
+             box.y<b.y+b.h+gap&&b.y<box.y+box.h+gap;
+    }))continue;
+    if(count==occupied.size())break;
+    occupied[count++]=box;
+    draw(doc,anchor,scale);
   }
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "pipboy/fo3-pipboy-data.h"
+#include "fo3-event-scripts.h"
 #include <algorithm>
 #include <cmath>
 namespace fo3script {
@@ -24,6 +25,12 @@ inline bool Contains(const fo3pipdata::Placement& p,const fo3pipdata::TriggerPri
   return dx*dx+dy*dy+dz*dz<=body*body;
 }
 struct AnimationSequence {std::string name;double duration=0;bool loop=false;};
+inline std::string OpenStateGroup(const std::vector<AnimationSequence>& clips,bool open){
+  for(const char* name:{open?"open":"close",open?"forward":"backward"}){
+    for(const auto& clip:clips)if(!clip.loop&&Lower(clip.name)==name)return name;
+  }
+  return {};
+}
 struct AnimationRun {std::string group;double started=0,duration=0;bool loop=false;};
 inline bool Playing(const AnimationRun& run,double now){
   return !run.group.empty()&&std::isfinite(now)&&now>=run.started&&(run.loop||now-run.started<run.duration);

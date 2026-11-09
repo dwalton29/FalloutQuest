@@ -1,4 +1,5 @@
 #include "fo3-player-state.h"
+#include "fo3-actor-values.h"
 #include "fo3-tag-skills.h"
 #include "data/fo3-esm-reader.h"
 #include "dialogue/fo3-dialogue-results.h"
@@ -371,6 +372,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
       if(type=="CREA")next.deferredBases.insert(form);
+      if(type=="NPC_"&&(flags&0x00080000u))next.authoredCorpseBases.insert(form);
+      if(type=="ACTI")next.activatorBases.insert(form);
       if(type=="IMAD")next.imageModifiers.emplace(form,fo3script::DecodeImageModifier(payload));
       if(type=="REFR"||type=="ACHR"||type=="ACRE") {
         if(Find(subs,"XEZN"))next.encounterZoneReferences.insert(form);
@@ -859,8 +862,12 @@ ActorCensusReport Player::RegisterOriginalActors() {
   for(const auto& entry:catalog_->actorPlacements)refs.push_back(entry.first);
   std::sort(refs.begin(),refs.end());
   for(uint32_t id:refs){
-    if(state_.actors.count(id)){++report.alreadyTracked;continue;}
+    const auto existing=state_.actors.find(id);
     const auto& p=catalog_->actorPlacements.at(id);
+    const bool authoredDead=catalog_->authoredCorpseBases.count(p.base)!=0;
+    if(existing!=state_.actors.end()&&(!authoredDead||existing->second.dead)){
+      ++report.alreadyTracked;continue;
+    }
     // Track conditional actors too. Canonical enable evaluation controls
     // residency; tracking their authored state never activates them.
     if(p.flags&0x20u){++report.disabledOrConditional;continue;}
@@ -870,10 +877,11 @@ ActorCensusReport Player::RegisterOriginalActors() {
        !std::isfinite(p.z)||!std::isfinite(p.rx)||!std::isfinite(p.ry)||
        !std::isfinite(p.rz)||!std::isfinite(p.scale)||
        p.scale<=0){++report.unsupportedPlacement;continue;}
-    if(state_.actors.size()>=10000u){++report.limitReached;continue;}
+    if(existing==state_.actors.end()&&state_.actors.size()>=10000u){++report.limitReached;continue;}
     ActorState a;
     a.cell=p.cell;a.world=p.world;
-    a.position={p.x,p.y,p.z};a.yaw=-p.rz;
+    a.position={p.x,p.y,p.z};a.yaw=-p.rz;a.dead=authoredDead;
+    if(existing!=state_.actors.end())a.equippedWeapon=existing->second.equippedWeapon;
     if(UpdateActor(id,a))++report.registered;
     else ++report.unsupportedBase;
   }
@@ -1386,7 +1394,7 @@ bool Player::SetRestrained(uint32_t reference,bool restrained){
 bool Player::ActorValue(uint32_t reference,uint32_t id,float& value) const {
   if(reference!=PlayerRef){
     if(id==16){value=ActorHealth(reference);return value>=0;}
-    if(id==0||id==57)return ActorAIValue(reference,id,value);
+    if(fo3av::AIMax(id)>=0)return ActorAIValue(reference,id,value);
     if(id>=62&&id<=71)return ActorVariable(reference,id-62,value);
     return false;
   }
@@ -1559,7 +1567,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(auto id:actorIds){const auto& a=state_.actors.at(id);Put32(payload,id);
     for(auto v:{a.cell,a.world,a.package,a.sequence,a.hostile})Put32(payload,v);
     for(float v:a.position)PutFloat(payload,v);
-    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,a.dead?1:0);PutFloat(payload,a.packageWaitSeconds);
+    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,(a.dead?1u:0u)|(a.alert?2u:0u)|(a.weaponLocked?4u:0u));PutFloat(payload,a.packageWaitSeconds);
   }
   // v10: appended after v9 actor records. v1-v9 remain readable verbatim.
   PutFloat(payload,state_.gameHour);
@@ -1702,7 +1710,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     if(state_.doorStates.size()>100000){error="Too many door states";return false;}
     Put32(payload,0x31535244);Put32(payload,uint32_t(state_.doorStates.size())); // DRS1
     std::vector<uint32_t> ids;for(const auto& door:state_.doorStates)ids.push_back(door.first);std::sort(ids.begin(),ids.end());
-    for(auto id:ids){const auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid||!catalog_->doorBases.count(r->second.base)){error="Invalid door state";return false;}
+    for(auto id:ids){const auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid||!catalog_->HasOpenState(r->second.base)){error="Invalid door state";return false;}
       Put32(payload,id);payload.push_back(state_.doorStates.at(id)?1:0);}
   }
   if(hasActorVariables){
@@ -1721,7 +1729,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,0x3149414E);Put32(payload,uint32_t(state_.actorAIValues.size())); // NAI1
     std::vector<uint64_t> keys;for(const auto& entry:state_.actorAIValues)keys.push_back(entry.first);std::sort(keys.begin(),keys.end());
     for(auto key:keys){const auto av=uint32_t(key);const float value=state_.actorAIValues.at(key);
-      if(!catalog_->actorPlacements.count(uint32_t(key>>32))||(av!=0&&av!=57)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(av==0?3:2)){error="Invalid AI actor value";return false;}
+      if(!catalog_->actorPlacements.count(uint32_t(key>>32))||!std::isfinite(value)||std::floor(value)!=value||value<0||value>fo3av::AIMax(av)){error="Invalid AI actor value";return false;}
       Put64(payload,key);PutFloat(payload,value);}
   }
   if(hasScriptOverrides){
@@ -2169,7 +2177,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
           a.package=fo3esm::ReadU32(p+at+12);a.sequence=fo3esm::ReadU32(p+at+16);a.hostile=fo3esm::ReadU32(p+at+20);
           for(size_t j=0;j<3;++j)a.position[j]=fo3esm::ReadF32(p+at+24+j*4);
           a.yaw=fo3esm::ReadF32(p+at+36);a.equippedWeapon=U64(p+at+40);
-          if(version>=8){const auto life=fo3esm::ReadU32(p+at+48);if(life>1)return fail("Invalid actor lifecycle");a.dead=life!=0;if(a.dead&&Essential(id))return fail("Essential actor cannot be a corpse");}
+          if(version>=8){const auto life=fo3esm::ReadU32(p+at+48);if(life>7)return fail("Invalid actor lifecycle");a.dead=life&1u;a.alert=life&2u;a.weaponLocked=life&4u;if(a.dead&&Essential(id))return fail("Essential actor cannot be a corpse");}
           if(version>=9)a.packageWaitSeconds=fo3esm::ReadF32(p+at+52);
           if(!std::isfinite(a.packageWaitSeconds)||a.packageWaitSeconds<0)return fail("Invalid actor package wait");
           if(a.equippedWeapon){
@@ -2331,7 +2339,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         const auto n=fo3esm::ReadU32(p+at+4);at+=8;
         if(n>100000||(version>=21?payload.size()-at<5ull*n+8:payload.size()-at!=5ull*n))return fail("Invalid door state count");
         for(uint32_t i=0;i<n;++i,at+=5){const auto id=fo3esm::ReadU32(p+at);const auto r=catalog_->references.find(id);
-          if(r==catalog_->references.end()||!r->second.valid||!catalog_->doorBases.count(r->second.base)||p[at+4]>1||!next.doorStates.emplace(id,p[at+4]!=0).second)return fail("Invalid saved door state");}
+          if(r==catalog_->references.end()||!r->second.valid||!catalog_->HasOpenState(r->second.base)||p[at+4]>1||!next.doorStates.emplace(id,p[at+4]!=0).second)return fail("Invalid saved door state");}
       }
       if(version>=21){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31564141)return fail("Missing actor values");
@@ -2361,7 +2369,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
         if(count>10000||payload.size()-at<12ull*count+8)return fail("Invalid AI actor value count");
         for(uint32_t i=0;i<count;++i,at+=12){const auto key=U64(p+at);const auto av=uint32_t(key);const float value=fo3esm::ReadF32(p+at+8);
-          if(!catalog_->actorPlacements.count(uint32_t(key>>32))||(av!=0&&av!=57)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(av==0?3:2)||!next.actorAIValues.emplace(key,value).second)return fail("Invalid AI actor value");}
+          if(!catalog_->actorPlacements.count(uint32_t(key>>32))||!std::isfinite(value)||std::floor(value)!=value||value<0||value>fo3av::AIMax(av)||!next.actorAIValues.emplace(key,value).second)return fail("Invalid AI actor value");}
       }
       if(version>=22){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314C4451)return fail("Missing quest delays");
@@ -2608,7 +2616,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
   scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;ClearScriptActorFurniture();
-  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
+  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptDetection_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
   scriptPrompts_=restoredPrompts;pendingScriptMessages_=std::move(restoredPrompts);scriptButtons_=std::move(restoredButtons);
   pendingScriptSounds_.clear();pendingBarters_.clear();EndContainerInteraction();
   ++revision_;

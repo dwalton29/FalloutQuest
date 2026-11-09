@@ -67,13 +67,54 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
   }
   actor.headBone=fo3anim::FindBone(actor.skeleton,"Bip01 Head");
   actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine2");
+  if(actor.source.creature&&actor.chestBone<0){
+    actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine1");
+    if(actor.chestBone<0)actor.chestBone=actor.headBone;
+  }
   actor.blendFrom.resize(actor.skeleton.bones.size());
 }
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+static fo3anim::Clip Q230CreatureAttackClip(const std::string& root){
+  static std::mutex mutex;
+  static std::unordered_map<std::string,fo3anim::Clip> clips;
+  std::lock_guard<std::mutex> lock(mutex);
+  const auto found=clips.find(root);
+  if(found!=clips.end())return found->second;
+  std::vector<FalloutMeshIndexEntry> entries;
+  ListFalloutMeshFilesByPrefix(root,entries);
+  fo3anim::Clip attack;
+  for(const auto& entry:entries){
+    const auto name=entry.path.substr(entry.path.find_last_of('\\')+1);
+    if(name.size()<4||name.find("attack")==std::string::npos||name.substr(name.size()-3)!=".kf")continue;
+    std::vector<uint8_t> bytes;fo3anim::Clip clip;
+    if(!LoadFalloutMeshFile(entry.path,bytes)||!fo3anim::DecodeClip(bytes,clip)||
+       clip.tracks.empty()||clip.stop<=clip.start||clip.frequency<=0)continue;
+    const auto hit=std::find_if(clip.textKeys.begin(),clip.textKeys.end(),[](const auto& key){return key.text=="Hit";});
+    if(hit==clip.textKeys.end())continue;
+    attack=std::move(clip);break;
+  }
+  return clips.emplace(root,std::move(attack)).first->second;
+}
 void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
-  if(!catalog||actor.source.creature)return;
+  if(!catalog)return;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
+  if(actor.source.creature){
+    const auto* stats=fo3weapon::ActorStatistics(catalog->weapons,actor.source.baseFormId);
+    const auto fists=catalog->pipboy.formNames.find("fists");
+    if(!stats||!stats->creature||stats->creatureDamage<=0||!stats->creatureReach||
+       fists==catalog->pipboy.formNames.end())return;
+    const auto item=catalog->items.find(fists->second);
+    if(item==catalog->items.end()||!item->second.weapon.valid)return;
+    Q230CombatWeapon ready;
+    ready.clips[1]=Q230CreatureAttackClip(root);
+    if(ready.clips[1].tracks.empty())return;
+    ready.clips[0]=actor.clip;ready.definition=item->second.weapon;
+    ready.definition.maxRange=stats->creatureReach*actor.source.scale;
+    ready.definition.attackMult=ready.clips[1].frequency;
+    ready.ready=true;actor.combatWeapons.emplace(fists->second,std::move(ready));
+    return;
+  }
   const auto candidates=fo3npc::CombatWeaponCandidates(actor.source,*catalog);
   Q6H_LOGI("NPC COMBAT CANDIDATES actor=%08X source=%zu weapons=%zu",
     actor.source.refFormId,actor.source.inventory.size(),candidates.size());
@@ -225,7 +266,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   std::unordered_set<uint32_t> arrivals;
   if(savedActors&&defs)for(const auto& entry:*savedActors){
     const auto& saved=entry.second;
-    if((!saved.dead||saved.corpse)&&resident(saved) &&
+    if((!saved.dead||saved.corpse||catalog->AuthoredCorpse(entry.first))&&resident(saved) &&
        (!onlyRefs||onlyRefs->count(entry.first)))
       arrivals.insert(entry.first);
   }
@@ -290,7 +331,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       const auto it=savedActors->find(source.refFormId);
       if(it!=savedActors->end()){
         const auto& pose=it->second;
-        if((pose.dead&&!pose.corpse)||
+        if((pose.dead&&!pose.corpse&&(!catalog||!catalog->AuthoredCorpse(source.refFormId)))||
            (defs&&!resident(pose)))
           continue;
         // Use the canonical arrival root when constructing the new rig;

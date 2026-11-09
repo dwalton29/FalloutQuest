@@ -12,6 +12,13 @@ static void Q230StartRagdoll(Q230ActorVisual& actor){
   if(actor.ragdollStarted){world.RemoveRagdoll(id);actor.ragdollStarted=false;actor.corpsePose.reset();actor.lastFrame=UINT64_MAX;}return;
  }
  if(world.HasRagdoll(id))return;
+ if(!actor.corpsePose&&player.Definitions().AuthoredCorpse(id)){
+  const auto& death=actor.animations[size_t(fo3npc::Animation::Death)];
+  if(death.stop>death.start&&death.frequency>0){
+   fo3anim::BindClip(actor.skeleton,death,actor.pose);
+   fo3anim::Sample(actor.skeleton,death,(death.stop-death.start)/death.frequency,actor.pose);
+  }
+ }
  // Use the last animated pose on the death edge, before Die selects another
  // clip. Restored corpses already have their physical global bone transforms.
  if(actor.pose.global.size()!=actor.skeleton.bones.size())return;

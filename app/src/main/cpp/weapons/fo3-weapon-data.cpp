@@ -66,7 +66,11 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
       }
     }
     if(k=="EDID")editor=fo3esm::ZString(b,n);
-    if(t=="CREA"&&k=="DATA"&&n==17){actor.health=int16_t(fo3esm::ReadU16(b+4));actor.endurance=b[12];actor.perception=b[11];actorData=true;}
+    if(t=="CREA"&&k=="DATA"&&n==17){
+      actor.health=int16_t(fo3esm::ReadU16(b+4));actor.creatureDamage=int16_t(fo3esm::ReadU16(b+8));
+      actor.endurance=b[12];actor.perception=b[11];actorData=true;
+    }
+    if(t=="CREA"&&k=="RNAM"&&n==1)actor.creatureReach=b[0];
     if(t=="NPC_"&&k=="DATA"&&n>=11){actor.health=static_cast<int32_t>(fo3esm::ReadU32(b));actor.endurance=b[6];actor.perception=b[5];actorData=true;}
     if((t=="NPC_"||t=="CREA")&&k=="ACBS"&&n==24){actor.flags=fo3esm::ReadU32(b);actor.level=fo3esm::ReadU16(b+8);actor.minLevel=fo3esm::ReadU16(b+10);actor.maxLevel=fo3esm::ReadU16(b+12);actor.templates=fo3esm::ReadU16(b+22);}
     if((t=="NPC_"||t=="CREA")&&k=="TPLT"&&n==4)actor.templateId=fo3esm::ReadU32(b);
@@ -143,7 +147,7 @@ static bool SameStatistics(const Definitions::Actor& a,const Definitions::Actor&
   // Sex/essential/AI flags are Traits, not Statistics. Only the health/level
   // calculation flags are consumed with DATA/DNAM by the existing runtime.
   return a.creature==b.creature&&(a.flags&0x90)==(b.flags&0x90)&&a.level==b.level&&a.minLevel==b.minLevel&&
-    a.maxLevel==b.maxLevel&&a.health==b.health&&a.endurance==b.endurance&&a.perception==b.perception&&a.skills==b.skills;
+    a.maxLevel==b.maxLevel&&a.health==b.health&&a.endurance==b.endurance&&a.perception==b.perception&&a.creatureDamage==b.creatureDamage&&a.creatureReach==b.creatureReach&&a.skills==b.skills;
 }
 void FinalizeStatistics(Definitions& d) {
   d.invariantStatistics.clear();

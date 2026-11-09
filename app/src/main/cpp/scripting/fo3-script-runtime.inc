@@ -22,7 +22,8 @@ class Expression {
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
       if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
-         query=="getpermanentactorvalue"||query=="getpcmiscstat"||
+         query=="getpermanentactorvalue"||query=="getpcmiscstat"||query=="getisid"||
+         query=="getdetected"||query=="getiscurrentpackage"||query=="iscombattarget"||
          query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="getdeadcount"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
@@ -35,6 +36,12 @@ class Expression {
     if(t=="getrandompercent"){value=forms?0:p.DrawScriptRandomPercent();return true;} // Binding preflight never draws.
     auto form=[&](const std::string& n){
       if(n=="player")return fo3player::PlayerRef;
+      if(n=="getactionref")return p.ScriptActivator();
+      if(n=="getself")return owner;
+      if(n=="getlinkedref"){
+        const auto placed=d.targets.find(owner);
+        return placed!=d.targets.end()?placed->second.linkedReference:0u;
+      }
       const auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
       if(forms&&!forms->Add(f->second,n))return uint32_t(0);
       return f->second;
@@ -67,6 +74,36 @@ class Expression {
       return fo3dialogue::DeadCount(p,form(tokens[at++]),value,error);
     }
     const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    if(dot==std::string::npos&&(t=="player"||t=="getactionref"||t=="getself"||t=="getlinkedref")){
+      value=float(form(t));return true;
+    }
+    if(query=="getdetected"||query=="getiscurrentpackage"||query=="getisid"||query=="iscombattarget"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing actor query argument");
+      const auto argument=form(tokens[at++]);if(!argument)return Fail("unknown actor query argument");
+      const auto placed=p.Definitions().references.find(id);
+      if(placed==p.Definitions().references.end()&&id!=fo3player::PlayerRef)return Fail("actor query reference unavailable");
+      const auto actor=p.Snapshot().actors.find(id);
+      if(query=="getisid"){value=(id==fo3player::PlayerRef?fo3player::PlayerBase:placed->second.base)==argument;return true;}
+      if(query=="getdetected"){
+        if(argument!=fo3player::PlayerRef)return Fail("detection target unavailable");
+        value=p.ActorHealth(id)>0&&p.ScriptActorDetectedPlayer(id);return true;
+      }
+      value=actor!=p.Snapshot().actors.end()&&(query=="getiscurrentpackage"?actor->second.package:actor->second.hostile)==argument;
+      return true;
+    }
+    if(query=="getcombattarget"||query=="getunconscious"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      const auto actor=p.Snapshot().actors.find(id);
+      if(p.ActorHealth(id)<0)return Fail("actor query reference unavailable");
+      // The resident life model currently has alive and dead states.
+      value=query=="getcombattarget"&&actor!=p.Snapshot().actors.end()?float(actor->second.hostile):0.f;return true;
+    }
+    if(query=="getitemcount"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing item query argument");
+      value=p.ScriptItemCount(id,form(tokens[at++]));return value>=0||Fail("item query unavailable");
+    }
     if(query=="getisreference"){
       const auto caller=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing reference identity");
@@ -105,8 +142,8 @@ class Expression {
     }
     if(query=="getopenstate"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
-      const auto placed=d.targets.find(id);if(placed==d.targets.end())return Fail("open-state reference unavailable");
-      const auto saved=p.Snapshot().doorStates.find(id);value=saved==p.Snapshot().doorStates.end()?placed->second.openByDefault:saved->second;return true;
+      if(!p.Definitions().references.count(id))return Fail("open-state reference unavailable");
+      value=p.ScriptOpenState(id);return true;
     }
     if(query=="getheadingangle"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -134,6 +171,12 @@ class Expression {
       if(query=="issneaking"){if(id!=fo3player::PlayerRef)return Fail("NPC sneak posture unavailable");value=p.IsSneaking();return true;}
       if(query=="istalking"){value=p.ScriptActorTalking(id);return true;}
       if(query=="getdead"){const auto health=p.ActorHealth(id);if(health<0)return Fail("actor health unavailable");value=health<=0;return true;}
+      if(id==fo3player::PlayerRef){
+        value=std::any_of(p.Snapshot().actors.begin(),p.Snapshot().actors.end(),[](const auto& entry){
+          return !entry.second.dead&&entry.second.hostile==fo3player::PlayerRef;
+        });
+        return true;
+      }
       const auto actor=p.Snapshot().actors.find(id);if(actor==p.Snapshot().actors.end())return Fail("combat actor unavailable");
       value=actor->second.hostile!=0;return true;
     }
@@ -516,7 +559,18 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::PlayerNameMenu:ok=OpenPlayerNameMenu(owner);break;
     case C::CharacterGeneration:ok=SetCharacterGeneration(c.value!=0);break;
     case C::LocationLoadScreens:ok=SetLocationSpecificLoadScreens(c.value!=0);break;
-    case C::Kill:ok=KillActor(c.form);break;
+    case C::Kill:{
+      const bool alive=ActorHealth(c.form)>0;
+      ok=KillActor(c.form);
+      if(ok&&alive&&HasReferenceEvent(c.form,"OnDeath")){
+        if(scriptActivationDepth_>=8){error="nested death event depth exceeded";return false;}
+        ++scriptActivationDepth_;
+        ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(c.form).base),
+                                "OnDeath",c.form,scriptActivator_,error);
+        --scriptActivationDepth_;
+      }
+      break;
+    }
     case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
     case C::ChangeSpell:ok=c.form==PlayerRef&&SetAddiction(c.index,c.value!=0);break;
@@ -528,14 +582,26 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(next!=count){count=next;++revision_;}
       break;
     }
-    case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
+    case C::SetActorAIValue:ok=SetActorAIValue(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,c.value);break;
+    case C::SetAlert:ok=SetActorAlert(c.form,c.value!=0);break;
+    case C::UseWeapon:{
+      const auto* weapon=ActorWeapon(c.form);
+      ok=weapon&&weapon->formId==c.index&&ActorHealth(c.form)>0&&ActorHealth(uint32_t(c.variable))>0&&
+         catalog_->items.at(c.index).weapon.Firearm();
+      if(ok){
+        fo3script::Action action;action.kind=fo3script::ActionKind::UseWeapon;
+        action.reference=c.form;action.form=c.index;action.flags=uint32_t(c.variable);action.info=uint32_t(c.value);
+        ok=QueueScriptAction(std::move(action));
+      }
+      break;
+    }
     case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;
     case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
     case C::FactionMembership:ok=SetActorFactionRank(c.form,c.index,int(c.value),c.variable!=0);break;
     case C::SetEssential:ok=SetEssential(c.form,c.value!=0);break;
     case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
     case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;action.flags=c.value!=0;ok=QueueScriptAction(std::move(action));}break;}
-    case C::ScriptPackage:ok=ScriptPackage(c.form,c.index,c.value!=0);break;
+    case C::ScriptPackage:ok=ScriptPackage(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,c.value!=0);break;
     case C::StartConversation:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,true);break;
     case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,false,c.value!=0,0,c.noTargetLook);break;
     case C::Variable:case C::Global:
@@ -572,7 +638,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       }
       break;
     case C::RemoveAllItems:ok=ScriptRemoveAllItems();break;
-    case C::EquipItem:case C::UnequipItem:ok=ScriptEquipItem(c.form,c.type==C::EquipItem);break;
+    case C::EquipItem:case C::UnequipItem:
+      ok=c.type==C::EquipItem&&c.variable?ScriptEquipActorWeapon(c.index,c.form,c.value!=0):
+          ScriptEquipItem(c.form,c.type==C::EquipItem);break;
     case C::PipboyReset:case C::RadioRefresh:{fo3script::Action action;action.kind=c.type==C::PipboyReset?fo3script::ActionKind::PipboyReset:fo3script::ActionKind::RadioRefresh;ok=QueueScriptAction(std::move(action));break;}
     case C::RadioOff:ok=TuneRadio(0);break;
     case C::BroadcastState:case C::RadioConversation:{
@@ -617,9 +685,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     }
     case C::StopCombat:{
-      const auto actor=state_.actors.find(c.form);
+      const auto reference=c.form==fo3dialogue::ActionReference?scriptActivator_:c.form;
+      const auto actor=state_.actors.find(reference);
       if(c.variable&&actor!=state_.actors.end()&&actor->second.hostile&&actor->second.hostile!=c.variable)break;
-      ok=StopActorCombat(c.form,c.index!=0);break;
+      ok=StopActorCombat(reference,c.index!=0);break;
     }
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
@@ -889,7 +958,9 @@ bool Player::ScriptRemoveItem(uint32_t form,int32_t count,uint32_t receiver){
     if(it->formId!=form||it->equipped!=equipped){++it;continue;}
     const int32_t removed=std::min(count,it->count);count-=removed;it->count-=removed;
     if(!it->count){
-      if(receiver!=PlayerRef)if(auto* actor=state_.actors.Edit(receiver))if(actor->equippedWeapon==it->id)actor->equippedWeapon=0;
+      if(receiver!=PlayerRef)if(auto* actor=state_.actors.Edit(receiver))if(actor->equippedWeapon==it->id){
+        actor->equippedWeapon=0;actor->weaponLocked=false;
+      }
       it=inventory->erase(it);
     }else ++it;
   }
@@ -980,8 +1051,19 @@ void Player::FinishScriptAnimation(uint32_t reference,const std::string& group){
   scriptAnimations_.erase(playing);++scriptEffectRevision_;
 }
 bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
-  if(reference!=scriptReference_)return false;
   const auto placed=catalog_->references.find(reference);
+  if(placed==catalog_->references.end()||!placed->second.valid)return false;
+  const auto base=placed->second.base;
+  if(catalog_->activatorBases.count(base)&&scriptAnimationDefinitions_){
+    const auto animation=scriptAnimationDefinitions_->find(reference);
+    if(animation!=scriptAnimationDefinitions_->end()&&!fo3script::OpenStateGroup(animation->second,true).empty()){
+      bool disabled=false;std::string error;
+      const int state=ScriptOpenState(reference);
+      return ReferenceDisabled(reference,disabled,error)&&!disabled&&
+             (state==2||state==4||ScriptDoorState(reference,state==3));
+    }
+  }
+  if(reference!=scriptReference_)return false;
   if(placed!=catalog_->references.end()&&catalog_->items.count(placed->second.base)){
     // Commit inventory, world removal, and the rest of OnActivate together.
     if(activator!=PlayerRef||pendingScriptItems_.size()>=128||!PickupPlacedItem(reference,true))return false;

@@ -167,7 +167,7 @@ struct ActorState {
   std::array<float,3> position{};
   float yaw=0,packageWaitSeconds=0; // OpenXR scene yaw for actor poses.
   uint64_t equippedWeapon=0;
-  bool dead=false;
+  bool dead=false, alert=false, weaponLocked=false;
   std::shared_ptr<const CorpsePose> corpse;
 };
 enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
@@ -313,7 +313,14 @@ struct Catalog {
   std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
   std::unordered_set<uint32_t> messageActivatorBases;
   std::unordered_map<uint32_t,std::vector<uint32_t>> actorTriggerVolumes;
-  std::unordered_set<uint32_t> doorBases;
+  std::unordered_set<uint32_t> doorBases, activatorBases, authoredCorpseBases;
+  bool AuthoredCorpse(uint32_t reference) const {
+    const auto actor=actorPlacements.find(reference);
+    return actor!=actorPlacements.end()&&authoredCorpseBases.count(actor->second.base);
+  }
+  bool HasOpenState(uint32_t base) const {
+    return doorBases.count(base)||activatorBases.count(base);
+  }
   std::unordered_set<uint32_t> scriptedBases;
   std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
   std::unordered_map<std::string, std::string> strings;
@@ -550,6 +557,14 @@ public:
   bool ActorVariable(uint32_t reference,uint32_t slot,float& value) const;
   bool SetActorVariable(uint32_t reference,uint32_t slot,float value);
   bool KillActor(uint32_t reference);
+  bool SetActorAlert(uint32_t reference,bool alert);
+  bool ScriptEquipActorWeapon(uint32_t reference,uint32_t form,bool locked);
+  int32_t ScriptItemCount(uint32_t reference,uint32_t form) const;
+  bool ScriptActorDetectedPlayer(uint32_t reference) const {return scriptDetection_.count(reference)!=0;}
+  void SetScriptActorDetectedPlayer(uint32_t reference,bool detected){
+    if(detected)scriptDetection_.insert(reference);else scriptDetection_.erase(reference);
+  }
+  void ClearScriptActorDetection(){scriptDetection_.clear();}
   bool AnyScriptActorTalking()const{return !scriptTalking_.empty();}
   bool ScriptActorTalking(uint32_t reference)const{return scriptTalking_.count(reference)!=0;}
   void SetScriptActorTalking(uint32_t reference,bool talking){if(talking)scriptTalking_.insert(reference);else scriptTalking_.erase(reference);}
@@ -742,7 +757,7 @@ public:
   bool WeaponHit(uint64_t instance,uint32_t target,float fraction=1);
   bool ApplyWeaponHit(uint32_t base,uint32_t target,float damage);
   bool ApplyAttack(uint32_t attacker,uint32_t weapon,uint32_t target,float damage,
-                   const fo3weapon::BodyPart* part=nullptr);
+                   const fo3weapon::BodyPart* part=nullptr,bool provoke=true);
   const std::vector<fo3weapon::BodyPart>* ActorBodyParts(uint32_t reference) const;
   float ActorLimbCondition(uint32_t reference,uint8_t part) const;
   bool Essential(uint32_t reference) const;
@@ -792,6 +807,7 @@ public:
   bool ScriptLock(uint32_t reference,int level);
   bool ScriptUnlock(uint32_t reference);
   bool ScriptDoorState(uint32_t reference,bool open);
+  int ScriptOpenState(uint32_t reference) const;
   bool QueueTerminalBack(uint32_t reference);
   bool PollTerminalBack(uint32_t& reference);
   float LockSetting(const std::string& key,float fallback) const;
@@ -903,7 +919,7 @@ private:
   size_t scriptTraceBytes_=0;
   mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
-  std::unordered_set<uint32_t> scriptTalking_;
+  std::unordered_set<uint32_t> scriptDetection_, scriptTalking_;
   std::vector<fo3script::Action> pendingScriptActions_;
   std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;
   std::unordered_map<uint32_t,fo3script::AnimationRun> scriptAnimations_;

@@ -103,10 +103,31 @@ bool Player::ScriptUnlock(uint32_t id) {
   auto l=GetLock(id);if(!l.known)return false;
   auto& o=state_.locks[id];o.level=l.level;o.change=LockChange::ScriptUnlocked;++revision_;return true;
 }
+int Player::ScriptOpenState(uint32_t id) const {
+  const auto reference=catalog_->references.find(id);
+  if(reference==catalog_->references.end()||!reference->second.valid||
+     !catalog_->HasOpenState(reference->second.base))return 0;
+  const auto placed=catalog_->pipboy.targets.find(id);
+  const auto saved=state_.doorStates.find(id);
+  const bool open=saved!=state_.doorStates.end()?saved->second:
+      placed!=catalog_->pipboy.targets.end()&&placed->second.openByDefault;
+  const auto anim=scriptAnimations_.find(id);
+  if(anim!=scriptAnimations_.end()&&fo3script::Playing(anim->second,scriptRuntimeSeconds_)&&
+     (anim->second.group=="open"||anim->second.group=="close"||
+      anim->second.group=="forward"||anim->second.group=="backward"))return open?2:4;
+  return open?1:3;
+}
 bool Player::ScriptDoorState(uint32_t id,bool open){
   auto reference=catalog_->references.find(id);
-  if(reference==catalog_->references.end()||!reference->second.valid||!catalog_->doorBases.count(reference->second.base))return false;
+  if(reference==catalog_->references.end()||!reference->second.valid||!catalog_->HasOpenState(reference->second.base))return false;
   const auto existing=state_.doorStates.find(id);if(existing!=state_.doorStates.end()&&existing->second==open)return true;
+  if(catalog_->activatorBases.count(reference->second.base)&&scriptAnimationDefinitions_){
+    const auto found=scriptAnimationDefinitions_->find(id);
+    if(found!=scriptAnimationDefinitions_->end()){
+      const auto group=fo3script::OpenStateGroup(found->second,open);
+      if(!group.empty()&&!QueueScriptPlayGroup(id,group,1))return false;
+    }
+  }
   state_.doorStates[id]=open;++revision_;return true;
 }
 bool Player::QueueTerminalBack(uint32_t id){

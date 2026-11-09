@@ -643,6 +643,178 @@ static void OriginalEscapeAmbush(const fo3player::Catalog& catalog){
   }
   std::cout<<"Original radroach ambush advances on its third combat death\n";
 }
+static void OriginalEscapeEncounters(const fo3player::Catalog& original){
+  using namespace fo3player;
+  auto catalog=original;
+  const auto& d=catalog.pipboy;
+  const auto id=[&](const char* name){
+    const auto found=d.formNames.find(name);
+    Check(found!=d.formNames.end(),std::string("missing original form ")+name);
+    return found->second;
+  };
+  const auto quest=id("cg04"),ellen=id("cg04ellendeloriaref"),pistol=id("weap10mmpistol");
+  auto& start=catalog.initial.pipboy.quests[quest];
+  start.stage=15;start.running=true;start.stages={0,4,10,12,15};
+  catalog.initial.referenceEnabled[id("cg04actormarker")]=true;
+  std::string error;
+  const auto at=[&](Player& p,uint32_t ref){
+    Check(d.targets.count(ref)!=0,"missing original placement "+std::to_string(ref));
+    const auto& pose=d.targets.at(ref);p.SetScriptPlayerLocation(pose.x,pose.y,pose.z,pose.cell,pose.world);
+  };
+  const auto commit=[&](Player& p,auto plan){Check(bool(plan),error);Check(p.CommitScriptTransaction(*plan),error);};
+  const auto event=[&](Player& p,uint32_t ref,const char* name,uint32_t activator){
+    commit(p,p.PrepareReferenceEventTransaction(ref,name,activator,error));
+  };
+  const auto stage=[&](Player& p,unsigned n){commit(p,p.PrepareQuestStageTransaction(quest,uint16_t(n),error));};
+  const auto reached=[&](Player& p,unsigned n){return p.Snapshot().pipboy.quests.at(quest).stages.count(n)!=0;};
+  for(bool rescue:{true,false}){
+    Player p(catalog);p.RegisterOriginalActors();
+    p.SetScriptEventDiagnostic([](const std::string& diagnostic){std::cerr<<diagnostic<<"\n";});
+    const auto trigger=std::find_if(d.triggerPrimitives.begin(),d.triggerPrimitives.end(),[&](const auto& entry){
+      return d.targets.count(entry.first)&&d.targets.at(entry.first).base==id("cg04butchtriggerwall");
+    });
+    Check(trigger!=d.triggerPrimitives.end(),"original Butch trigger");
+    at(p,trigger->first);event(p,trigger->first,"OnTriggerEnter",PlayerRef);
+    Check(reached(p,18)&&p.Restrained(ellen),"original trigger restrains Ellen and enables her roaches");
+    stage(p,20);
+    const auto butch=id("cg04butchref"),topic=id(rescue?"cg04butchb1":"cg04butchb3");
+    Check(p.QueueScriptSpeech(butch,topic,PlayerRef,false),"original Butch decision topic");
+    fo3script::Action response;
+    while(p.PollScriptAction(response)&&response.form!=topic){}
+    Check(response.form==topic&&response.info,"authored Butch reply");
+    commit(p,p.PrepareDialogueInfoTransaction(topic,response.info,DialogueScriptPhase::Both,error,butch));
+    Check(reached(p,rescue?21:23),"Butch's dialogue commits the chosen outcome");
+    size_t roaches=0;
+    for(const auto& entry:catalog.actorPlacements){
+      if(entry.second.base!=id("cg04butchradroach"))continue;
+      ++roaches;event(p,entry.first,"OnLoad",0);
+      Check(p.Snapshot().actors.count(entry.first),"roach canonical actor");
+      float perception=0;
+      Check(p.Snapshot().actors.at(entry.first).hostile==ellen&&
+          p.ActorAIValue(entry.first,6,perception)&&perception==10,"roach OnLoad targets Ellen");
+      Check(p.ActorUnarmedDamage(entry.first)>0,"roach has authored bite damage");
+      if(rescue)Check(p.ApplyAttack(PlayerRef,pistol,entry.first,10000),"player kills roach");
+    }
+    Check(roaches==3,"all three original roaches");
+    if(rescue)Check(reached(p,30)&&!p.Restrained(ellen)&&p.ActorHealth(ellen)>0,"surviving Ellen completes the rescue");
+    else {
+      Check(p.ApplyAttack(id("cg04butchradroachref"),pistol,ellen,10000),"roaches kill Ellen");
+      Check(reached(p,31)&&!reached(p,30)&&p.ActorHealth(ellen)==0,"Ellen's death completes the failure branch");
+    }
+  }
+  std::cout<<"Original Butch rescue and failure passed\n";
+  for(bool retainsGun:{false,true}){
+    Player scene(catalog);scene.RegisterOriginalActors();
+    scene.SetScriptEventDiagnostic([](const std::string& diagnostic){std::cerr<<diagnostic<<"\n";});
+    const auto trigger=id("cg04radroachstopboxceast"),amata=id("cg04amataref");
+    const auto overseer=id("cg04overseerref"),mack=id("cg04vault101security03ref");
+    const auto intro=id("cg04amatainterrogationstart"),loopTopic=id("cg04interrogation");
+    if(!retainsGun)stage(scene,8);
+    at(scene,trigger);
+    double now=1;
+    const auto tick=[&](const std::vector<uint32_t>& references){
+      now+=.2;scene.SetScriptRuntimeClock(now,.2);
+      scene.PumpWorldAwareGameMode(.2,references,[&](auto plan){return scene.CommitScriptTransaction(*plan);});
+    };
+    tick({});
+    Check(reached(scene,33),"original CG04 GameMode places Amata for interrogation");
+    event(scene,trigger,"OnTriggerEnter",PlayerRef);
+    Check(reached(scene,35),"original player trigger starts interrogation");
+    const auto& package=d.packages.at(intro);
+    Check(scene.QueueScriptSpeech(amata,package.dialogueTopic,overseer,true,false,intro),"original interrogation conversation package");
+    const auto speak=[&](const fo3script::Action& action){
+      fo3dialogue::Session speech;
+      speech.previewReferences=[](const auto&,const auto&,auto&){return true;};
+      speech.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};
+      fo3dialogue::Context context;context.player=&scene;context.talking=true;
+      Check(fo3dialogue::ReferenceContext(scene,action.reference,context.speaker)&&
+            fo3dialogue::ReferenceContext(scene,action.flags,context.target),"original interrogation speakers");
+      Check(speech.StartSelectedTopic(action.form,action.info,context,scene,action.kind==fo3script::ActionKind::Conversation),
+            "original interrogation INFO");
+      unsigned lines=0;
+      while(speech.phase==fo3dialogue::Phase::Speaking){
+        Check(++lines<=24,"bounded interrogation conversation");
+        speech.AudioDone(speech.audioToken,true,context,scene);
+        if(speech.Active()&&speech.actor!=context.speaker.reference)std::swap(context.speaker,context.target);
+      }
+      if(scene.HasReferenceEvent(action.reference,"SayToDone"))
+        commit(scene,scene.PrepareReferenceEventTransaction(action.reference,"SayToDone",action.flags,error,ScriptProgramCapture::None,action.form));
+      return lines;
+    };
+    fo3script::Action action;
+    while(scene.PollScriptAction(action)&&action.form!=package.dialogueTopic){}
+    Check(action.form==package.dialogueTopic&&speak(action)==5&&reached(scene,36),"original five interrogation lines advance stage 36");
+    bool volley=false;
+    unsigned loopLines=0;
+    for(unsigned i=0;i<40&&!reached(scene,38);++i){
+      tick({});
+      while(scene.PollScriptAction(action)){
+        if(action.kind==fo3script::ActionKind::Conversation||action.kind==fo3script::ActionKind::SayTo){
+          if(action.form==loopTopic)++loopLines;
+          speak(action);
+        }
+        if(action.kind==fo3script::ActionKind::UseWeapon){
+          Check(retainsGun&&action.reference==amata&&action.flags==mack&&action.info==6,"authored Amata firing order");
+          volley=true;
+          const float damage=scene.ActorWeaponDamage(amata);
+          for(unsigned n=0;n<2&&scene.ActorHealth(mack)>0;++n)
+            Check(scene.ApplyAttack(amata,pistol,mack,damage,nullptr,false),"Amata shoots Mack, weapon damage "+std::to_string(damage));
+          Check(scene.ActorHealth(mack)==0,"Mack's authored OnHit kills him");
+        }
+      }
+      if(!retainsGun&&loopLines>=3){
+        scene.SetScriptActorDetectedPlayer(overseer,true);
+        event(scene,overseer,"GameMode",0);
+      }
+    }
+    Check(loopLines>=3&&reached(scene,38)&&volley==retainsGun,"authored interrogation reaches the correct interruption or gun outcome");
+  }
+  std::cout<<"Original interrogation opening, loop, interruption and gun outcome passed\n";
+
+  Player p(catalog);p.RegisterOriginalActors();
+  const auto jonas=id("cg04jonasref"),desk=id("vault101overseerdeskref"),terminal=id("cg04overseersterminalref");
+  const auto panel=id("cg04controlpanelvault01ref"),gear=id("cg04vaultgeardoorref");
+  Check(p.ActorHealth(jonas)==0&&p.CanLootContainer(jonas)&&p.PrepareContainer(jonas),"Jonas starts dead and can be looted");
+  Check(p.ScriptItemCount(jonas,id("cg04dadnote"))==1,"Jonas carries Dad's original note");
+  const auto save="/tmp/fq-escape-"+std::to_string(getpid());
+  auto legacy=p.Snapshot().actors.at(jonas);legacy.dead=false;legacy.position[0]+=128;
+  Check(p.UpdateActor(jonas,legacy)&&p.Save(save,error),error);
+  Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
+  restored.RegisterOriginalActors();
+  Check(restored.ActorHealth(jonas)==0&&restored.Snapshot().actors.at(jonas).position[0]==d.targets.at(jonas).x,"old save restores Jonas to the authored corpse placement");
+  std::cout<<"Original Jonas corpse and note passed\n";
+  auto animations=std::make_shared<fo3script::AnimationRegistry>();
+  (*animations)[panel]={{"Left",.5,false}};
+  (*animations)[desk]={{"Open",.5,false},{"Close",.5,false}};
+  (*animations)[gear]={{"Open",5,false},{"Close",5,false}};
+  p.SetScriptAnimationRegistry(animations);
+  const auto doorSwitch=id("cg04overseersecretdoorswitch");
+  const auto menu=catalog.references.at(terminal).base;
+  const auto& entries=d.terminals.at(menu).entries;
+  const auto select=[&](const char* text){
+    const auto entry=std::find_if(entries.begin(),entries.end(),[&](const auto& e){return e.text==text;});
+    Check(entry!=entries.end(),"original Overseer's terminal entry");
+    commit(p,p.PrepareTerminalTransaction(terminal,menu,size_t(entry-entries.begin()),error));
+  };
+  at(p,terminal);Check(p.ScriptUnlock(terminal),"access terminal with its password");
+  Check(p.ScriptOpenState(desk)==3,"desk starts closed");
+  p.SetScriptRuntimeClock(1,.1);select("Open Overseer's Tunnel");
+  Check(p.ScriptOpenState(desk)==2&&p.ScriptOpenState(doorSwitch)==1&&reached(p,120),"terminal opens the desk and advances CG04");
+  p.SetScriptRuntimeClock(2,.1);select("Close Overseer's Tunnel");
+  p.SetScriptRuntimeClock(3,.1);select("Open Overseer's Tunnel");
+  Check(p.Save(save,error),error);Check(restored.Restore(save,error),error);unlink(save.c_str());
+  Check(restored.ScriptOpenState(desk)==1&&restored.ScriptOpenState(doorSwitch)==1,"authored tunnel open state survives save/load");
+  at(p,panel);event(p,panel,"OnActivate",PlayerRef);
+  Check(reached(p,140)&&p.ScriptOpenState(gear)==3,"original control pod starts before its linked door");
+  p.SetScriptRuntimeClock(4,.1);event(p,panel,"GameMode",0);
+  Check(p.ScriptOpenState(gear)==2,"pod activates the linked vault door");
+  for(unsigned tick=0;tick<70&&!reached(p,144);++tick){
+    p.SetScriptRuntimeClock(4+tick*.1,.1);
+    p.PumpWorldAwareGameMode(.1,{},[&](auto plan){return p.CommitScriptTransaction(*plan);});
+  }
+  Check(reached(p,142)&&reached(p,144)&&p.ScriptOpenState(gear)==1,"authored vault door reaches Amata's farewell stage");
+  std::cout<<"Original Butch decisions, Jonas corpse and note, Overseer's terminal and vault door passed\n";
+}
 static void OriginalHallway(const fo3player::Catalog& original){
   auto catalog=original;const auto& d=catalog.pipboy;
   const auto quest=d.formNames.at("cg03"),amata=d.formNames.at("cg03amataref");
@@ -1058,6 +1230,7 @@ int main(int argc,char** argv){
   Synthetic();HeadingAngles();TagSkills();ScriptMathAndPrompts();NestedActivation();ActorFurniture();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
+  if(argc>2&&std::string(argv[2])=="--escape-encounters"){OriginalEscapeEncounters(catalog);return 0;}
   if(argc>2&&std::string(argv[2])=="--escape-exit"){OriginalEscapeExit(catalog);return 0;}
   if(argc>2&&std::string(argv[2])=="--escape-ambush"){OriginalEscapeAmbush(catalog);return 0;}
   if(argc>2&&std::string(argv[2])=="--exam"){OriginalHallway(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);return 0;}
@@ -1091,6 +1264,6 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);OriginalHallway(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);
-  OriginalEscapeAmbush(catalog);OriginalEscapeExit(catalog);
+  OriginalEscapeAmbush(catalog);OriginalEscapeEncounters(catalog);OriginalEscapeExit(catalog);
   std::cout<<"Original birth, playpen, birthday, intercom, target practice, photo, age jumps and G.O.A.T., both sex branches, package callbacks, heading, inventory and saves passed\n";
 }

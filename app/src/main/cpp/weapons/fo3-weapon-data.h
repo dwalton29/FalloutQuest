@@ -52,6 +52,8 @@ struct Definitions {
   struct Actor {
     uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;
     int32_t health=0;uint8_t endurance=0,perception=0;bool creature=false;
+    int16_t creatureDamage=0;
+    uint8_t creatureReach=0;
     std::array<uint8_t,14> skills{};
   };
   // FO3 CSSD, not the shorter/different FNV combat-style layout.

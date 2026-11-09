@@ -24,9 +24,13 @@ static fo3anim::Matrix Q230WeaponMatrix(Q230ActorVisual& actor) {
     fo3anim::Multiply(actor.rigs[0].scenePlacement,actor.pose.global[bone])),fo3anim::Multiply(inverseBasis,offset));
 }
 static void Q230RenderWeapon(Q230ActorVisual& actor,bool alpha) {
-  if(!gPlayerSession||actor.runtime.activity!=fo3npc::Activity::Combat)return;
-  const auto* owned=gPlayerSession->player.ActorWeapon(actor.source.refFormId);
-  if(!owned||actor.runtime.equippedWeapon!=owned->id)return;
+  if(!gPlayerSession)return;
+  const auto& player=gPlayerSession->player;
+  const auto state=player.Snapshot().actors.find(actor.source.refFormId);
+  const bool alert=state!=player.Snapshot().actors.end()&&state->second.alert&&!state->second.dead;
+  if(!alert&&actor.runtime.activity!=fo3npc::Activity::Combat)return;
+  const auto* owned=player.ActorWeapon(actor.source.refFormId);
+  if(!owned||(!alert&&actor.runtime.equippedWeapon!=owned->id))return;
   const auto prepared=actor.combatWeapons.find(owned->formId);if(prepared==actor.combatWeapons.end())return;
   const auto transform=Q230WeaponMatrix(actor);
   for(size_t index:prepared->second.gpu){auto& o=actor.objects[index];if(o.alphaBlend!=alpha)continue;
@@ -111,7 +115,9 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
     saved.packageWaitSeconds=actor.runtime.activity==fo3npc::Activity::Combat?actor.runtime.suspendedPackageWait:
       (actor.aiPathGame.empty()?float(std::max(0.,actor.aiRepathAt-std::max(0.,actor.aiLastUpdate))):0);
   const auto old=p.Snapshot().actors.find(actor.source.refFormId);
-  saved.hostile=old==p.Snapshot().actors.end()?0:old->second.hostile;
+  if(old!=p.Snapshot().actors.end()){
+    saved.hostile=old->second.hostile;saved.alert=old->second.alert;saved.weaponLocked=old->second.weaponLocked;
+  }
   saved.dead=(old!=p.Snapshot().actors.end()&&old->second.dead)||(p.ActorHealth(actor.source.refFormId)==0&&!p.Essential(actor.source.refFormId));
   const auto* weapon=p.ActorWeapon(actor.source.refFormId);saved.equippedWeapon=weapon?weapon->id:0;
   p.UpdateActor(actor.source.refFormId,saved);
@@ -164,6 +170,8 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
   float best=-1;uint64_t selected=0;uint32_t form=0;
   for(const auto& s:*contents){const auto prepared=actor.combatWeapons.find(s.formId);
     if(prepared==actor.combatWeapons.end()||!prepared->second.ready||prepared->second.gpu.empty()||s.condition<=0)continue;
+    const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
+    if(current&&saved!=p.Snapshot().actors.end()&&saved->second.weaponLocked&&s.id!=current->id)continue;
     const auto& d=prepared->second.definition;const bool ranged=d.Firearm();
     if(style&&((style->restrictions==1&&ranged)||(style->restrictions==2&&!ranged)))continue;
     if(ranged&&!s.loadedRounds){bool reserve=false;for(const auto& ammo:*contents)if(ammo.formId==d.ammo&&ammo.count>=d.ammoUse)reserve=true;if(!reserve)continue;}
@@ -390,6 +398,9 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     }
     return;
   }
+  const auto alert=p.Snapshot().actors.find(actor.source.refFormId);
+  if(alert!=p.Snapshot().actors.end()&&alert->second.alert&&!p.ActorWeapon(actor.source.refFormId))
+    Q230SelectWeapon(actor);
   if(p.Restrained(actor.source.refFormId)){s.speed=0;s.animation=fo3npc::Animation::Idle;return;}
   const bool reloadAdvanced=Q230AdvanceReload(actor,now);
   // Preserve an authored short hit response before selecting the next combat action.
@@ -397,6 +408,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   auto ai=fo3npc::AI(c.pipboy,actor.source.baseFormId,[&](uint32_t list){return p.ActorTemplate(actor.source.refFormId,list);});
   float scriptedAI=0;
   if(p.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|0u)&&p.ActorAIValue(actor.source.refFormId,0,scriptedAI))ai.aggression=uint8_t(scriptedAI);
+  if(p.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|1u)&&p.ActorAIValue(actor.source.refFormId,1,scriptedAI))ai.confidence=uint8_t(scriptedAI);
   if(p.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|57u)&&p.ActorAIValue(actor.source.refFormId,57,scriptedAI))ai.assistance=uint8_t(scriptedAI);
   if(!ai.valid){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported AIDT");return;}
   if(now>=s.nextThink){
@@ -647,7 +659,10 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   }
   bool ready=ranged?fo3npc::FireReady(s,d,now,style):now>=s.nextAttack;
   if(ready){
-    const auto& clip=weapon.clips[1];float hit=0;for(const auto& key:clip.textKeys)if(key.text=="Hit"){hit=key.time;break;}
+    const auto& clip=weapon.clips[1];float hit=0;
+    for(const auto& key:clip.textKeys)if(key.text=="Hit"){
+      hit=actor.source.creature?(key.time-clip.start)/clip.frequency:key.time;break;
+    }
     s.actionStart=s.lastActionTime=now;s.pendingHit=now+hit;s.pendingAttack=true;
     s.actionUntil=now+(ranged?std::max(hit,fo3npc::ShotInterval(d,style)):(clip.stop-clip.start)/std::max(.01f,d.attackMult));
     if(!ranged)s.nextAttack=s.actionUntil;

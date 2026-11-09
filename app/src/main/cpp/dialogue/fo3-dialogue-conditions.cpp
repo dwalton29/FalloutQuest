@@ -68,7 +68,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
-      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=159&&c.function!=160)){error="reference context unavailable";return false;}
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=47&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=157&&c.function!=159&&c.function!=160)){error="reference context unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}
@@ -98,8 +98,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 84:return DeadCount(p,c.a,value,error);
   case 46:{const float health=pc?p.Health():p.ActorHealth(who.reference);if(health<0){error="actor health unavailable";return false;}value=health<=0;return true;}
   case 47:
-    if(!pc){error="NPC inventory state unavailable";return false;}
-    value=0;for(auto& s:state.inventory)if(s.formId==c.a)value+=s.count;return true;
+    value=p.ScriptItemCount(who.reference,c.a);
+    if(value<0){error="reference inventory state unavailable";return false;}
+    return true;
   case 50:value=state.pipboy.talkedActors.count(who.reference);return true;
   case 53:case 79: {auto key=VariableKey(d,c.a,c.b,c.function==79);if(!key){error="script variable unavailable";return false;}
     if(ctx.activationVariables){auto v=ctx.activationVariables->find(key);if(v!=ctx.activationVariables->end()){value=v->second;return true;}}
@@ -124,6 +125,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 131:value=uint32_t(p.PlayerFemale())==c.a;return true;
   case 136:value=who.reference==c.a;return true;
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
+  case 157:value=p.ScriptOpenState(who.reference);return true;
   case 159:case 160:{uint32_t ref=0;uint8_t marker=0,sitting=0;if(!p.ScriptFurniture(who.reference,ref,marker,sitting)){error="actor furniture observation unavailable";return false;}value=c.function==159?sitting:marker;return true;}
   case 161:if(!who.packageKnown){error="package not executing";return false;}value=who.package==c.a;return true;
   case 182:{

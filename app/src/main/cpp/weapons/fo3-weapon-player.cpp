@@ -1,3 +1,4 @@
+#include "player/fo3-actor-values.h"
 #include "player/fo3-player-state.h"
 #include <algorithm>
 #include <cmath>
@@ -292,6 +293,28 @@ bool Player::SetActorVariable(uint32_t reference,uint32_t slot,float value){
   float old=0;if(!std::isfinite(value)||!ActorVariable(reference,slot,old))return false;
   if(old!=value){state_.actorVariables[reference][slot]=value;++revision_;}return true;
 }
+bool Player::SetActorAlert(uint32_t reference,bool alert){
+  const auto actor=state_.actors.find(reference);
+  if(actor==state_.actors.end())return false;
+  auto state=actor->second;state.alert=alert;return UpdateActor(reference,state);
+}
+int32_t Player::ScriptItemCount(uint32_t reference,uint32_t form) const {
+  if(!catalog_->items.count(form))return -1;
+  if(reference==PlayerRef)return ItemCount(form);
+  const auto* contents=ContainerContents(reference);
+  if(!contents){
+    const auto placed=catalog_->references.find(reference);
+    if(placed==catalog_->references.end())return -1;
+    const auto inventory=catalog_->actorInventories.find(placed->second.base);
+    if(inventory==catalog_->actorInventories.end())return -1;
+    int32_t count=0;
+    for(const auto& entry:inventory->second.entries)if(entry.form==form)count+=entry.count;
+    return count;
+  }
+  int32_t count=0;
+  for(const auto& entry:*contents)if(entry.formId==form)count+=entry.count;
+  return count;
+}
 bool Player::KillActor(uint32_t reference){
   if(Essential(reference)||ActorHealth(reference)<0)return false;
   auto it=state_.actors.find(reference);if(it==state_.actors.end())return false;
@@ -335,18 +358,21 @@ bool Player::SetEssential(uint32_t base,bool essential){
   return true;
 }
 bool Player::ActorAIValue(uint32_t reference,uint32_t valueId,float& value) const {
-  if(valueId!=0&&valueId!=57)return false;
+  const int maximum=fo3av::AIMax(valueId);if(maximum<0)return false;
   const auto found=state_.actorAIValues.find((uint64_t(reference)<<32)|valueId);
   if(found!=state_.actorAIValues.end())value=found->second;
-  else{
+  else if(valueId==6){
+    const auto* actor=ActorStatistics(reference);if(!actor)return false;
+    value=actor->perception;
+  }else{
     const auto* actor=ActorCategory(reference,8);
     if(!actor||actor->aiData.size()!=20)return false;
-    value=actor->aiData[valueId==0?0:14];
+    value=actor->aiData[valueId==57?14:valueId];
   }
-  return std::isfinite(value)&&value>=0&&value<=(valueId==0?3:2);
+  return std::isfinite(value)&&value>=0&&value<=maximum;
 }
 bool Player::SetActorAIValue(uint32_t reference,uint32_t valueId,float value){
-  float old=0;if(!catalog_->actorPlacements.count(reference)||(valueId!=0&&valueId!=57)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(valueId==0?3:2)||!RealizeActor(reference)||
+  float old=0;if(!catalog_->actorPlacements.count(reference)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>fo3av::AIMax(valueId)||!RealizeActor(reference)||
       !ActorAIValue(reference,valueId,old))return false;
   if(old!=value){state_.actorAIValues[(uint64_t(reference)<<32)|valueId]=value;++revision_;}
   return true;
@@ -429,7 +455,7 @@ float Player::ActorLimbCondition(uint32_t reference,uint8_t part) const {
   return found==state_.actorLimbDamage.end()?1.f:1.f-found->second;
 }
 bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float damage,
-                         const fo3weapon::BodyPart* part) {
+                         const fo3weapon::BodyPart* part,bool provoke) {
   const auto weapon=catalog_->items.find(base);const float health=ActorHealth(target);
   if(attacker==target||weapon==catalog_->items.end()||!weapon->second.weapon.valid||health<=0||!std::isfinite(damage)||damage<=0)return false;
   if(attacker!=0x14&&ActorHealth(attacker)<0)return false;
@@ -449,7 +475,7 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
     }
   }
   total+=applied;
-  SetActorHostile(target,attacker);
+  if(provoke)SetActorHostile(target,attacker);
   const bool died=applied>=health&&!Essential(target);
   if(died){if(auto* actor=state_.actors.Edit(target)){actor->dead=true;actor->packageWaitSeconds=0;}}
   ++revision_;
@@ -481,8 +507,8 @@ bool Player::UpdateActor(uint32_t reference,const ActorState& incoming) {
   const auto old=state_.actors.find(reference);
   bool poseOnly=false;
   if(old!=state_.actors.end()){const auto& o=old->second;
-    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.packageWaitSeconds==a.packageWaitSeconds&&o.corpse==a.corpse)return true;
-    poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead;
+    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked&&o.packageWaitSeconds==a.packageWaitSeconds&&o.corpse==a.corpse)return true;
+    poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked;
   }else if(state_.actors.size()>=10000)return false;
   state_.actors[reference]=a;++revision_;if(poseOnly)++actorPoseRevisions_;return true;
 }
@@ -530,8 +556,21 @@ const Stack* Player::ActorWeapon(uint32_t reference) const {
   for(const auto& s:*c)if(s.equipped&&catalog_->items.at(s.formId).kind==ItemKind::Weapon)return &s;
   return nullptr;
 }
+bool Player::ScriptEquipActorWeapon(uint32_t reference,uint32_t form,bool locked){
+  if(!PrepareActorInventory(reference))return false;
+  const auto* contents=ContainerContents(reference);if(!contents)return false;
+  for(const auto& item:*contents)if(item.formId==form&&item.condition>0){
+    const auto instance=item.id;
+    if(!EquipActorWeapon(reference,instance))return false;
+    auto actor=state_.actors.at(reference);actor.weaponLocked=locked;return UpdateActor(reference,actor);
+  }
+  return false;
+}
 bool Player::EquipActorWeapon(uint32_t reference,uint64_t instance) {
   if(ActorHealth(reference)<=0)return false;
+  const auto state=state_.actors.find(reference);
+  if(state!=state_.actors.end()&&state->second.weaponLocked&&state->second.equippedWeapon&&
+     state->second.equippedWeapon!=instance)return false;
   auto c=state_.containers.find(reference);if(c==state_.containers.end())return false;
   auto s=std::find_if(c->second.begin(),c->second.end(),[&](const Stack& v){return v.id==instance;});
   if(s==c->second.end()||catalog_->items.at(s->formId).kind!=ItemKind::Weapon||s->condition<=0)return false;
@@ -554,7 +593,8 @@ float Player::ActorUnarmedDamage(uint32_t reference) const {
     if(!ActorValue(reference,45,skill))return 0;
   }else{
     const auto* actor=ActorStatistics(reference);
-    if(!actor||actor->creature)return 0;
+    if(!actor)return 0;
+    if(actor->creature)return std::max(0,int(actor->creatureDamage));
     skill=actor->skills[13];
   }
   const auto& settings=catalog_->weapons;

@@ -13180,8 +13180,8 @@ void Q230PumpNpcArrivals(){
     }
     if(!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return;
     auto& player=gPlayerSession->player;
-    const auto isResident=[&](const fo3player::ActorState& s){
-        return (!s.dead||s.corpse)&&Q230ActorResident(s);
+    const auto isResident=[&](uint32_t ref,const fo3player::ActorState& s){
+        return (!s.dead||s.corpse||player.Definitions().AuthoredCorpse(ref))&&Q230ActorResident(s);
     };
     const auto enabled=[&](uint32_t id){bool disabled=true;std::string error;return player.ReferenceDisabled(id,disabled,error)&&!disabled;};
     const auto alreadyVisible=[&](uint32_t id){
@@ -13202,7 +13202,7 @@ void Q230PumpNpcArrivals(){
             }else ++i;
         }
         for(const auto& entry:player.Snapshot().actors)
-            if(isResident(entry.second)&&enabled(entry.first)&&!alreadyVisible(entry.first)&&
+            if(isResident(entry.first,entry.second)&&enabled(entry.first)&&!alreadyVisible(entry.first)&&
                !work.requested.count(entry.first)&&retryAfter[entry.first]<=now)work.pending.insert(entry.first);
     }
     if(work.active){
@@ -13215,7 +13215,7 @@ void Q230PumpNpcArrivals(){
         if(work.actorIndex<actors.size()){
             auto& actor=actors[work.actorIndex];
             const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
-            if(saved==player.Snapshot().actors.end()||!isResident(saved->second)||!enabled(actor.source.refFormId)||
+            if(saved==player.Snapshot().actors.end()||!isResident(actor.source.refFormId,saved->second)||!enabled(actor.source.refFormId)||
                 alreadyVisible(actor.source.refFormId)){
                 Q74DeleteGpuObjects(actor.objects);
                 for(const auto& entry:actor.generatedTextures)
@@ -13301,7 +13301,7 @@ void Q230PumpNpcArrivals(){
     std::unordered_set<uint32_t> refs;
     for(uint32_t id:work.pending){
         const auto it=player.Snapshot().actors.find(id);
-        if(it==player.Snapshot().actors.end()||!isResident(it->second)||!enabled(id)||alreadyVisible(id))continue;
+        if(it==player.Snapshot().actors.end()||!isResident(id,it->second)||!enabled(id)||alreadyVisible(id))continue;
         if(!player.RealizeActor(id)){retryAfter[id]=now+30.;continue;}
         saved.emplace(id,it->second);refs.insert(id);retryAfter[id]=now+30.;
     }

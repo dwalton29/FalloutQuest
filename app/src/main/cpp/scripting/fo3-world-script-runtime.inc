@@ -10,6 +10,7 @@ struct Animation {
     std::shared_ptr<const fo3dooranim::Asset> asset;
     int clip=-1;double started=0,lastCollision=-1,lastSound=-1,presentationTime=0;bool settled=false;
     fo3anim::Pose pose;
+    int appliedOpenState=-1;
     std::vector<bool> visible;
     std::vector<size_t> shapes;
 };
@@ -42,6 +43,8 @@ uint32_t SpeechLookTarget(uint32_t actor){
 }
 static fo3dialogue::Panel scriptSubtitle;
 static std::vector<fo3script::Action> speechPending,hitPending;
+struct ScriptVolley {uint32_t source=0,target=0,weapon=0,remaining=0;double next=0;};
+static std::vector<ScriptVolley> volleys;
 static uint32_t speechSerial=0;
 static uint64_t speechGeneration=~uint64_t{0};
 bool OwnsSpeechResultAdmission(bool admitting,uint64_t ticket){
@@ -317,7 +320,10 @@ void SpeechTick(){
 void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
-    if(actorRegistryRevision!=gQ230NpcResidenceRevision||registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration())player.ClearScriptActorFurniture();
+    if(actorRegistryRevision!=gQ230NpcResidenceRevision||registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){
+        player.ClearScriptActorFurniture();
+        player.ClearScriptActorDetection();
+    }
     for(const auto& actor:gQ230NpcActors){
         if(actor.runtime.offScene){player.SetScriptActorFurniture(actor.source.refFormId,0,0,255);continue;}
         const auto& furniture=actor.runtime.furniture;const auto* slot=furniture.Selected();
@@ -329,7 +335,7 @@ void Register(){
         player.SetScriptActorFurniture(actor.source.refFormId,ref,marker,sitting);
     }
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -419,6 +425,32 @@ void TriggerTick(){
         if(Fo3ResidentFrameBlocked())return;
     }
 }
+static void AdvanceVolleys(fo3player::Player& player){
+    for(auto it=volleys.begin();it!=volleys.end();){
+        auto& volley=*it;
+        if(seconds<volley.next){++it;continue;}
+        const auto* shooter=DialogueActor(volley.source);
+        const auto* target=DialogueActor(volley.target);
+        const auto* owned=player.ActorWeapon(volley.source);
+        if(!shooter||shooter->runtime.offScene||!target||target->runtime.offScene||
+           !owned||owned->formId!=volley.weapon||player.ActorHealth(volley.target)<=0){
+            it=volleys.erase(it);continue;
+        }
+        const auto& weapon=player.Definitions().items.at(volley.weapon).weapon;
+        const auto instance=owned->id;
+        if(!player.FireActorWeapon(volley.source,instance)){
+            if(!player.ReloadActorWeapon(volley.source,instance)){
+                it=volleys.erase(it);continue;
+            }
+            volley.next=seconds+std::max(.1f,weapon.reloadTime);++it;continue;
+        }
+        fo3audio::SoundEvent(weapon.fire3D);
+        const auto damage=player.ActorWeaponDamage(volley.source);
+        player.ApplyAttack(volley.source,volley.weapon,volley.target,damage,nullptr,false);
+        if(!--volley.remaining||player.ActorHealth(volley.target)<=0)it=volleys.erase(it);
+        else {volley.next=seconds+1./std::max(1.f,weapon.shotsPerSecond);++it;}
+    }
+}
 void Actions(){
     Hits();if(Fo3ResidentFrameBlocked())return;
     auto& player=gPlayerSession->player;fo3script::Action action;
@@ -452,6 +484,8 @@ void Actions(){
                 actor->runtime.scriptLookRotateBody=target.rotateBody;
             }
         }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
+        }else if(action.kind==fo3script::ActionKind::UseWeapon){
+            if(volleys.size()<16)volleys.push_back({action.reference,action.flags,action.form,action.info,seconds});
         }else if(action.kind==fo3script::ActionKind::WeaponHit){
             if(hitPending.size()<256)hitPending.push_back(action);
             else Q6H_LOGW("SCRIPT WEAPON HIT QUEUE FULL ref=%08X",action.reference);
@@ -479,11 +513,18 @@ void Actions(){
             const auto i=animations.find(action.reference);if(i==animations.end())continue;
             auto& state=i->second;
             for(size_t c=0;c<state.asset->clips.size();++c)if(fo3dooranim::EqualName(state.asset->clips[c].name,action.group.c_str())){
+                const auto desired=player.Snapshot().doorStates.find(action.reference);
+                if(desired!=player.Snapshot().doorStates.end()){
+                    const auto open=desired->second;
+                    const auto group=fo3script::Lower(action.group);
+                    if(group==(open?"open":"close")||group==(open?"forward":"backward"))state.appliedOpenState=open;
+                }
                 state.clip=int(c);state.started=action.started;state.lastCollision=-1;state.lastSound=-1;state.presentationTime=0;state.settled=false;
                 fo3anim::BindClip(state.asset->hierarchy,state.asset->clips[c],state.pose);break;
             }
         }
     }
+    AdvanceVolleys(player);
 }
 // A rendered menu freezes the game clock. Only its own physical display may
 // finish opening on presentation time. A restored menu reposes its display
@@ -508,11 +549,26 @@ void Animate(){
     // OnLoad/GameMode actions can publish a new visual inventory after the
     // frame's initial Register. Revalidate cached shape slots before use.
     Register();
+    auto& player=gPlayerSession->player;
     for(auto& entry:animations){auto& state=entry.second;const auto& asset=*state.asset;
+        const auto desired=player.Snapshot().doorStates.find(entry.first);
+        if(desired!=player.Snapshot().doorStates.end()&&state.appliedOpenState!=int(desired->second)){
+            state.appliedOpenState=desired->second;
+            // A saved or newly streamed door needs its settled pose, including collision.
+            for(const char* name:{desired->second?"Open":"Close",desired->second?"Forward":"Backward"}){
+                const auto clip=std::find_if(asset.clips.begin(),asset.clips.end(),[&](const auto& c){
+                    return c.cycle==2&&c.frequency>0&&fo3dooranim::EqualName(c.name,name);
+                });
+                if(clip==asset.clips.end())continue;
+                state.clip=int(clip-asset.clips.begin());state.started=seconds;state.settled=false;
+                state.presentationTime=(clip->stop-clip->start)/clip->frequency;
+                state.lastSound=state.presentationTime;state.lastCollision=-1;
+                fo3anim::BindClip(asset.hierarchy,*clip,state.pose);break;
+            }
+        }
         if(state.clip<0||state.settled)continue;
         const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started+state.presentationTime);
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
-        auto& player=gPlayerSession->player;
         const auto* first=state.shapes.empty()?nullptr:&gObjects[state.shapes.front()];
         bool disabled=true;std::string soundError;
         // A controller sequence can survive a resident visual refresh. Only
