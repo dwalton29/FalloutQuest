@@ -7,9 +7,19 @@
 namespace fo3animsound {
 inline uint32_t Resolve(const fo3pipdata::Definitions& d,std::string key){
   for(auto& c:key)c=char(std::tolower(static_cast<unsigned char>(c)));
-  if(key.rfind("sound:",0)==0)key.erase(0,6);
+  const bool command=key.rfind("sound:",0)==0;
+  if(command)key.erase(0,6);
   const auto first=key.find_first_not_of(" \t\r\n");if(first==std::string::npos)return 0;
   key=key.substr(first,key.find_last_not_of(" \t\r\n")-first+1);
+  // World NIF keys can append the name of the emitting SoundNode.
+  if(command){
+    const auto separator=key.find_first_of(" \t");
+    if(separator!=std::string::npos){
+      const auto emitter=key.find_first_not_of(" \t",separator);
+      if(emitter!=std::string::npos&&key.compare(emitter,9,"soundnode")==0&&
+         key.find_first_of(" \t",emitter)==std::string::npos)key.resize(separator);
+    }
+  }
   const auto name=d.formNames.find(key);
   return name!=d.formNames.end()&&d.sounds.count(name->second)?name->second:0;
 }

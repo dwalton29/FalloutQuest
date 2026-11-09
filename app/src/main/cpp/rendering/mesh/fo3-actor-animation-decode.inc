@@ -357,11 +357,14 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
         else {
           // World props can still run their authored rigid motion and visibility
           // when their mesh morphs or particle emitter tuning are unavailable.
-          const bool optional=type=="NiGeomMorpherController"||
-              type=="NiPSysEmitterLifeSpanCtlr"||type=="NiPSysEmitterSpeedCtlr";
-          if(!allowOptionalEffects||!optional||controller>=h.numBlocks||
-             BlockType(h,controller)!=type||interp>=h.numBlocks||
-             BlockType(h,interp)!="NiFloatInterpolator")++clip.ignoredControllers;
+          const auto& interpolator=BlockType(h,interp);
+          const bool optionalFloat=interpolator=="NiFloatInterpolator"&&
+              (type=="NiGeomMorpherController"||type=="NiPSysEmitterLifeSpanCtlr"||
+               type=="NiPSysEmitterSpeedCtlr");
+          const bool optionalParticleModifier=type=="NiPSysModifierActiveCtlr"&&
+              interpolator=="NiBoolTimelineInterpolator";
+          if(!allowOptionalEffects||(!optionalFloat&&!optionalParticleModifier)||
+             controller>=h.numBlocks||BlockType(h,controller)!=type)++clip.ignoredControllers;
         }
         continue;
       }

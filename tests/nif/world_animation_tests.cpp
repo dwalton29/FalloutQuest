@@ -2,6 +2,7 @@
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp"
 #include "world/interaction/fo3-door-nif-animation.h"
 #include "world/interaction/fo3-door-activation.h"
+#include "audio/fo3-animation-sounds.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -40,6 +41,12 @@ static void VisibilityAdmissionTests(){
 }
 int main(int argc,char** argv){
   VisibilityAdmissionTests();
+  fo3pipdata::Definitions audio;
+  audio.formNames["originaldoor"]=42;audio.sounds[42]="sound/original.wav";
+  assert(fo3animsound::Resolve(audio,"sound: OriginalDoor SoundNodeMainDoor")==42);
+  assert(fo3animsound::Resolve(audio,"OriginalDoor")==42);
+  assert(!fo3animsound::Resolve(audio,"sound: OriginalDoor unsupported argument"));
+
   if(argc==3&&std::string(argv[1])=="--doors"){
     const std::string root=argv[2];std::vector<Fo3StaticNifMesh> visible,proxy;
     const auto generic=root+"/gendoor01.nif";
@@ -71,6 +78,27 @@ int main(int argc,char** argv){
     assert(LoadFalloutMeshFile(root+"/specialidle_cutcake.kf",bytes,nullptr));
     fo3anim::Clip cutting;assert(fo3anim::DecodeClip(bytes,cutting)&&!cutting.tracks.empty()&&cutting.stop>cutting.start);
     std::cout<<"Original cake rigid transforms and visibility, plus Andy's cutting KF, decode and sample\n";
+    return 0;
+  }
+  if(argc==3&&std::string(argv[1])=="--escape-doors"){
+    const std::string root=argv[2];
+    const std::pair<const char*,const char*> doors[]={
+      {"vrmoverseerdesk01.nif","FloorChunk"},{"vgeardoor01.nif","VGearDoor01b"}
+    };
+    for(const auto& [model,node]:doors){
+      const auto path=root+"/"+model;std::vector<uint8_t> bytes;
+      assert(LoadFalloutMeshFile(path,bytes,nullptr));
+      fo3anim::Skeleton hierarchy;std::vector<int> blocks;std::vector<fo3anim::Clip> clips;
+      assert(fo3anim::DecodeObjectAnimation(bytes,hierarchy,blocks,clips,true));
+      fo3dooranim::Asset door;
+      assert(fo3dooranim::Configure(std::move(hierarchy),std::move(blocks),std::move(clips),door,true));
+      fo3anim::Pose open,closed;
+      assert(fo3dooranim::Sample(door,true,fo3dooranim::Duration(door,true),open));
+      assert(fo3dooranim::Sample(door,false,fo3dooranim::Duration(door,false),closed));
+      const auto bone=fo3anim::FindBone(door.hierarchy,node);
+      assert(bone>=0&&open.delta[bone]!=closed.delta[bone]);
+    }
+    std::cout<<"Original desk and vault gear motion passed\n";
     return 0;
   }
   if(argc==3&&std::string(argv[1])=="--vault"){
