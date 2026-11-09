@@ -5,6 +5,7 @@
 #include "weapons/fo3-vats-state.h"
 #include "weapons/fo3-weapon-holsters.h"
 #include "weapons/fo3-reload-policy.h"
+#include "weapons/fo3-unarmed-gesture.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -312,7 +313,30 @@ void VatsTests(){
   assert(restored.ActionPoints()==33&&restored.ActorLimbCondition(200,1)==.5f);
   assert(restored.ResetActorHealth(200)&&restored.ActorLimbCondition(200,1)==1);
 }
+static void UnarmedGesture(){
+  fo3unarmed::Hand left,right;
+  assert(!left.Advance(1.,0,{0,0,0}));
+  assert(!left.Advance(1.02,0,{.08f,0,0})); // Open hand.
+  assert(!left.Advance(1.04,1,{.16f,0,0})); // Closing grip is not a strike.
+  assert(!left.Advance(1.06,1,{.17f,0,0})); // Walking or resting grip.
+  const auto strike=left.Advance(1.08,1,{.23f,0,0});
+  assert(strike&&strike->x>.05f);
+  left.Impact(*strike);
+  assert(!right.Advance(1.08,1,{0,0,0}));
+  assert(right.Advance(1.10,1,{.06f,0,0})); // Independent hands.
+  assert(!left.Advance(1.10,1,{.29f,0,0}));
+  assert(!left.Advance(1.18,1,{.30f,0,0}));
+  assert(!left.Advance(1.26,1,{.30f,0,0}));
+  assert(!left.Advance(1.28,1,{.35f,0,0})); // Same swing cannot hit again.
+  assert(!left.Advance(1.36,1,{.13f,0,0})); // Pullback rearms the fist.
+  assert(left.Advance(1.38,1,{.20f,0,0}));
+  left.Reset();
+  assert(!left.Advance(2.0,1,{10,0,0})); // Tracking recovery only seeds history.
+  assert(!left.Advance(2.02,1,{11,0,0})); // Discontinuous tracking jump.
+  assert(!left.Advance(3.0,1,{11.1f,0,0})); // An unsampled interval is not a swing.
+}
 int main(int argc,char**argv) {
+  UnarmedGesture();
   ReloadTests();
   VatsTests();
   BodyAccess();

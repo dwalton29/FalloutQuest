@@ -1419,7 +1419,7 @@ private:
         XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
         sync.countActiveActionSets = 1;
         sync.activeActionSets = &active;
-        pipLeftGripTracked_=pipLeftAimTracked_=false;
+        gripHandTracked_={};pipLeftAimTracked_=false;
         if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) {
             for(int hand=0;hand<2;hand++)handPoseValid_[hand]=gripHandPoseValid_[hand]=false;
             // A failed sample cannot count as the release needed to rearm.
@@ -1519,7 +1519,7 @@ private:
                     const auto gripTracking=fo3vr::LocationTracking(gripLocation.locationFlags,required,
                         XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
                     gripHandPoseValid_[hand] = gripTracking.valid;
-                    if(hand==0)pipLeftGripTracked_=gripTracking.tracked;
+                    gripHandTracked_[hand]=gripTracking.tracked;
                     if (gripHandPoseValid_[hand])
                         gripHandLocalPoses_[hand] = gripLocation.pose;
                 }
@@ -1835,7 +1835,7 @@ private:
         const bool focusBlocked=sessionState_!=XR_SESSION_STATE_FOCUSED||!frameState.shouldRender;
         if(focusBlocked&&!gFo3FocusPaused)PauseFo3ResidentGameplayTime();
         gFo3FocusPaused=focusBlocked;
-        if(focusBlocked){death_.Suspend();CancelFo3Vats();gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
+        if(focusBlocked){death_.Suspend();CancelFo3Vats();ResetFo3Unarmed();gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
         // Sample even on non-rendered/invalid-view frames. Resumption establishes
         // a fresh baseline before any gameplay consumer; XR tracking stays raw.
         (void)Fo3GameplayNow();
@@ -2102,7 +2102,7 @@ private:
                     XR_VIEW_STATE_POSITION_VALID_BIT|XR_VIEW_STATE_ORIENTATION_VALID_BIT,
                     XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT);
                 gVrHeadTracking=headTracking;
-                gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
+                gVrLeftGripTracking={gripHandPoseValid_[0],gripHandTracked_[0]};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
                 const bool vatsOwned=UpdateFo3Vats(double(frameState.predictedDisplayTime)*1e-9,gameplaySeconds,
                     fingerTriggerValue_[0],fingerTriggerValue_[1],activateDownQ1700_,pipBackDown_,
@@ -2149,7 +2149,7 @@ private:
                         sessionState_==XR_SESSION_STATE_FOCUSED);
                     UpdateFo3Pipboy(gStereoFrame,gameplaySeconds,pipHead.m,
                         gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3LevelUpFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
-                            headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
+                            headTracking,{gripHandPoseValid_[0],gripHandTracked_[0]},{handPoseValid_[0],pipLeftAimTracked_},
                             gameplaySeconds),
                         q210RightValid&&!Fo3LevelUpFocus()?turnX_:0,
                         q210RightValid&&!Fo3LevelUpFocus()?lootScrollY_:0,
@@ -2179,9 +2179,20 @@ private:
                         q210LeftValid?fingerTriggerValue_[0]:0,q210LeftValid&&barterConfirmDown_);
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                     WeaponUpdate(gameplaySeconds,(dialogueControls||gPlayerSeat.Active()||seatConsumeB_)?false:pipBackDown_);
+                    std::array<std::optional<fo3vr::V>,2> fistTracking{};
+                    if(!dialogueControls&&!Fo3DialogueFocus()&&!Fo3MovieFocus()&&!Fo3PipboyFocus()&&
+                       !gPlayerSeat.Busy()&&!GetFo3LootPanel().reference&&headTracking.tracked&&
+                       sessionState_==XR_SESSION_STATE_FOCUSED){
+                        for(size_t hand=0;hand<fistTracking.size();++hand)if(gripHandTracked_[hand]){
+                            const auto& grip=gripHandLocalPoses_[hand].position;
+                            const auto& head=q210HeadLocal.position;
+                            fistTracking[hand]=fo3vr::V{grip.x-head.x,grip.y-head.y,grip.z-head.z};
+                        }
+                    }
+                    UpdateFo3Unarmed(gameplaySeconds,playerYaw_,fistTracking);
                     if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                     DeliverFo3ScriptSounds();
-                }
+                }else ResetFo3Unarmed();
                 if(vatsOwned||!Fo3GameplayBlocked()){
                     for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                         XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
@@ -3052,7 +3063,7 @@ private:
     XrAction pipBackAction_{XR_NULL_HANDLE};
     XrAction barterConfirmAction_{XR_NULL_HANDLE};
     bool barterConfirmDown_=false;
-    bool pipBackDown_=false,pipLeftGripTracked_=false,pipLeftAimTracked_=false;
+    bool pipBackDown_=false,pipLeftAimTracked_=false;
     XrAction lootScrollAction_{XR_NULL_HANDLE};
     float lootScrollY_=0;
     float lootPanelYaw_=0;
@@ -3068,6 +3079,7 @@ private:
     std::array<XrPosef, 2> gripHandLocalPoses_{};
     std::array<bool, 2> handPoseValid_{false, false};
     std::array<bool, 2> gripHandPoseValid_{false, false};
+    std::array<bool, 2> gripHandTracked_{false, false};
     float moveX_{0.0f};
     float moveY_{0.0f};
     float turnX_{0.0f};

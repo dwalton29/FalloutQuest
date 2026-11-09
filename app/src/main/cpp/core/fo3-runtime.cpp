@@ -4467,6 +4467,7 @@ void WeaponPersistWorld();
 bool WeaponHeld();
 bool WeaponReloadActive();
 bool WeaponAnimatedReloadHand(fo3vr::V&,fo3vr::R&);
+bool Fo3ClosedFist(size_t hand);
 float gWeaponHaptic[2]{};
 Vec3 gWeaponPalm[2]{};
 bool gWeaponPalmValid[2]{};
@@ -11959,14 +11960,14 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
         q213LeftPose.solved
             ? Q217BuildFingerPose(
                   true, q220LeftAuthoredBasis,
-                  gQ217FingerTrigger[0], gQ217TriggerTouched[0],
+                  Fo3ClosedFist(0)?gQ217FingerGrip[0]:gQ217FingerTrigger[0], gQ217TriggerTouched[0],
                   gQ217FingerGrip[0], gQ217ThumbTouched[0],q213LeftPose.handDelta)
             : emptyFingerPose;
     const auto& q217RightFingerPose =
         q213RightPose.solved
             ? Q217BuildFingerPose(
                   false, q220RightAuthoredBasis,
-                  gQ217FingerTrigger[1], gQ217TriggerTouched[1],
+                  Fo3ClosedFist(1)?gQ217FingerGrip[1]:gQ217FingerTrigger[1], gQ217TriggerTouched[1],
                   gQ217FingerGrip[1], gQ217ThumbTouched[1],q213RightPose.handDelta)
             : emptyFingerPose;
 
@@ -12122,6 +12123,7 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
 }
 
 #include "weapons/fo3-weapon-runtime.inc"
+#include "weapons/fo3-unarmed-runtime.inc"
 
 void Q210DeletePlayerBody(bool equipmentChange=false) {
     ResetFo3Pipboy();gPipAnchorReady=false;gPipSurface={};
