@@ -63,6 +63,22 @@ struct Input {
     return edges;
   }
 };
+// Only the actions V.A.T.S. consumed wait for release on exit. Grips and
+// locomotion remain live, including when the player is holding a weapon.
+struct InputRelease {
+  bool left=false,right=false,a=false,b=false;
+  void Hold(float lt,float rt,bool accept,bool back){
+    left=lt>.25f;right=rt>.25f;a=accept;b=back;
+  }
+  void Filter(float& lt,float& rt,bool& accept,bool& back){
+    left=left&&lt>.25f;right=right&&rt>.25f;
+    a=a&&accept;b=b&&back;
+    if(left)lt=0;
+    if(right)rt=0;
+    if(a)accept=false;
+    if(b)back=false;
+  }
+};
 struct Shot {
   uint32_t target=0;
   uint8_t part=NoPart;

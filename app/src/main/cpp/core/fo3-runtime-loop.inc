@@ -1337,6 +1337,7 @@ private:
                     // STOPPING may submit no more frames. Latch here, before
                     // waiting for a later focused frame, to exclude the gap.
                     PauseFo3ResidentGameplayTime();gFo3FocusPaused=true;
+                    CancelFo3Vats();
                     gFo3PauseMenu.Close();gFo3PauseOpen=false;
                     residentInputBarrier_.Allow(true,false);gFo3GameplayInputSuppressed=true;
                     lastFrameTime_=0;
@@ -1458,14 +1459,15 @@ private:
         barterConfirmDown_=ReadBoolActionQ1699(barterConfirmAction_,handPaths_[0]);
         pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
         const bool menuDown=ReadBoolActionQ1699(pauseAction_,handPaths_[0]);
+        const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
+            !sneakDown_&&!activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
+            fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
+        vatsRelease_.Filter(fingerTriggerValue_[0],fingerTriggerValue_[1],activateDownQ1700_,pipBackDown_);
         UpdateFo3Title(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
             double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED,exitRequested_);
         if(gFo3Title.open&&exitRequested_)ANativeActivity_finish(app_->activity);
         if(!gFo3Title.open)UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
             double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED);
-        const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
-            !sneakDown_&&!activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
-            fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
         // The V.A.T.S. clock owns simulation pause while its controls stay live.
         gFo3GameplayInputSuppressed=!Fo3VatsFocus()&&!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
         if(gFo3GameplayInputSuppressed){
@@ -2066,7 +2068,11 @@ private:
                     sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid);
                 if(vatsOwned){
                     activateLatched_=true;
-                    if(!Fo3VatsFocus())residentInputBarrier_.Allow(true,false);
+                    if(!Fo3VatsFocus()){
+                        vatsRelease_.Hold(fingerTriggerValue_[0],fingerTriggerValue_[1],activateDownQ1700_,pipBackDown_);
+                        // Rebase the clock without requiring a held weapon grip to go neutral.
+                        (void)Fo3GameplayXrTime(frameState.predictedDisplayTime);
+                    }
                 }
                 bool dialogueControls=vatsOwned;
                 const bool movieControls=Fo3MovieFocus();
@@ -2129,9 +2135,9 @@ private:
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                     WeaponUpdate(gameplaySeconds,(dialogueControls||gPlayerSeat.Active()||seatConsumeB_)?false:pipBackDown_);
                     if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
+                    DeliverFo3ScriptSounds();
                 }
                 if(vatsOwned||!Fo3GameplayBlocked()){
-                    DeliverFo3ScriptSounds();
                     for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                         XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
                         XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
@@ -3018,6 +3024,7 @@ private:
     std::array<bool, 2> fingerThumbTouched_{false, false};
     bool activateLatched_{false};
     fo3scene::ResidentInputBarrier residentInputBarrier_;
+    fo3vats::InputRelease vatsRelease_;
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
     float playerYaw_{0.0f};

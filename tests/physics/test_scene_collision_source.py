@@ -387,7 +387,8 @@ def guarded(call):
         for ch in line:
             if ch=='{': stack.append(line)
             elif ch=='}' and stack: stack.pop()
-    return any('if(!Fo3GameplayBlocked())' in line for line in stack)
+    return any('if(!Fo3GameplayBlocked())' in line or 'if(!Fo3GameplayBlocked()&&' in line
+               for line in stack)
 for call in ('UpdateFo3Pipboy(gStereoFrame,','UpdateFo3Lockpick(gameplaySeconds',
              'UpdateFo3ScriptMessage(gameplaySeconds','UpdateFo3Dialogue(gameplaySeconds',
              'WeaponUpdate(gameplaySeconds','DeliverFo3ScriptSounds();',
@@ -481,7 +482,7 @@ assert 'Fo3GameplayBlocked()' in time_bridge
 assert 'gFo3ResidentSteadyClock.Pause();gFo3ResidentXrClock.Pause();' in time_bridge
 frame=loop[loop.index('void RenderFrame() {'):]
 assert frame.index('PumpFo3ResidentWorkflow(') < frame.index('Fo3GameplayXrTime(') < frame.index('if (frameState.shouldRender)')
-assert frame.index('if(gFo3ResidentXrClock.Paused())') < frame.index('Fo3GameplayXrTime(') < frame.index('SyncInput(')
+assert frame.index('if(gFo3ResidentXrClock.Paused()&&!Fo3VatsFocus())') < frame.index('Fo3GameplayXrTime(') < frame.index('SyncInput(')
 assert 'lastFrameTime_=0;residentInputBarrier_.Allow(true,false);' in frame
 assert 'const int64_t clockNs=gameplayFrameTime;' in frame
 assert 'locateInfo.displayTime = frameState.predictedDisplayTime' in frame
