@@ -6,6 +6,8 @@ namespace fo3uicolor {
 inline constexpr float Main[3]{26.f/255.f,1.f,128.f/255.f};
 // FALLOUT.INI iSystemColorMainMenu RGB(199,255,165).
 inline constexpr float Title[3]{199.f/255.f,1.f,165.f/255.f};
+// FALLOUT.INI iSystemColorTerminal RGB(33,231,121).
+inline constexpr float Terminal[3]{33.f/255.f,231.f/255.f,121.f/255.f};
 inline constexpr float Crime[3]{1.f,67.f/255.f,42.f/255.f};
 inline float Linear(float value){return value<=.04045f?value/12.92f:std::pow((value+.055f)/1.055f,2.4f);}
 }

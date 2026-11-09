@@ -1,4 +1,5 @@
 #include "data/fo3-bsa-archive.h"
+#include "ui/menu/fo3-menu-appearance-layout.h"
 #include "ui/menu/fo3-menu-layout.h"
 #include "ui/menu/fo3-menu-strings.h"
 #include "ui/menu/fo3-menu-texture-paths.h"
@@ -77,7 +78,7 @@ int main(int argc, char **argv) {
          {"menus\\main\\stats_menu.xml", "menus\\main\\inventory_menu.xml",
           "menus\\main\\map_menu.xml", "menus\\barter_menu.xml",
           "menus\\dialog\\dialog_menu.xml", "menus\\message_menu.xml",
-          "menus\\quantity_menu.xml"}) {
+          "menus\\quantity_menu.xml", "menus\\chargen\\race_sex_menu.xml"}) {
       Layout l;
       assert(l.Load(path, read));
       l.strings = [](const std::string &key) -> Value {
@@ -146,6 +147,46 @@ int main(int argc, char **argv) {
         auto b = l.Bounds(l.Find("MM_LocalMap_ClipWindow"));
         assert(Near(b.w, 855) && Near(b.h, 500));
         assert(l.Instantiate("TabButtonTemplate", l.Find("MM_Tabline")) >= 0);
+      }
+      if (name == "RaceSexMenu") {
+        using fo3chargen::Kind;
+        using fo3chargen::Row;
+        l.width = 1280;
+        l.height = 1080;
+        l.imageSize=[](const std::string&,const std::string&){return Box{0,0,20,20};};
+        const auto lcd=l.Bounds(l.Find("RSM_Background"));
+        assert(Near(lcd.x,930)&&Near(lcd.y,550)&&Near(lcd.w,340)&&Near(lcd.h,500));
+        std::vector<Row> rows{{"Preset:",Kind::Preset,0,false,"2",1,5,2},
+                              {"Customize >",Kind::Page,0,false,{}},
+                              {"Randomize",Kind::Randomize,0,false,{}},
+                              {"Back",Kind::Back,0,false,{}},
+                              {"Next",Kind::Next,0,false,{}}};
+        BindAppearance(l,"3. Face",rows,0,2);
+        const auto face=l.Paint();
+        for(const auto* label:{"3. Face","Preset:","2","Customize >","Randomize","Back","Next"}){
+          const auto text=std::find_if(face.begin(),face.end(),[&](const Draw& d){
+            return d.type=="text"&&d.text==label&&d.font==5&&d.colour==TerminalColour&&d.alpha>0;
+          });
+          if(text==face.end())std::cerr<<"Missing native gene projection text "<<label<<'\n';
+          assert(text!=face.end());
+        }
+        const auto marker=std::find_if(face.begin(),face.end(),[&](const Draw& d){
+          return l.Nodes()[d.node].name=="RSM_SM_text"&&d.text=="|"&&d.box.w>0;
+        });
+        assert(marker!=face.end());
+        const auto slider=l.Nodes()[marker->node].parent;
+        const auto row=l.Nodes()[slider].parent;
+        const auto bar=l.Bounds(l.Find("RSM_slider_bar",row));
+        assert(Near(l.Bounds(slider).x+8,bar.x+.25f*bar.w));
+        l.Reset();
+        rows.clear();
+        for(size_t i=0;i<15;++i)rows.push_back({"Race "+std::to_string(i),Kind::Race,i,i==10,{}});
+        BindAppearance(l,"2. Race",rows,10,1);
+        const auto race=l.Paint();
+        assert(l.N("RSM_scroll_up_target","visible")&&l.N("RSM_scroll_down_target","visible"));
+        assert(std::any_of(race.begin(),race.end(),[&](const Draw& d){
+          return l.Nodes()[d.node].name=="RSM_selection_indicator"&&d.box.w>0;
+        }));
       }
       const auto draw = l.Paint();
       assert(!draw.empty() && l.Unsupported().empty());

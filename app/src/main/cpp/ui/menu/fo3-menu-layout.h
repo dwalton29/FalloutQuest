@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace fo3menu {
+inline constexpr int TerminalColour=3;
 // Gamebryo menu XML is a fragment language (including &-GMST; entities), not
 // strict XML. Keep source traits and expressions; never flatten to guessed XYs.
 inline std::string Trim(std::string s) {
@@ -323,6 +324,8 @@ class Layout {
         return 1.; // These VR surfaces use the original HD menu layout.
       if (key == "mainmenu")
         return 2.;
+      if (key == "terminal")
+        return double(TerminalColour);
       if (key == "hudmain" || key == "pipboy" || key == "Pipboy")
         return 1.;
       return key;

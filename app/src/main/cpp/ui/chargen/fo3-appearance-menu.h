@@ -2,74 +2,178 @@
 
 #include "player/fo3-player-state.h"
 #include "world/interaction/fo3-loot-cursor.h"
+#include <functional>
+#include <random>
 
 namespace fo3chargen {
-enum class Page { Main, Color, Shape, Asymmetry, Complexion };
-enum class Kind { Race, Preset, Hair, Eyes, Beard, Page, Color, Control, Back, Done };
+enum class Page { Sex, Race, Face, Hair, Customize, HairStyle, HairColor, Beard, Eyes,
+                  Shape, Asymmetry, Complexion };
+enum class Kind { Sex, Race, Preset, Hair, Eyes, Beard, Page, Color, Control,
+                  Randomize, Back, Next, Done, Yes, No };
 struct Row {
     std::string label;
     Kind kind;
     size_t index=0;
-    std::vector<uint32_t> values{};
-    uint32_t current=0;
+    bool checked=false;
+    std::string value;
+    int minimum=0,maximum=0,current=0;
+    bool Slider()const{return kind==Kind::Preset||kind==Kind::Color||kind==Kind::Control;}
+    bool Button()const{return kind==Kind::Back||kind==Kind::Next||kind==Kind::Done;}
 };
+using Labels=std::function<std::string(const char*)>;
+
 struct Menu {
+    enum class Confirm { None, Randomize, Done };
+    enum class Result { None, Changed, Confirmed };
     uint32_t owner=0;
-    Page page=Page::Main;
+    Page page=Page::Sex;
+    Confirm confirmation=Confirm::None;
     fo3loot::Cursor cursor;
+    size_t previousSelection=0;
     bool neutral=false,aDown=false,bDown=false;
     int horizontal=0;
     double repeatAt=0;
 
+    unsigned Stage()const{
+        switch(page){
+            case Page::Sex:return 0;
+            case Page::Race:return 1;
+            case Page::Hair:case Page::HairStyle:case Page::HairColor:case Page::Beard:return 3;
+            default:return 2;
+        }
+    }
+    bool Primary()const{return page<=Page::Hair;}
+    std::string Title(const Labels& label)const{
+        static const char* stages[]={"sRSMSex","sRace","sRSMFace","sRSMHair"};
+        switch(page){
+            case Page::Customize:return label("sRSMCustomize");
+            case Page::HairStyle:return label("sRSMHairStyle");
+            case Page::HairColor:return label("sRSMHairColor");
+            case Page::Beard:return label("sRSMFacialHair");
+            case Page::Eyes:return label("sRSMEyeColor");
+            case Page::Shape:return label("sRSMGeneral");
+            case Page::Asymmetry:return "Asymmetry";
+            case Page::Complexion:return label("sComplexion");
+            default:return std::to_string(Stage()+1)+". "+label(stages[Stage()]);
+        }
+    }
+
     std::vector<Row> Rows(const fo3player::Player& player,
-                          const std::vector<fo3character::Control>& controls) const {
+                          const std::vector<fo3character::Control>& controls,
+                          const Labels& label)const{
         const auto draft=player.AppearanceDraft();
         const auto& catalog=player.Definitions().pipboy.appearance;
         std::vector<Row> rows;
-        if(page==Page::Color){
-            static const char* colors[]={"Red","Green","Blue"};
-            for(size_t i=0;i<draft.color.size();++i)
-                rows.push_back({std::string(colors[i])+"  < "+std::to_string(draft.color[i])+" >",Kind::Color,i});
-        }else if(page!=Page::Main){
-            const unsigned basis=unsigned(page)-unsigned(Page::Shape);
-            for(size_t i=0;i<controls.size();++i)
-                if(controls[i].basis==basis)
-                    rows.push_back({controls[i].label+"  < "+std::to_string(draft.adjustments[i])+" >",Kind::Control,i});
-        }else if(draft.race){
-            const auto option=[&](const char* title,const auto& table,uint32_t id){
+        const auto choice=[&](const std::string& name,Kind kind,size_t id,bool checked=false){
+            rows.push_back({name,kind,id,checked,{}});
+        };
+        const auto slider=[&](const std::string& name,Kind kind,size_t id,int value,int lo,int hi){
+            rows.push_back({name,kind,id,false,std::to_string(value),lo,hi,value});
+        };
+        const auto options=[&](const auto& table,const auto& ids,Kind kind,uint32_t selected){
+            for(auto id:ids){
                 const auto it=table.find(id);
-                return std::string(title)+"  < "+(it==table.end()?"None":it->second.name)+" >";
-            };
-            const auto presets=catalog.Presets(draft.race,player.PlayerFemale());
-            const auto number=std::find(presets.begin(),presets.end(),draft.preset)-presets.begin()+1;
-            rows.push_back({option("Race",catalog.races,draft.race),Kind::Race,0,catalog.Races(),draft.race});
-            rows.push_back({"Face Preset  < "+std::to_string(number)+" >",Kind::Preset,0,presets,draft.preset});
-            rows.push_back({option("Hair",catalog.hair,draft.hair),Kind::Hair,0,catalog.Hair(draft.race,player.PlayerFemale()),draft.hair});
-            rows.push_back({option("Eyes",catalog.eyes,draft.eyes),Kind::Eyes,0,catalog.Eyes(draft.race),draft.eyes});
-            if(!player.PlayerFemale()){
+                choice(it==table.end()?label("sNone"):it->second.name,kind,id,id==selected);
+            }
+        };
+        const auto link=[&](const char* text,Page target){choice(label(text)+" >",Kind::Page,size_t(target));};
+        if(confirmation!=Confirm::None){
+            choice(label("sYes"),Kind::Yes,0);
+            choice(label("sNo"),Kind::No,0);
+            return rows;
+        }
+        switch(page){
+            case Page::Sex:
+                choice(label("sMale"),Kind::Sex,0,!player.PlayerFemale());
+                choice(label("sFemale"),Kind::Sex,1,player.PlayerFemale());
+                break;
+            case Page::Race:{
+                auto races=catalog.Races();
+                std::stable_sort(races.begin(),races.end(),[&](auto a,auto b){return catalog.races.at(a).name<catalog.races.at(b).name;});
+                options(catalog.races,races,Kind::Race,draft.race);
+                break;
+            }
+            case Page::Face:{
+                const auto presets=catalog.Presets(draft.race,player.PlayerFemale());
+                const auto it=std::find(presets.begin(),presets.end(),draft.preset);
+                if(it!=presets.end())slider(label("sRSMPreset"),Kind::Preset,0,int(it-presets.begin()+1),1,int(presets.size()));
+                if(draft.race)link("sRSMCustomize",Page::Customize);
+                if(presets.size()>1)choice(label("sRSMRandomize"),Kind::Randomize,0);
+                break;
+            }
+            case Page::Hair:
+                if(draft.race){
+                    link("sRSMHairStyle",Page::HairStyle);
+                    link("sRSMHairColor",Page::HairColor);
+                    if(!player.PlayerFemale())link("sRSMFacialHair",Page::Beard);
+                }
+                break;
+            case Page::Customize:
+                link("sRSMEyeColor",Page::Eyes);
+                if(!controls.empty()){
+                    link("sRSMGeneral",Page::Shape);
+                    choice("Asymmetry >",Kind::Page,size_t(Page::Asymmetry));
+                    link("sComplexion",Page::Complexion);
+                }
+                break;
+            case Page::HairStyle:
+                options(catalog.hair,catalog.Hair(draft.race,player.PlayerFemale()),Kind::Hair,draft.hair);
+                break;
+            case Page::Eyes:
+                options(catalog.eyes,catalog.Eyes(draft.race),Kind::Eyes,draft.eyes);
+                break;
+            case Page::Beard:{
                 std::vector<uint32_t> beards{0};
                 for(const auto& b:catalog.beards)beards.push_back(b.first);
-                std::sort(beards.begin()+1,beards.end(),[&](uint32_t a,uint32_t b){
-                    return catalog.beards.at(a).name<catalog.beards.at(b).name;
-                });
-                rows.push_back({option("Facial Hair",catalog.beards,draft.beard),Kind::Beard,0,std::move(beards),draft.beard});
+                std::sort(beards.begin()+1,beards.end(),[&](auto a,auto b){return catalog.beards.at(a).name<catalog.beards.at(b).name;});
+                options(catalog.beards,beards,Kind::Beard,draft.beard);
+                break;
             }
-            rows.push_back({"Hair Color",Kind::Page,size_t(Page::Color)});
-            if(!controls.empty()){
-                rows.push_back({"Face Shape",Kind::Page,size_t(Page::Shape)});
-                rows.push_back({"Face Asymmetry",Kind::Page,size_t(Page::Asymmetry)});
-                rows.push_back({"Complexion",Kind::Page,size_t(Page::Complexion)});
+            case Page::HairColor:{
+                static const char* colors[]={"sRSMRedAbbrev","sRSMGreenAbbrev","sRSMBlueAbbrev"};
+                for(size_t i=0;i<draft.color.size();++i)
+                    slider(label(colors[i]),Kind::Color,i,draft.color[i],0,255);
+                break;
+            }
+            default:{
+                const unsigned basis=unsigned(page)-unsigned(Page::Shape);
+                for(size_t i=0;i<std::min(controls.size(),draft.adjustments.size());++i)
+                    if(controls[i].basis==basis)
+                        slider(controls[i].label,Kind::Control,i,draft.adjustments[i],-10,10);
+                break;
             }
         }
-        rows.push_back(page==Page::Main?Row{"Done",Kind::Done}:Row{"Back",Kind::Back});
+        if(page!=Page::Sex)choice(label("sBack"),Kind::Back,0);
+        if(Primary())choice(label(page==Page::Hair?"sDone":"sNext"),page==Page::Hair?Kind::Done:Kind::Next,0);
         return rows;
     }
 
-    enum class Result { None, Changed, Confirmed };
+    void Open(Page target,const fo3player::Player& player,
+              const std::vector<fo3character::Control>& controls,const Labels& labels){
+        page=target;
+        cursor={};
+        const auto rows=Rows(player,controls,labels);
+        cursor.Target(owner,rows.size());
+        const auto selected=std::find_if(rows.begin(),rows.end(),[](const Row& r){return r.checked;});
+        if(selected!=rows.end())cursor.selected=size_t(selected-rows.begin());
+    }
+    void Back(const fo3player::Player& player,const std::vector<fo3character::Control>& controls,const Labels& labels){
+        if(page==Page::Sex)return;
+        auto target=Page::Customize;
+        if(Primary())target=Page(unsigned(page)-1);
+        else if(page==Page::Customize)target=Page::Face;
+        else if(Stage()==3)target=Page::Hair;
+        Open(target,player,controls,labels);
+    }
+
     Result Step(fo3player::Player& player,const std::vector<fo3character::Control>& controls,
-                double now,float x,float y,bool a,bool b,bool focused,bool previewReady){
+                const Labels& labels,double now,float x,float y,bool a,bool b,bool focused,bool previewReady){
         const auto requested=player.Snapshot().appearanceMenuOwner;
-        if(requested!=owner){*this={};owner=requested;aDown=a;bDown=b;return Result::Changed;}
+        if(requested!=owner){
+            *this={};owner=requested;aDown=a;bDown=b;
+            if(owner)Open(Page::Sex,player,controls,labels);
+            return Result::Changed;
+        }
         if(!owner)return Result::None;
         const bool pressA=a&&!aDown,pressB=b&&!bDown;
         aDown=a;bDown=b;
@@ -80,16 +184,57 @@ struct Menu {
             neutral=!a&&!b&&std::abs(x)<.3f&&std::abs(y)<.3f;
             return Result::None;
         }
-        if(pressB&&page!=Page::Main){page=Page::Main;cursor={};return Result::Changed;}
-        const auto rows=Rows(player,controls);
+        const auto rows=Rows(player,controls,labels);
         const auto old=cursor.selected;
         cursor.Target(owner,rows.size());
         cursor.Scroll(y,now,rows.size());
         const auto& row=rows[cursor.selected];
-        if(row.kind==Kind::Done&&pressA&&previewReady&&player.ConfirmAppearance())return Result::Confirmed;
-        if(pressA&&(row.kind==Kind::Page||row.kind==Kind::Back)){
-            page=row.kind==Kind::Back?Page::Main:Page(row.index);
-            cursor={};return Result::Changed;
+        auto draft=player.AppearanceDraft();
+        const auto& catalog=player.Definitions().pipboy.appearance;
+        if(confirmation!=Confirm::None){
+            if(!pressA&&!pressB)return cursor.selected!=old?Result::Changed:Result::None;
+            if(!pressB&&row.kind==Kind::Yes&&confirmation==Confirm::Done){
+                return previewReady&&player.ConfirmAppearance()?Result::Confirmed:Result::None;
+            }
+            if(!pressB&&row.kind==Kind::Yes){
+                auto presets=catalog.Presets(draft.race,player.PlayerFemale());
+                presets.erase(std::remove(presets.begin(),presets.end(),draft.preset),presets.end());
+                if(!presets.empty()){
+                    static thread_local std::mt19937 random{std::random_device{}()};
+                    player.EditAppearance(catalog.Select(presets[std::uniform_int_distribution<size_t>(0,presets.size()-1)(random)],player.PlayerFemale()));
+                }
+            }
+            confirmation=Confirm::None;cursor={};cursor.Target(owner,Rows(player,controls,labels).size());
+            cursor.selected=previousSelection;
+            return Result::Changed;
+        }
+        if(pressB||(pressA&&row.kind==Kind::Back)){
+            Back(player,controls,labels);return Result::Changed;
+        }
+        if(pressA){
+            switch(row.kind){
+                case Kind::Page:Open(Page(row.index),player,controls,labels);return Result::Changed;
+                case Kind::Next:Open(Page(unsigned(page)+1),player,controls,labels);return Result::Changed;
+                case Kind::Done:case Kind::Randomize:
+                    previousSelection=cursor.selected;
+                    confirmation=row.kind==Kind::Done?Confirm::Done:Confirm::Randomize;
+                    cursor={};cursor.Target(owner,2);cursor.selected=1;
+                    return Result::Changed;
+                case Kind::Sex:
+                    if(player.PlayerFemale()!=bool(row.index)){
+                        player.SetPlayerSex(bool(row.index));
+                        if(draft.race)player.EditAppearance(catalog.Default(draft.race,player.PlayerFemale()));
+                        return Result::Changed;
+                    }
+                    break;
+                case Kind::Race:
+                    if(draft.race!=row.index&&player.EditAppearance(catalog.Default(uint32_t(row.index),player.PlayerFemale())))return Result::Changed;
+                    break;
+                case Kind::Hair:draft.hair=uint32_t(row.index);break;
+                case Kind::Eyes:draft.eyes=uint32_t(row.index);break;
+                case Kind::Beard:draft.beard=uint32_t(row.index);break;
+                default:break;
+            }
         }
         if(std::abs(x)<.3f)horizontal=0;
         int step=pressA?1:0;
@@ -99,28 +244,18 @@ struct Menu {
                 step=direction;repeatAt=now+(direction!=horizontal?.35:.14);horizontal=direction;
             }
         }
-        if(step){
-            auto draft=player.AppearanceDraft();
-            const auto& catalog=player.Definitions().pipboy.appearance;
+        if(step&&row.Slider()){
             if(row.kind==Kind::Color)
-                draft.color[row.index]=uint8_t(std::clamp(int(draft.color[row.index])+8*step,0,255));
+                draft.color[row.index]=uint8_t(std::clamp(row.current+8*step,0,255));
             else if(row.kind==Kind::Control)
-                draft.adjustments[row.index]=int8_t(std::clamp(int(draft.adjustments[row.index])+step,-10,10));
-            else if(!row.values.empty()){
-                const auto found=std::find(row.values.begin(),row.values.end(),row.current);
-                const auto count=int(row.values.size());
-                const uint32_t value=row.values[(int(found-row.values.begin())+step+count)%count];
-                switch(row.kind){
-                    case Kind::Race:draft=catalog.Default(value,player.PlayerFemale());break;
-                    case Kind::Preset:draft=catalog.Select(value,player.PlayerFemale());break;
-                    case Kind::Hair:draft.hair=value;break;
-                    case Kind::Eyes:draft.eyes=value;break;
-                    case Kind::Beard:draft.beard=value;break;
-                    default:break;
-                }
+                draft.adjustments[row.index]=int8_t(std::clamp(row.current+step,row.minimum,row.maximum));
+            else{
+                const auto presets=catalog.Presets(draft.race,player.PlayerFemale());
+                const int i=(row.current-1+step+int(presets.size()))%int(presets.size());
+                draft=catalog.Select(presets[size_t(i)],player.PlayerFemale());
             }
-            if(player.EditAppearance(draft))return Result::Changed;
         }
+        if((pressA||step)&&player.EditAppearance(draft))return Result::Changed;
         return cursor.selected!=old?Result::Changed:Result::None;
     }
 };

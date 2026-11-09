@@ -73,6 +73,9 @@ struct Assets {
     case 4:
       path = "Monofonto_VeryLarge02_Dialogs2.fnt";
       break;
+    case 5:
+      path = "Fixedsys_Comp_uniform_width.fnt";
+      break;
     case 6:
       path = "Glow_Monofonto_VL_dialogs.fnt";
       break;
@@ -383,8 +386,10 @@ struct Surface {
       batch.first = GLsizei(first);
       batch.count = GLsizei(vertices.size() - first);
       batch.alpha = std::clamp(d.alpha, 0.f, 1.f);
+      const auto* colour=d.colour==2?fo3uicolor::Title:
+          d.colour==fo3menu::TerminalColour?fo3uicolor::Terminal:d.colour?fo3uicolor::Main:nullptr;
       for (int c = 0; c < 3; ++c)
-        batch.rgb[c] = (d.colour == 2 ? fo3uicolor::Title[c] : d.colour ? fo3uicolor::Main[c] : 1.f) *
+        batch.rgb[c] = (colour?colour[c]:1.f) *
                        std::clamp(d.brightness, 0.f, 1.f);
       if (!batches.empty()) {
         auto &last = batches.back();
@@ -397,6 +402,11 @@ struct Surface {
       }
       batches.push_back(batch);
     }
+    Upload();
+    return complete;
+  }
+  void Upload() {
+    fo3hudrenderer::CachedStateGuard guard;
     if (!vao) {
       glGenVertexArrays(1, &vao);
       glGenBuffers(1, &vbo);
@@ -414,7 +424,6 @@ struct Surface {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
                           sizeof(fo3hudassets::Vertex),
                           reinterpret_cast<void *>(3 * sizeof(float)));
-    return complete;
   }
   void Render(const float *mvp) {
     if (!vao || !mvp || !Shared().program)
@@ -558,32 +567,20 @@ inline void ListScrollFix(fo3menu::Layout &l, int parent, size_t selected) {
   l.Set(bar, "_current_value", offset);
   l.Set(bar, "_total_height", total);
 }
-inline void World(Surface &surface, const fo3menu::Layout &layout,
-                  const float *mvp) {
-  // VR policy: one metre per 1000 authored UI pixels, centred on the existing
-  // interaction anchor. All relative screen coordinates still come from XML.
-  float local[16]{.001f,
-                  0,
-                  0,
-                  0,
-                  0,
-                  -.001f,
-                  0,
-                  0,
-                  0,
-                  0,
-                  1,
-                  0,
-                  -layout.width * .0005f,
-                  layout.height * .0005f,
-                  0,
-                  1},
-      result[16]{};
+inline void WorldRegion(Surface &surface,const float* mvp,const fo3menu::Box& view,float scale) {
+  const float local[16]{scale,0,0,0,0,-scale,0,0,0,0,1,0,
+      -(view.x+view.w*.5f)*scale,(view.y+view.h*.5f)*scale,0,1};
+  float result[16]{};
   for (int c = 0; c < 4; ++c)
     for (int r = 0; r < 4; ++r)
       for (int k = 0; k < 4; ++k)
         result[c * 4 + r] += mvp[k * 4 + r] * local[c * 4 + k];
   surface.Render(result);
+}
+inline void World(Surface &surface, const fo3menu::Layout &layout,
+                  const float *mvp) {
+  // VR policy: one metre per 1000 authored UI pixels.
+  WorldRegion(surface,mvp,{0,0,layout.width,layout.height},.001f);
 }
 inline void Tabs(fo3menu::Layout &l, const std::string &name,
                  const std::vector<std::string> &labels, int selected) {

@@ -13,7 +13,8 @@ struct PreviewKey {
 
 static fo3scene::Preparation<Fo3RgbaTexture> preparation;
 static PreviewKey pending,completed;
-static bool hasCompleted=false,previewFailed=false;
+static bool hasCompleted=false;
+static std::array<float,4> textureUv{0,0,1,1};
 static uint64_t generation=UINT64_MAX,pendingGeneration=0;
 static const fo3player::Player* playerOwner=nullptr;
 static uint32_t cell=0;
@@ -130,19 +131,19 @@ static bool RenderHead(const PreviewKey& key,const fo3character::Race& race,
 static void ReleaseTexture(){
     if(gFo3AppearanceTexture)glDeleteTextures(1,&gFo3AppearanceTexture);
     gFo3AppearanceTexture=0;gFo3AppearanceScreenRef=0;
+    textureUv={0,0,1,1};
 }
 
 static bool UpdatePreview(const PreviewKey& key,const fo3character::Catalog& catalog){
     if(preparation.Ready()){
         if(pendingGeneration==generation&&pending==key){
-            previewFailed=!preparation.Successful();
-            if(!previewFailed){
+            if(preparation.Successful()){
                 const auto& image=preparation.Get();
                 const GLuint texture=fo3hudassets::UploadTexture(image.width,image.height,image.rgba.data());
-                previewFailed=!texture;
                 if(texture){
                     ReleaseTexture();
                     gFo3AppearanceTexture=texture;gFo3AppearanceScreenRef=key.screen;
+                    textureUv=key.uv;
                 }
             }
             completed=key;hasCompleted=true;
@@ -158,7 +159,7 @@ static bool UpdatePreview(const PreviewKey& key,const fo3character::Catalog& cat
         if(!preparation.Start([key,limits=race->second,axes](Fo3RgbaTexture& image,const std::atomic<bool>& cancelled){
             return RenderHead(key,limits,*axes,image,cancelled);
         })){
-            previewFailed=true;completed=key;hasCompleted=true;return true;
+            completed=key;hasCompleted=true;return true;
         }
     }
     return false;
@@ -182,7 +183,7 @@ void UpdateFo3AppearanceMenu(double now,float x,float y,bool a,bool b,bool focus
     if(playerOwner!=&player||generation!=player.ScriptRuntimeGeneration()||cell!=gCurrentCellFormId){
         preparation.RequestCancel();ReleaseTexture();
         playerOwner=&player;generation=player.ScriptRuntimeGeneration();cell=gCurrentCellFormId;
-        hasCompleted=false;previewFailed=false;menu={};panel={};
+        hasCompleted=false;menu={};panel={};
     }
     if(!owner){
         menu={};panel.visible=false;
@@ -194,7 +195,7 @@ void UpdateFo3AppearanceMenu(double now,float x,float y,bool a,bool b,bool focus
         std::vector<uint8_t> bytes;
         auto axes=std::make_shared<std::vector<fo3character::Control>>();
         const auto archive=fo3assets::GetBsaArchive(fo3assets::FalloutDataPath("Fallout - Misc.bsa"));
-        if(archive->Read("facegen/si.ctl",bytes,nullptr,fo3assets::BsaPathKind::Exact,1024*1024))
+        if(archive&&archive->Read("facegen/si.ctl",bytes,nullptr,fo3assets::BsaPathKind::Exact,1024*1024))
             fo3character::DecodeControls(bytes,*axes);
         controls=std::move(axes);
     }
@@ -204,24 +205,23 @@ void UpdateFo3AppearanceMenu(double now,float x,float y,bool a,bool b,bool focus
     if(menu.owner!=owner){
         const float yaw=head[3];
         panel={};panel.yaw=yaw;
-        panel.anchor={head[0]-std::sin(yaw)*1.05f+std::cos(yaw)*.38f,
-                      head[1]-.14f,
-                      head[2]-std::cos(yaw)*1.05f-std::sin(yaw)*.38f};
+        panel.anchor={head[0]-std::sin(yaw)*1.10f,
+                      head[1]-.04f,
+                      head[2]-std::cos(yaw)*1.10f};
     }
-    const auto revision=player.Revision();
+    const auto label=[&](const char* id){return fo3menuui::Setting(player,id);};
     const bool ready=UpdatePreview(key,player.Definitions().pipboy.appearance);
-    const auto result=menu.Step(player,*controls,now,x,y,a,b,focused,ready);
+    const auto result=menu.Step(player,*controls,label,now,x,y,a,b,focused,ready);
     if(result==Menu::Result::Confirmed){
         panel.visible=false;fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();return;
     }
     if(result==Menu::Result::Changed)fo3audio::Scroll();
-    const auto rows=menu.Rows(player,*controls);
-    const size_t selection=std::min(menu.cursor.selected,rows.size()-1);
-    const size_t first=std::min(selection>3?selection-3:0,rows.size()>7?rows.size()-7:0);
-    panel.visible=true;panel.title="Gene Projection";
-    panel.subtitle=!key.appearance.race?"Appearance data unavailable":!ready?"Updating preview":
-        previewFailed?"Preview unavailable":"Stick to browse or adjust  |  A select  |  B back";
-    panel.choices.clear();
-    for(size_t i=first;i<std::min(first+7,rows.size());++i)panel.choices.push_back(rows[i].label);
-    panel.selected=selection-first;panel.revision=revision;
+    panel.visible=true;
+    if(menu.confirmation!=Menu::Confirm::None){
+        panel.title.clear();
+        panel.subtitle=menu.confirmation==Menu::Confirm::Done?
+            label("sRSMConfirmDone")+" "+label("sRSMCharacter")+"?":label("sRSMConfirmRandomize");
+        panel.choices={label("sYes"),label("sNo")};
+        panel.selected=menu.cursor.selected;panel.revision=player.Revision();
+    }
 }

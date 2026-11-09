@@ -1477,7 +1477,7 @@ private:
             // Scripted restrictions affect game controls; tracked head/hands and
             // the system pause control always remain live for VR comfort.
             if(p.PlayerControlDisabled(0)||p.Restrained(fo3player::PlayerRef))moveX_=moveY_=0;
-            if(p.PlayerControlDisabled(4)&&!Fo3ScriptMessageFocus())turnX_=0;
+            if(p.PlayerControlDisabled(4)&&!Fo3ScriptMessageFocus()&&!Fo3AppearanceFocus())turnX_=0;
             if(p.PlayerControlDisabled(6))sneakDown_=false;
         }
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
@@ -1564,7 +1564,7 @@ private:
         }
 
 
-        if (gPlayerSeat.Active() || Fo3LockpickFocus() || Fo3TerminalFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
+        if (gPlayerSeat.Active() || Fo3LockpickFocus() || Fo3TerminalFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3AppearanceFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
             // Releasing the list while the stick is held cannot cause an accidental turn.
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
@@ -2684,10 +2684,12 @@ private:
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
                 const auto keyboard=Multiply(viewProjection,model);
-                if(appearance){
-                    if(panel.visible)fo3menuui::Appearance(keyboard.m,panel,gPlayerSession->player,
-                        gFo3AppearanceScreenRef?0:gFo3AppearanceTexture);
-                }else fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
+                if(appearance&&panel.visible){
+                    if(fo3chargen::menu.confirmation==fo3chargen::Menu::Confirm::None)
+                        fo3menuui::Appearance(keyboard.m,fo3chargen::menu,*fo3chargen::controls,
+                            gPlayerSession->player,gFo3AppearanceTexture,fo3chargen::textureUv);
+                    else fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
+                }else if(!appearance)fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
                 if(Fo3PlayerNameFocus()){
                     model.m[13]+=.65f;
                     const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);

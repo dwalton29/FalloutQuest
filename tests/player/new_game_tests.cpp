@@ -339,16 +339,30 @@ static void CharacterMenus(){
   assert(!restored.Snapshot().pipboy.dialogueVariables.count((uint64_t(102)<<32)|1));
   fo3chargen::Menu creator;
   const std::vector<fo3character::Control> faceControls;
-  creator.Step(restored,faceControls,1,0,0,true,false,true,true);
-  creator.Step(restored,faceControls,2,0,0,true,false,true,true);
+  const fo3chargen::Labels labels=[](const char* key){return std::string(key);};
+  double now=0;
+  const auto step=[&](bool a,bool ready=true){
+    return creator.Step(restored,faceControls,labels,++now,0,0,a,false,true,ready);
+  };
+  step(true);step(true);
   assert(restored.Snapshot().appearanceMenuOwner==101);
-  creator.Step(restored,faceControls,3,0,0,false,false,true,true);
-  const auto rows=creator.Rows(restored,faceControls);
-  creator.cursor.Target(101,rows.size());creator.cursor.selected=rows.size()-1;
-  creator.Step(restored,faceControls,4,0,0,true,false,true,false);
+  step(false);
+  for(unsigned stage=0;stage<4;++stage){
+    assert(creator.Stage()==stage);
+    const auto rows=creator.Rows(restored,faceControls,labels);
+    creator.cursor.selected=rows.size()-1;
+    assert(step(true)==fo3chargen::Menu::Result::Changed);
+    step(false);
+  }
+  assert(creator.confirmation==fo3chargen::Menu::Confirm::Done&&creator.cursor.selected==1);
+  assert(step(true)==fo3chargen::Menu::Result::Changed);
+  assert(creator.confirmation==fo3chargen::Menu::Confirm::None&&creator.Stage()==3);
+  step(false);step(true);step(false);
+  creator.cursor.selected=0;
+  assert(step(true,false)==fo3chargen::Menu::Result::None);
   assert(restored.Snapshot().appearanceMenuOwner==101);
-  creator.Step(restored,faceControls,5,0,0,false,false,true,true);
-  assert(creator.Step(restored,faceControls,6,0,0,true,false,true,true)==fo3chargen::Menu::Result::Confirmed);
+  step(false);
+  assert(step(true)==fo3chargen::Menu::Result::Confirmed);
   assert(restored.Snapshot().appearance==draft&&restored.PlayerRace()==draft.race);
   restored.PumpWorldAwareGameMode(.1,{},[&](auto plan){return restored.CommitScriptTransaction(*plan);});
   assert(restored.Snapshot().pipboy.dialogueVariables.at((uint64_t(102)<<32)|1)==1);

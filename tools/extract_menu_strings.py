@@ -15,7 +15,11 @@ NATIVE_KEYS = '''sInventoryWeapons sInventoryApparel sInventoryAid sInventoryMis
 sInventoryAmmoTab sLocalMapTabText sWorldMapTabText sQuestsTabText sNotesTabText
 sCommsTabText sTravelQuestion sYes sNo sInventoryEquip sInventoryUnequip
 sInventoryUse sAudio sControls sDefaults sMasterVolume sMusicVolume
-sEffectsVolume sVoiceVolume'''.split()
+sEffectsVolume sVoiceVolume sNext sMale sFemale sRace sNone sComplexion
+sRSMSex sRSMFace sRSMHair sRSMCustomize sRSMHairStyle sRSMHairColor
+sRSMFacialHair sRSMEyeColor sRSMPreset sRSMRandomize sRSMRedAbbrev
+sRSMGreenAbbrev sRSMBlueAbbrev sRSMGeneral sRSMConfirmDone sRSMCharacter
+sRSMConfirmRandomize'''.split()
 
 
 def recover(path):
