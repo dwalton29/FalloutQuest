@@ -4,7 +4,6 @@
 #include "fo3-menu-renderer.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "ui/chargen/fo3-special-book.h"
-#include "ui/lockpick/fo3-lockpick-overlay.h"
 
 namespace fo3menuui {
 struct SpecialBookFrame {
@@ -159,13 +158,10 @@ struct SpecialBookFrame {
     if(!surface.vertices.empty())surface.Upload();
   }
 
-  void Draw(const float* mvp,const fo3special::Model& model,const fo3player::Player& player,
-            GLsizei width,GLsizei height) {
+  void Draw(const float* mvp,const fo3special::Model& model,const fo3player::Player& player) {
     if(!ready)return;
-    fo3hudrenderer::CachedStateGuard guard;
     Build(model,player);
-    fo3lockoverlay::DepthScope depth(width,height);
-    if(depth.valid)surface.Render(mvp,true);
+    surface.Render(mvp,true);
   }
 
   void Shutdown() {surface.Shutdown();*this={};}

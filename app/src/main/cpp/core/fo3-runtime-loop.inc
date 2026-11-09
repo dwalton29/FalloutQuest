@@ -2757,9 +2757,11 @@ private:
                         fo3menuui::Appearance(keyboard.m,fo3chargen::menu,*fo3chargen::controls,
                             gPlayerSession->player,gFo3AppearanceTexture,fo3chargen::textureUv);
                     else fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
-                }else if(Fo3SpecialBookFocus()&&gSpecialBookEntry.authored&&panel.visible)
-                    fo3menuui::BookFrame().Draw(keyboard.m,gSpecialBookEntry,gPlayerSession->player,eye.width,eye.height);
-                else if(!appearance)fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
+                }else if(Fo3SpecialBookFocus()&&gSpecialBookEntry.authored&&panel.visible){
+                    fo3hudrenderer::CachedStateGuard guard;
+                    fo3lockoverlay::DepthScope depth(eye.width,eye.height);
+                    if(depth.valid)fo3menuui::BookFrame().Draw(keyboard.m,gSpecialBookEntry,gPlayerSession->player);
+                }else if(!appearance)fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
                 if(Fo3PlayerNameFocus()){
                     model.m[13]+=.65f;
                     const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);
