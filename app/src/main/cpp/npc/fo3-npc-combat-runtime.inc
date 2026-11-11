@@ -174,7 +174,9 @@ static bool Q230DefendsLeader(const Q230ActorVisual& actor,const fo3pipdata::Pac
 }
 static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
   FQ_PERF_SCOPE(WeaponChoice);
-  auto& p=gPlayerSession->player;const auto* contents=p.ContainerContents(actor.source.refFormId);if(!contents)return false;
+  auto& p=gPlayerSession->player;
+  const auto* contents=p.ContainerContents(actor.source.refFormId);
+  if(!contents&&!actor.source.creature)return false;
   const auto* style=Q230Style(actor);const auto* package=Q230CurrentPackage(actor);
   if(package&&(!package->combatStyleValid||(package->combatStyle&&!style))){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported package CSTY "+std::to_string(package->combatStyle));return false;}
   const auto* current=p.ActorWeapon(actor.source.refFormId);
@@ -185,7 +187,7 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
   }
   bool bestInRange=false;
   float best=-1;uint64_t selected=0;uint32_t form=0;
-  for(const auto& s:*contents){const auto prepared=actor.combatWeapons.find(s.formId);
+  if(contents&&!actor.source.creature)for(const auto& s:*contents){const auto prepared=actor.combatWeapons.find(s.formId);
     if(prepared==actor.combatWeapons.end()||!prepared->second.ready||prepared->second.gpu.empty()||s.condition<=0)continue;
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
     if(current&&saved!=p.Snapshot().actors.end()&&saved->second.weaponLocked&&s.id!=current->id)continue;
@@ -200,10 +202,12 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
     if((inRange&&!bestInRange)||(inRange==bestInRange&&score>best)){best=score;bestInRange=inRange;selected=s.id;form=s.formId;}
   }
   if(!selected){
-    if(style&&style->restrictions==2)return false;
+    if(!actor.source.creature&&style&&style->restrictions==2)return false;
     const auto& names=p.Definitions().pipboy.formNames;
     const auto fists=names.find("fists");
-    if(fists==names.end()||!actor.combatWeapons.count(fists->second))return false;
+    if(fists==names.end())return false;
+    const auto prepared=actor.combatWeapons.find(fists->second);
+    if(prepared==actor.combatWeapons.end()||!prepared->second.ready)return false;
     form=fists->second;
   }
   if(actor.runtime.equippedWeapon==selected&&actor.runtime.combatWeaponForm==form)return true;
@@ -657,7 +661,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   const auto* style=Q230Style(actor);const bool ranged=d.Firearm();
   const auto attackOrigin=[&](){
     std::array<float,3> origin{};
-    if(!owned&&Q230LiveBone(actor,actor.chestBone,origin))return origin;
+    if(!owned&&Q230LiveBone(actor,actor.source.creature?actor.headBone:actor.chestBone,origin))return origin;
     return fo3anim::Point(Q230WeaponMatrix(actor),{weapon.muzzle[0]/FO3_UNITS_PER_METRE,
         FLOOR_Y+weapon.muzzle[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-weapon.muzzle[1]/FO3_UNITS_PER_METRE});
   };

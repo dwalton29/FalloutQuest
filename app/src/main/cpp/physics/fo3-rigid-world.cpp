@@ -310,12 +310,21 @@ bool World::AddRagdoll(uint32_t actor,const fo3rag::Definition& asset,const std:
   Entry e;e.ragdoll=true;e.ragdollScale=bodyScale;e.ragdollRadius=(B(d.b)-B(d.a)).length()*.5f*bodyScale+d.radius*bodyScale;e.principal.setOrigin(B(d.center)*bodyScale);
   btVector3 inertia(d.inertia[0]*bodyScale*bodyScale,d.inertia[4]*bodyScale*bodyScale,d.inertia[8]*bodyScale*bodyScale);
   if(inertia.x()>0&&inertia.y()>0&&inertia.z()>0){btMatrix3x3 tensor(d.inertia[0],d.inertia[1],d.inertia[2],d.inertia[3],d.inertia[4],d.inertia[5],d.inertia[6],d.inertia[7],d.inertia[8]),axes;for(int r=0;r<3;++r)tensor[r]*=bodyScale*bodyScale;tensor.diagonalize(axes,1e-6f,32);if(tensor[0][0]>0&&tensor[1][1]>0&&tensor[2][2]>0){e.principal.setBasis(axes);inertia={tensor[0][0],tensor[1][1],tensor[2][2]};}}
-  const auto a=B(d.a)*bodyScale,b=B(d.b)*bodyScale,axis=b-a;
-  auto capsule=std::make_unique<btCapsuleShape>(d.radius*bodyScale,axis.length());capsule->setMargin(.001f);
-  auto local=btTransform::getIdentity();local.setOrigin((a+b)*.5f);
-  if(axis.length2()>1e-10f)local.setRotation(shortestArcQuat(btVector3(0,1,0),axis.normalized()));
-  local=e.principal.inverse()*local;
-  auto compound=std::make_unique<btCompoundShape>();compound->addChildShape(local,capsule.get());e.children.push_back(std::move(capsule));e.shape=std::move(compound);e.ragdollThinRadius=d.radius*bodyScale;
+  auto compound=std::make_unique<btCompoundShape>();
+  const auto addCapsule=[&](const fo3rag::Capsule& shape){
+   const auto a=B(shape.a)*bodyScale,b=B(shape.b)*bodyScale,axis=b-a;
+   auto capsule=std::make_unique<btCapsuleShape>(shape.radius*bodyScale,axis.length());capsule->setMargin(.001f);
+   auto local=btTransform::getIdentity();local.setOrigin((a+b)*.5f);
+   if(axis.length2()>1e-10f)local.setRotation(shortestArcQuat(btVector3(0,1,0),axis.normalized()));
+   compound->addChildShape(e.principal.inverse()*local,capsule.get());
+   e.children.push_back(std::move(capsule));
+  };
+  addCapsule({d.a,d.b,d.radius});
+  for(const auto& shape:d.extraCapsules){
+   if(!Finite(shape.a)||!Finite(shape.b)||!std::isfinite(shape.radius)||shape.radius<=0){RemoveRagdoll(actor);return false;}
+   addCapsule(shape);
+  }
+  e.shape=std::move(compound);e.ragdollThinRadius=d.radius*bodyScale;
   // Authored full inertia is rotated into its principal frame above.
   if(inertia.x()<=0||inertia.y()<=0||inertia.z()<=0)e.shape->calculateLocalInertia(d.mass,inertia);
   btRigidBody::btRigidBodyConstructionInfo info(d.mass,nullptr,e.shape.get(),inertia);
@@ -323,6 +332,12 @@ bool World::AddRagdoll(uint32_t actor,const fo3rag::Definition& asset,const std:
   info.m_linearDamping=std::clamp(d.linearDamping,0.f,1.f);info.m_angularDamping=std::clamp(d.angularDamping,0.f,1.f);
   e.body=std::make_unique<btRigidBody>(info);const auto pose=B(poses[n])*e.principal;e.body->setWorldTransform(pose);e.body->setInterpolationWorldTransform(pose);e.body->setLinearVelocity(B(velocity));
   e.body->setSleepingThresholds(.06f,.25f);e.body->setCcdMotionThreshold(d.radius*bodyScale*.5f);e.body->setCcdSweptSphereRadius(d.radius*bodyScale*.8f);
+  for(size_t other=0;other<rag.bodies.size();++other){
+   if(d.collideWithSelf&&asset.bodies[other].collideWithSelf)continue;
+   auto& sibling=*impl->bodies.at(rag.bodies[other]).body;
+   sibling.setIgnoreCollisionCheck(e.body.get(),true);
+   e.body->setIgnoreCollisionCheck(&sibling,true);
+  }
   impl->world.addRigidBody(e.body.get(),4,7);impl->bodies.emplace(id,std::move(e));rag.bodies.push_back(id);
  }
  for(const auto& d:asset.joints){

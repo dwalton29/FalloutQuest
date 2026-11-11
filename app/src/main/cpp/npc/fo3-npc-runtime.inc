@@ -81,18 +81,25 @@ static fo3anim::Clip Q230CreatureAttackClip(const std::string& root){
   std::lock_guard<std::mutex> lock(mutex);
   const auto found=clips.find(root);
   if(found!=clips.end())return found->second;
-  std::vector<FalloutMeshIndexEntry> entries;
-  ListFalloutMeshFilesByPrefix(root,entries);
   fo3anim::Clip attack;
-  for(const auto& entry:entries){
-    const auto name=entry.path.substr(entry.path.find_last_of('\\')+1);
-    if(name.size()<4||name.find("attack")==std::string::npos||name.substr(name.size()-3)!=".kf")continue;
+  const auto load=[&](const std::string& path){
     std::vector<uint8_t> bytes;fo3anim::Clip clip;
-    if(!LoadFalloutMeshFile(entry.path,bytes)||!fo3anim::DecodeClip(bytes,clip)||
-       clip.tracks.empty()||clip.stop<=clip.start||clip.frequency<=0)continue;
-    const auto hit=std::find_if(clip.textKeys.begin(),clip.textKeys.end(),[](const auto& key){return key.text=="Hit";});
-    if(hit==clip.textKeys.end())continue;
-    attack=std::move(clip);break;
+    if(!LoadFalloutMeshFile(path,bytes)||!fo3anim::DecodeClip(bytes,clip)||
+       clip.tracks.empty()||clip.stop<=clip.start||clip.frequency<=0)return false;
+    if(std::none_of(clip.textKeys.begin(),clip.textKeys.end(),[&](const auto& key){
+      return key.text=="Hit"&&key.time>=clip.start&&key.time<=clip.stop;
+    }))return false;
+    attack=std::move(clip);
+    return true;
+  };
+  if(!load(root+"h2hattackright.kf")){
+    std::vector<FalloutMeshIndexEntry> entries;
+    ListFalloutMeshFilesByPrefix(root,entries);
+    for(const auto& entry:entries){
+      auto name=entry.path.substr(entry.path.find_last_of("\\/")+1);
+      for(auto& ch:name)ch=char(std::tolower(static_cast<unsigned char>(ch)));
+      if(name.size()>3&&name.find("attack")!=std::string::npos&&name.substr(name.size()-3)==".kf"&&load(entry.path))break;
+    }
   }
   return clips.emplace(root,std::move(attack)).first->second;
 }
@@ -109,7 +116,11 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     Q230CombatWeapon ready;
     ready.clips[1]=Q230CreatureAttackClip(root);
     if(ready.clips[1].tracks.empty())return;
-    ready.clips[0]=actor.clip;ready.definition=item->second.weapon;
+    std::vector<uint8_t> bytes;
+    if(!LoadFalloutMeshFile(root+"h2haim.kf",bytes)||!fo3anim::DecodeClip(bytes,ready.clips[0])||ready.clips[0].tracks.empty())
+      ready.clips[0]=actor.clip;
+    for(const auto& key:ready.clips[1].textKeys)if(key.text.rfind("Sound: ",0)==0)fo3audio::PreloadSound(key.text.substr(7));
+    ready.definition=item->second.weapon;
     ready.definition.maxRange=stats->creatureReach*actor.source.scale;
     ready.definition.attackMult=ready.clips[1].frequency;
     ready.ready=true;actor.combatWeapons.emplace(fists->second,std::move(ready));

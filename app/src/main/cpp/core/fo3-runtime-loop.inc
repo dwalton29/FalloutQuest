@@ -2156,13 +2156,10 @@ private:
                     !Fo3GameplayBlocked()&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED,
                     q210RightValid&&sessionState_==XR_SESSION_STATE_FOCUSED,gQ210Head);
                 if(!Fo3GameplayBlocked()&&!vatsOwned) {
-                    // Reload takes precedence over the left-wrist Pip-Boy gesture.
-                    // Cancel even a primed activation so the physical magazine can
-                    // pass in front of the player's face without being holstered.
-                    const bool reloadingInHand=WeaponReloadActive();
-                    if(reloadingInHand&&gPipActivation.phase!=fo3pip::Phase::Dormant){
+                    // A held weapon owns the hands until it is stowed or released.
+                    const bool weaponInHand=WeaponHeld();
+                    if(weaponInHand&&gPipActivation.phase!=fo3pip::Phase::Dormant){
                         gPipActivation.Reset();gPipMenu.dirty=true;
-                        Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
                     const bool nameControls=movieControls||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||Fo3AppearanceFocus();
                     UpdateFo3AppearanceMenu(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
@@ -2183,7 +2180,7 @@ private:
                         q210RightValid&&pipBackDown_,
                         sessionState_==XR_SESSION_STATE_FOCUSED);
                     UpdateFo3Pipboy(gStereoFrame,gameplaySeconds,pipHead.m,
-                        gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3LevelUpFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
+                        gVrPipTracking.Step(gSceneReady&&!weaponInHand&&!(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3LevelUpFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
                             headTracking,{gripHandPoseValid_[0],gripHandTracked_[0]},{handPoseValid_[0],pipLeftAimTracked_},
                             gameplaySeconds),
                         q210RightValid&&!Fo3LevelUpFocus()?turnX_:0,
@@ -2838,19 +2835,16 @@ private:
                 const auto mvp=Multiply(viewProjection,model);
                 fo3levelui::Render(mvp.m,gLevelUp.panel);
             }
-            if(showHud&&fo3worldscript::scriptSubtitle.visible&&!IsFo3LoadingVisible()&&gPlayerSession){
-                const auto& panel=fo3worldscript::scriptSubtitle;Mat4 model{};const float yaw=panel.yaw;
-                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
-                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
-                model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
-                const auto mvp=Multiply(viewProjection,model);fo3menuui::Conversation(mvp.m,panel,gPlayerSession->player);
-            }
-            if(showHud&&gDialoguePanel.visible&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
-                const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
-                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
-                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
-                model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
-                const auto dialogueMvp=Multiply(viewProjection,model);if(gPlayerSession)fo3menuui::Conversation(dialogueMvp.m,panel,gPlayerSession->player);
+            const auto headMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
+            if(showHud&&gPlayerSession&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()){
+                const auto& panel=gDialoguePanel.visible?gDialoguePanel:fo3worldscript::scriptSubtitle;
+                if(panel.visible){
+                    Mat4 offset{};
+                    offset.m[0]=offset.m[5]=offset.m[10]=offset.m[15]=1.f;
+                    offset.m[14]=-1.5f;
+                    const auto dialogueMvp=Multiply(headMvp,offset);
+                    fo3menuui::Conversation(dialogueMvp.m,panel,gPlayerSession->player);
+                }
             }
 
             if(showHud&&gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
@@ -2941,15 +2935,12 @@ private:
                     }
                 }
             }
-            // Final colour HUD pass, after world, hands, prompts, loot and post.
-            // One head-relative pose/queue snapshot shared by both stereo eyes.
-            if(showHud&&!IsFo3LoadingVisible()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())) {
-                const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
-                fo3notifyui::Render(notificationMvp.m);
-                fo3xpui::Render(notificationMvp.m);
-                if(!gFo3PauseOpen&&!(gPlayerSession&&fo3player::EarlyFirstPerson(gPlayerSession->player))){fo3compassui::Render(notificationMvp.m);fo3sneakui::Render(notificationMvp.m);}
+            const bool ordinaryHud=showHud&&!IsFo3LoadingVisible()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&
+                !Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!Fo3LockpickFocus()&&!Fo3TerminalFocus();
+            if(ordinaryHud&&!gFo3PauseOpen&&!(gPlayerSession&&fo3player::EarlyFirstPerson(gPlayerSession->player))){
+                fo3compassui::Render(headMvp.m);fo3sneakui::Render(headMvp.m);
             }
-            if(showHud&&Fo3VatsFocus()&&!IsFo3LoadingVisible())RenderFo3Vats(viewProjection.m);
+            if(showHud&&Fo3VatsFocus()&&!IsFo3LoadingVisible())RenderFo3Vats(viewProjection.m,headMvp.m);
             // Modal lockpicking is last among world/hand/ordinary HUD draws.
             // It has fresh self-occlusion depth, independent of nearby models.
             if(showHud&&Fo3LockpickFocus()&&gPlayerSession) {
@@ -3002,6 +2993,11 @@ private:
                 model.m[12]=gQ210Head[0]-std::sin(yaw)*1.5f;
                 model.m[13]=gQ210Head[1];model.m[14]=gQ210Head[2]-std::cos(yaw)*1.5f;model.m[15]=1;
                 const auto pauseMvp=Multiply(viewProjection,model);fo3pauseui::Render(pauseMvp.m);
+            }
+            // Submit notices after every world, hand, and overlay draw.
+            if(ordinaryHud){
+                fo3notifyui::Render(headMvp.m);
+                fo3xpui::Render(headMvp.m);
             }
             if(fqgl::counters.draws!=motionLateUiBefore)fqmotion::eye.Block(fqmotion::Ui);
             if(spacewarpProducerReady_&&fqmotion::eye.history){

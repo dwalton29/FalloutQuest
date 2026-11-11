@@ -25,7 +25,7 @@ struct SpeechLane {
     uint32_t reference=0,identity=0,target=0,listener=0,topic=0,token=0;
     uint32_t package=0,packageOwner=0;
     std::pair<uint32_t,uint32_t> pendingPackageDone{};
-    double began=0;
+    double began=0,missingVoiceUntil=0;
     bool subtitle=false,noTargetLook=false,noHeadTracking=false;
     bool paused=false;
     uint32_t pausedQuest=0;
@@ -145,6 +145,7 @@ bool Event(uint32_t reference,const char* event,uint32_t activator,bool persist=
 }
 static void SpeechPlay(SpeechLane& lane,unsigned index,fo3player::Player& player){
     lane.began=seconds;
+    lane.missingVoiceUntil=0;
     lane.token=0x30000000u|(++speechSerial&0xffffffu);
     if(auto* actor=lane.dialogue.proxy?nullptr:DialogueActor(lane.reference)){
         actor->runtime.speaking=true;actor->runtime.scriptSpeechToken=lane.token;
@@ -191,10 +192,24 @@ static void AdvanceSpeech(SpeechLane& lane,unsigned index,fo3player::Player& pla
     if(speech.phase==fo3dialogue::Phase::Results){
         advanced=speech.ResumeResults(SpeechContext(lane.reference,lane.target),player);
     }else{
-        const auto done=fo3audio::TakeDialogueLane(index);
-        if(!done||uint32_t(done>>1)!=lane.token)return;
-        const bool heard=(done&1u)!=0;
-        if(!heard)Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);
+        bool heard=false;
+        if(lane.missingVoiceUntil>0){
+            if(seconds<lane.missingVoiceUntil)return;
+        }else{
+            const auto done=fo3audio::TakeDialogueLane(index);
+            if(!done||uint32_t(done>>1)!=lane.token)return;
+            heard=(done&1u)!=0;
+            if(!heard){
+                Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);
+                if(lane.subtitle){
+                    const auto line=speech.Subtitle(player.Definitions().pipboy);
+                    if(!line.empty()){
+                        lane.missingVoiceUntil=lane.began+std::clamp(line.size()*.045,1.5,5.);
+                        if(seconds<lane.missingVoiceUntil)return;
+                    }
+                }
+            }
+        }
         advanced=speech.AudioDone(speech.audioToken,heard,SpeechContext(lane.reference,lane.target),player);
     }
     if(speech.phase==fo3dialogue::Phase::Results)return;
@@ -238,9 +253,16 @@ static void StartSpeech(SpeechLane& lane,unsigned index,const fo3script::Action&
     }
     auto& speech=lane.dialogue;
     ConfigureFo3DialogueSession(speech);
-    const bool started=action.info?
+    if(action.package){
+        const auto* speaker=DialogueActor(action.reference);
+        if(!speaker||speaker->aiPackage!=action.package||
+           !Q230ChatEligible(*speaker,action.flags,action.package))return;
+    }
+    // A package can wait for a free lane while another line changes the quest.
+    // Resolve its current INFO at playback. SCPT SayTo binds its INFO at capture.
+    const bool started=action.info&&!action.package?
         speech.StartSelectedTopic(action.form,action.info,admission,player,conversation):
-        speech.StartTopic(action.form,admission,player);
+        speech.StartTopic(action.form,admission,player,conversation);
     if(!started){
         Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);
         return;
@@ -265,12 +287,6 @@ static void UpdateSpeechSubtitle(const fo3pipdata::Definitions& definitions){
             if(!text.empty())text+="\n";
             text+=line;
         }
-    }
-    if(!text.empty()&&!scriptSubtitle.visible){
-        const float yaw=gQ210Head[3];
-        scriptSubtitle.yaw=yaw;
-        scriptSubtitle.anchor={gQ210Head[0]-std::sin(yaw)*1.5f,gQ210Head[1]-.25f,
-                               gQ210Head[2]-std::cos(yaw)*1.5f};
     }
     scriptSubtitle.visible=!text.empty();
     if(text!=scriptSubtitle.subtitle){scriptSubtitle.subtitle=std::move(text);++scriptSubtitle.revision;}
@@ -483,7 +499,12 @@ void Actions(){
                 actor->runtime.scriptLookTarget=target.reference;
                 actor->runtime.scriptLookRotateBody=target.rotateBody;
             }
-        }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
+        }else if(action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation){
+            const bool queued=std::any_of(speechPending.begin(),speechPending.end(),[&](const auto& other){
+                return (action.package||other.package)&&other.reference==action.reference&&
+                       other.flags==action.flags&&other.form==action.form&&other.info==action.info;
+            });
+            if(!queued&&speechPending.size()<128)speechPending.push_back(action);
         }else if(action.kind==fo3script::ActionKind::UseWeapon){
             if(volleys.size()<16)volleys.push_back({action.reference,action.flags,action.form,action.info,seconds});
         }else if(action.kind==fo3script::ActionKind::WeaponHit){

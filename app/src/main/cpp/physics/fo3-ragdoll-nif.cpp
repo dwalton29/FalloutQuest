@@ -43,14 +43,31 @@ bool Read(const std::vector<uint8_t>& bytes,Definition& out,std::string& error){
  std::vector<const uint8_t*> blocks;for(auto n:sizes){r.Need(n);blocks.push_back(bytes.data()+r.at);r.Skip(n);}
  const auto roots=r.U32();if(roots>count)throw "invalid skeleton roots";for(uint32_t i=0;i<roots;++i)if(r.U32()>=count)throw "invalid skeleton root";if(r.at!=bytes.size())throw "trailing skeleton data";
  Definition result;std::unordered_map<uint32_t,uint16_t> bodyIds;std::unordered_set<std::string> names;
+ const auto capsule=[&](uint32_t shape){
+  if(shape>=count||types[tags[shape]]!="bhkCapsuleShape"||sizes[shape]!=48)throw "unsupported ragdoll shape";
+  const auto* s=blocks[shape];
+  Capsule c{Vec(s+16,7),Vec(s+32,7),F(s+4)*7};
+  if(c.radius<=0||std::abs(F(s+28)*7-c.radius)>.001f||std::abs(F(s+44)*7-c.radius)>.001f)
+   throw "unsupported tapered capsule";
+  return c;
+ };
  for(uint32_t i=0;i<count;++i)if(types[tags[i]]=="bhkBlendCollisionObject"){
   if(sizes[i]!=18)throw "invalid blended collision object";
   const auto target=U(blocks[i]),body=U(blocks[i]+6);
   if(target>=count||body>=count||(types[tags[target]]!="NiNode"||sizes[target]<4)||types[tags[body]]!="bhkRigidBody"||sizes[body]<236)throw "unsupported ragdoll body";
-  const auto* d=blocks[body];const auto shape=U(d);if(shape>=count||types[tags[shape]]!="bhkCapsuleShape"||sizes[shape]!=48)throw "unsupported ragdoll shape";
+  const auto* d=blocks[body];const auto shape=U(d);if(shape>=count)throw "invalid ragdoll shape";
   const auto name=U(blocks[target]);if(name>=strings.size()||strings[name].empty()||!names.insert(strings[name]).second||result.bodies.size()>=64)throw "invalid body bone";
-  const auto* s=blocks[shape];Body b;b.bone=strings[name];b.a=Vec(s+16,7);b.b=Vec(s+32,7);b.radius=F(s+4)*7;
-  if(b.radius<=0||std::abs(F(s+28)*7-b.radius)>.001f||std::abs(F(s+44)*7-b.radius)>.001f)throw "unsupported tapered capsule";
+  Body b;b.bone=strings[name];Capsule primary;
+  // Fallout 3 biped Havok filter: the high flag enables self-collision.
+  if(d[4]==8)b.collideWithSelf=(d[5]&0x80u)!=0;
+  if(types[tags[shape]]=="bhkListShape"){
+   const auto* list=blocks[shape];if(sizes[shape]<4)throw "invalid ragdoll shape list";
+   const auto children=U(list);
+   if(!children||children>16||sizes[shape]!=44+4*children)throw "invalid ragdoll shape list";
+   primary=capsule(U(list+4));
+   for(uint32_t child=1;child<children;++child)b.extraCapsules.push_back(capsule(U(list+4+4*child)));
+  }else primary=capsule(shape);
+  b.a=primary.a;b.b=primary.b;b.radius=primary.radius;
   b.center=Vec(d+164,7);b.mass=F(d+180);b.linearDamping=F(d+184);b.angularDamping=F(d+188);b.friction=F(d+192);b.restitution=F(d+196);
   if(b.mass<=0||b.mass>10000)throw "invalid body mass";
   for(int a=0;a<3;++a)for(int k=0;k<3;++k)b.inertia[a*3+k]=F(d+116+a*16+k*4)*49;

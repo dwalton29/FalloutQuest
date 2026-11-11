@@ -1515,6 +1515,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for (const auto &entry : state_.containers)
     containerIds.push_back(entry.first);
   std::sort(containerIds.begin(), containerIds.end());
+  bool hasActorApparel = false;
   for (auto id : containerIds) {
     Put32(payload, id);
     const auto &contents = state_.containers.at(id);
@@ -1522,7 +1523,10 @@ bool Player::Save(const std::string &path, std::string &error) const {
     for (const auto &stack : contents) {
       Put64(payload, stack.id);
       Put32(payload, stack.formId);
-      Put32(payload, stack.count);
+      const bool apparel = stack.equipped && catalog_->items.at(stack.formId).kind == ItemKind::Armour;
+      hasActorApparel |= apparel;
+      // v38 uses the unused high bit of the positive container stack count.
+      Put32(payload, uint32_t(stack.count) | (apparel ? 0x80000000u : 0u));
       PutFloat(payload, stack.condition);
     }
   }
@@ -1601,7 +1605,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasLimbs=!state_.actorLimbDamage.empty();
+  const bool hasLimbs=hasActorApparel||!state_.actorLimbDamage.empty();
   const bool hasAid=hasLimbs||!state_.activeAid.empty()||!state_.addictions.empty();
   const bool hasAppearance=hasAid||state_.appearance.race||state_.appearanceDraft.race;
   const bool hasTags=hasAppearance||state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
@@ -1915,7 +1919,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
       Put64(payload,limb.first);PutFloat(payload,limb.second);
     }
   }
-  Put32(bytes, hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  Put32(bytes, hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1975,7 +1979,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 37))
+      (version < 1 || version > 38))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2069,9 +2073,13 @@ bool Player::Restore(const std::string &path, std::string &error) {
           (totalStacks += size) > 30000 || payload.size() - at < 20ull * size)
         return fail("Invalid saved container");
       std::vector<Stack> contents;
+      uint32_t apparelSlots = 0;
       for (uint32_t i = 0; i < size; ++i, at += 20) {
-        Stack stack{U64(p + at), fo3esm::ReadU32(p + at + 8), I32(p + at + 12),
-                    fo3esm::ReadF32(p + at + 16), false};
+        const uint32_t storedCount = fo3esm::ReadU32(p + at + 12);
+        const bool apparel = version >= 38 && (storedCount & 0x80000000u);
+        Stack stack{U64(p + at), fo3esm::ReadU32(p + at + 8),
+                    int32_t(apparel ? storedCount & 0x7fffffffu : storedCount),
+                    fo3esm::ReadF32(p + at + 16), apparel};
         const auto item = catalog_->items.find(stack.formId);
         if (!stack.id || stack.id >= next.nextStackId ||
             !ids.insert(stack.id).second || item == catalog_->items.end() ||
@@ -2080,6 +2088,13 @@ bool Player::Restore(const std::string &path, std::string &error) {
             (item->second.maxCondition == 0 && stack.condition != 1) ||
             (version >= 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
           return fail("Invalid container stack");
+        if (apparel) {
+          const auto slots = item->second.bipedMask;
+          if (!catalog_->actorInventories.count(found->second.base) ||
+              item->second.kind != ItemKind::Armour || !slots || (slots & apparelSlots))
+            return fail("Invalid equipped actor apparel");
+          apparelSlots |= slots;
+        }
         contents.push_back(stack);
       }
       next.containers.emplace(ref, std::move(contents));

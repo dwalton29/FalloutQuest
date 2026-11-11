@@ -221,19 +221,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
   gDialoguePreviousA=a;gDialoguePreviousB=b;
   if(gDialogue.Active()) {
     auto* actor=DialogueActor(gDialogue.actor);
-    std::array<float,3> head{};
-    // Actor residency is a scene-lifetime fact. A temporarily unavailable head
-    // bone/pose is not an unload signal: newly uploaded or culled actors can
-    // legitimately miss one live-bone sample while their stable root remains.
     const bool resident=actor&&!actor->rigs.empty();
-    const bool liveHead=resident&&Q230LiveBone(*actor,actor->headBone,head);
-    if(resident&&!liveHead){
-      std::array<float,3> lo{},hi{};
-      if(Q230LiveBounds(*actor,lo,hi))
-        head={(lo[0]+hi[0])*.5f,lo[1]+(hi[1]-lo[1])*.82f,(lo[2]+hi[2])*.5f};
-      else
-        head={actor->runtime.position[0],actor->runtime.position[1]+1.55f,actor->runtime.position[2]};
-    }
     // Dialogue interruption must use the actor root, not an animated head
     // sample. Head bones are presentation data and can jump during clip/blend
     // changes; the runtime root is the stable scene-space actor position.
@@ -299,11 +287,6 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
         else {
         DialoguePublishAudio();
         const bool first=!gDialoguePanel.visible;
-        const float dx=gQ210Head[0]-head[0],dz=gQ210Head[2]-head[2];const float len=std::max(.01f,std::sqrt(dx*dx+dz*dz));
-        const std::array<float,3> anchor{head[0]+dx/len*fo3npc::DialoguePolicy::PanelForward,head[1]-fo3npc::DialoguePolicy::PanelBelowHead,head[2]+dz/len*fo3npc::DialoguePolicy::PanelForward};
-        fo3dialogue::SmoothAnchor(gDialoguePanel,anchor,dt,first);
-        const float desired=std::atan2(dx,dz);
-        gDialoguePanel.yaw=first?desired:gDialoguePanel.yaw+fo3npc::Angle(desired-gDialoguePanel.yaw)*(1-std::exp(-dt/.25f));
         gDialoguePanel.visible=true;
         if(!choicesDeferred&&(gDialoguePanelInfo!=gDialogue.info||gDialoguePanelResponse!=gDialogue.response||gDialoguePanelPhase!=gDialogue.phase||first)) {
           gDialoguePanelInfo=gDialogue.info;gDialoguePanelResponse=gDialogue.response;gDialoguePanelPhase=gDialogue.phase;

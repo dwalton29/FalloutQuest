@@ -2,7 +2,6 @@
 static void Q230CacheRagdoll(Q230ActorVisual& actor,
  std::unordered_map<std::string,std::shared_ptr<const fo3rag::Definition>>& cache,
  const fo3player::PagedStateMap<fo3player::ActorState>* saved){
- if(actor.source.creature)return; // Creature constraints require a separate asset audit.
  // Initial globals/local attachment transforms must exist even before the
  // first visible draw, including on restored corpses that bypass animation.
  fo3anim::BindClip(actor.skeleton,actor.clip,actor.pose);

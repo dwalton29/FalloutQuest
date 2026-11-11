@@ -72,9 +72,9 @@ static bool ScriptSpeakerAlive(const Context& ctx,const fo3player::Player& p){
       speaker!=d.pipboy.dialogueActors.end()&&speaker->second.talkingActivator&&
       p.ReferenceDisabled(ctx.speaker.reference,disabled,error)&&!disabled;
 }
-bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player& p){
-  if(Active()||!ctx.player||!ScriptSpeakerAlive(ctx,p))return false;
-  scriptedTopic=true;
+bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player& p,bool conversation){
+  if(Active()||!ctx.player||(conversation&&ctx.speaker.combat)||!ScriptSpeakerAlive(ctx,p))return false;
+  scriptedTopic=true;linkedConversation=conversation;
   const auto* chosen=Resolve(requested,ctx,true);if(!chosen)return false;
   actor=ctx.speaker.reference;proxy=ctx.speaker.proxy;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);

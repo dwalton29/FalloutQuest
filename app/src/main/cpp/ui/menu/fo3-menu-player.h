@@ -730,6 +730,9 @@ inline void Conversation(const float *mvp, const fo3dialogue::Panel &panel,
     auto &l = doc.layout;
     l.Set(l.Root(), "_DialogVisible", 1.);
     l.Set(l.Root(), "_ShowingText", double(panel.choices.empty()));
+    l.Set("DM_CenterHeight", "y", l.height * .5);
+    l.Set("DM_SpeakerText", "x", l.width * .5);
+    l.Set("DM_SpeakerText", "justify", 1.);
     l.Set("DM_SpeakerNameLabel", "string", panel.title);
     l.Set("DM_SpeakerText", "string", panel.subtitle);
     std::vector<Row> rows;

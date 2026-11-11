@@ -42,13 +42,20 @@ static void Prepare() {
   gQ210Head=actor.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=1;
   actionSounds.clear();shots=0;blocked=false;partialCover=captureCoverRays=false;coverRayOrigins.clear();loading=false;dialogueEnds=0;
 }
-static void ScriptOrderedFists(){
+static void ScriptOrderedFists(bool creature=false){
   Prepare();
   auto c=gPlayerSession->player.Definitions();
   auto& actor=gQ230NpcActors.front();
   c.pipboy.dialogueActors[43].aiData[0]=0;
   c.pipboy.dialogueActors[43].aiData[1]=2;
   c.actorInventories[43].entries.clear();
+  if(creature){
+    actor.source.creature=true;
+    c.actorInventories.erase(43);
+    c.weapons.actors[43].creature=true;
+    c.weapons.actors[43].creatureDamage=5;
+    c.weapons.actors[43].creatureReach=65;
+  }
   c.pipboy.formNames["fists"]=15;
   auto fists=c.items.at(10);fists.formId=15;fists.weapon.animation=0;fists.weapon.maxRange=65;
   c.items[15]=fists;c.weapons.unarmedBase=.5f;c.weapons.unarmedMult=.05f;c.weapons.actors[43].skills[13]=5;
@@ -63,7 +70,7 @@ static void ScriptOrderedFists(){
          !actor.runtime.equippedWeapon&&!player.ActorWeapon(42)&&!actor.runtime.moraleFlee);
   gQ210Head=actor.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=.5f;
   Q230SimulateActor(actor,1.1);assert(actor.runtime.pendingAttack&&player.Health()==100);
-  Q230SimulateActor(actor,1.4);assert(player.Health()==99&&shots==0);
+  Q230SimulateActor(actor,1.4);assert(player.Health()==(creature?95:99)&&shots==0);
 }
 static void AddNpc(fo3player::Catalog& c,uint32_t ref,uint32_t base,uint32_t target=0) {
   auto actor=gQ230NpcActors.front();actor.source.refFormId=ref;actor.source.baseFormId=base;actor.runtime={};actor.runtime.position=gQ230NpcActors.front().runtime.position;actor.runtime.position[2]-=.5f;
@@ -343,6 +350,7 @@ int main(int argc,char** argv){
 #endif
   EndIdleRetirement();
   ScriptOrderedFists();
+  ScriptOrderedFists(true);
   WeaponCommitAndMeleeTests();CoverGeometryTests();ConcurrentWeaponTests();
   {
     Prepare();auto& actor=gQ230NpcActors[0];actor.runtime.EndDialogue();actor.runtime.BeginCombat(0x14);

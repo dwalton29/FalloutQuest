@@ -93,17 +93,20 @@ static void Q230ChatStop(const char* reason) {
   gQ230NpcChat={};gQ230NpcChat.serial=serial;
 }
 static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
-  if(gQ230NpcChat.Active()||!gPlayerSession||gDialogue.Active()||Fo3PipboyFocus()||
-     gPlayerSession->player.AnyScriptActorTalking())return false;
+  if(gQ230NpcChat.Active()||!gPlayerSession||gDialogue.Active()||Fo3PipboyFocus())return false;
   auto* initiator=DialogueActor(speaker);
   if(initiator){const auto& definitions=gPlayerSession->player.Definitions().pipboy;const auto definition=definitions.packages.find(initiator->aiPackage);
     if(definition!=definitions.packages.end()&&(definition->second.dialogueType==1||definition->second.dialogueTopic)){
       if(!Q230ChatEligible(*initiator,listener,initiator->aiPackage))return false;
       if(listener==fo3player::PlayerRef&&definition->second.dialogueType==0)
         return StartFo3Dialogue(speaker,definition->second.dialogueTopic);
-      return gPlayerSession->player.QueueScriptSpeech(speaker,definition->second.dialogueTopic?definition->second.dialogueTopic:Q230HelloTopic(),listener,definition->second.dialogueType==0,false,initiator->aiPackage);
+      const bool say=definition->second.dialogueType==1;
+      if(!say&&gPlayerSession->player.AnyScriptActorTalking())return false;
+      if(gPlayerSession->player.ScriptActorTalking(speaker))return false;
+      return gPlayerSession->player.QueueScriptSpeech(speaker,definition->second.dialogueTopic?definition->second.dialogueTopic:Q230HelloTopic(),listener,!say,say&&listener==fo3player::PlayerRef,initiator->aiPackage);
     }
   }
+  if(gPlayerSession->player.AnyScriptActorTalking())return false;
   if(listener==fo3player::PlayerRef){
     auto* actor=DialogueActor(speaker);if(!actor||!Q230ChatEligible(*actor,listener)||!StartFo3Dialogue(speaker))return false;
     const auto& scripted=gPlayerSession->player.Snapshot().scriptPackages;

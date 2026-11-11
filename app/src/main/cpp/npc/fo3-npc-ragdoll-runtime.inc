@@ -72,7 +72,14 @@ static bool Q230RagdollBounds(const Q230ActorVisual& actor,questrender::Bounds& 
  const auto scene=fo3anim::Multiply(actor.dialogueRoot,actor.rigs[0].scenePlacement);
  if(actor.boundsCorpse==actor.corpsePose&&actor.corpseBoundsScene==scene){out=actor.cachedCorpseBounds;return true;}
  out={INFINITY,-INFINITY,INFINITY,-INFINITY,INFINITY,-INFINITY};
- for(size_t i=0;i<actor.corpsePose->bones.size();++i){const auto transform=fo3anim::Multiply(scene,actor.corpsePose->bones[i].global);const auto& body=actor.ragdollDefinition->bodies[i];float scale=0;for(int r=0;r<3;++r)scale+=transform[r]*transform[r];const float margin=body.radius*std::sqrt(scale)+.2f;
-  for(const auto& end:{body.a,body.b}){const auto p=fo3anim::Point(transform,end);out.minX=std::min(out.minX,p[0]-margin);out.maxX=std::max(out.maxX,p[0]+margin);out.minY=std::min(out.minY,p[1]-margin);out.maxY=std::max(out.maxY,p[1]+margin);out.minZ=std::min(out.minZ,p[2]-margin);out.maxZ=std::max(out.maxZ,p[2]+margin);}
+ for(size_t i=0;i<actor.corpsePose->bones.size();++i){
+  const auto transform=fo3anim::Multiply(scene,actor.corpsePose->bones[i].global);
+  const auto& body=actor.ragdollDefinition->bodies[i];float scale=0;for(int r=0;r<3;++r)scale+=transform[r]*transform[r];scale=std::sqrt(scale);
+  const auto include=[&](const fo3rag::Capsule& capsule){
+   const float margin=capsule.radius*scale+.2f;
+   for(const auto& end:{capsule.a,capsule.b}){const auto p=fo3anim::Point(transform,end);out.minX=std::min(out.minX,p[0]-margin);out.maxX=std::max(out.maxX,p[0]+margin);out.minY=std::min(out.minY,p[1]-margin);out.maxY=std::max(out.maxY,p[1]+margin);out.minZ=std::min(out.minZ,p[2]-margin);out.maxZ=std::max(out.maxZ,p[2]+margin);}
+  };
+  include({body.a,body.b,body.radius});
+  for(const auto& capsule:body.extraCapsules)include(capsule);
  }actor.boundsCorpse=actor.corpsePose;actor.corpseBoundsScene=scene;actor.cachedCorpseBounds=out;return true;
 }

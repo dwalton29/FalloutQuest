@@ -696,8 +696,33 @@ static void OriginalEscapeEncounters(const fo3player::Catalog& original){
       if(rescue)Check(p.ApplyAttack(PlayerRef,pistol,entry.first,10000),"player kills roach");
     }
     Check(roaches==3,"all three original roaches");
-    if(rescue)Check(reached(p,30)&&!p.Restrained(ellen)&&p.ActorHealth(ellen)>0,"surviving Ellen completes the rescue");
-    else {
+    if(rescue){
+      Check(reached(p,30)&&!p.Restrained(ellen)&&p.ActorHealth(ellen)>0,"surviving Ellen completes the rescue");
+      at(p,butch);
+      fo3dialogue::Context ctx;ctx.player=&p;
+      Check(fo3dialogue::ReferenceContext(p,butch,ctx.speaker)&&
+            fo3dialogue::ReferenceContext(p,PlayerRef,ctx.target),"Butch reward dialogue context");
+      fo3dialogue::Session greeting;
+      Check(greeting.Start(ctx,p)&&greeting.info==0x2a6f6,"original Butch rescue greeting");
+      unsigned responses=0;
+      while(greeting.phase==fo3dialogue::Phase::Speaking){
+        Check(++responses<=2,"original Butch reward response count");
+        greeting.AudioDone(greeting.audioToken,true,ctx,p);
+      }
+      const auto jacket=id("outfittunnelsnake01"),suit=id("vaultsuit101");
+      const auto equipped=[&](const Player& saved){
+        const auto* items=saved.ContainerContents(butch);
+        return items&&std::any_of(items->begin(),items->end(),[&](const auto& stack){return stack.formId==suit&&stack.equipped;});
+      };
+      Check(responses==2&&greeting.infoCompleted&&p.ItemCount(jacket)==1&&
+            !p.ScriptItemCount(butch,jacket)&&equipped(p),"original Butch reward and equipped suit");
+      fo3dialogue::Session repeat;
+      Check(!repeat.Start(ctx,p)||repeat.info!=0x2a6f6,"Butch's jacket reward is offered once");
+      const auto path="/tmp/fq-butch-reward-"+std::to_string(getpid());
+      Check(p.Save(path,error),error);Player restored(catalog);
+      Check(restored.Restore(path,error),error);unlink(path.c_str());
+      Check(restored.ItemCount(jacket)==1&&equipped(restored),"Butch's reward and outfit survive a save");
+    }else {
       Check(p.ApplyAttack(id("cg04butchradroachref"),pistol,ellen,10000),"roaches kill Ellen");
       Check(reached(p,31)&&!reached(p,30)&&p.ActorHealth(ellen)==0,"Ellen's death completes the failure branch");
     }
@@ -1162,7 +1187,19 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
     Check(p.CommitScriptTransaction(*hit),error);assert(p.Snapshot().pipboy.dialogueVariables.at(count)==float(n+1));
   }
   bool hidden=true;Check(p.ReferenceDisabled(roach,hidden,error),error);assert(!hidden&&p.Snapshot().pipboy.quests.at(birthday).stage==55);
-  {auto ctx=context(dad);fo3dialogue::Session warning;configure(warning);Check(warning.StartTopic(d.formNames.at("cg02dadspeech"),ctx,p),"original radroach warning");finish(warning,ctx);}
+  {
+    auto ctx=context(dad);
+    const auto topic=d.formNames.at("cg02dadspeech"),package=d.formNames.at("cg02dadgreetplayeraboutradroach");
+    Check(p.QueueScriptSpeech(dad,topic,fo3player::PlayerRef,false,true,package),"original radroach warning package");
+    fo3script::Action action;
+    while(p.PollScriptAction(action)&&action.package!=package){}
+    Check(action.package==package&&action.info==0x555ff,"original radroach warning INFO queued");
+    fo3dialogue::Session warning;configure(warning);
+    Check(warning.StartTopic(topic,ctx,p),"original radroach warning");finish(warning,ctx);
+    fo3dialogue::Session stale;configure(stale);
+    Check(!stale.StartTopic(topic,ctx,p)&&!p.QueueScriptSpeech(dad,topic,fo3player::PlayerRef,false,true,package),
+          "stage 60 rejects a delayed duplicate warning");
+  }
   assert(p.Snapshot().pipboy.quests.at(birthday).stage==60&&p.ActorHealth(roach)>0);
   Check(p.ApplyAttack(fo3player::PlayerRef,bb,roach,10000),"original radroach death event");
   assert(p.Snapshot().pipboy.quests.at(birthday).stage==70&&p.ActorHealth(roach)==0);

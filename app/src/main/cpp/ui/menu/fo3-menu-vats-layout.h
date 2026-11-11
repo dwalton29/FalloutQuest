@@ -36,10 +36,15 @@ inline int BindVatsLimb(Layout& layout,const VatsReadout& readout) {
   const int meter=layout.Find("meter",row);
   const double justify=layout.N(meter,"justify");
   const double textX=layout.N(meter,"x")+layout.N(meter,"width")*justify*.5;
-  for(const char* name:{"limb_name","chance_to_hit"}){
-    const int text=layout.Find(name,row);
+  const int name=layout.Find("limb_name",row);
+  const int chance=layout.Find("chance_to_hit",row);
+  for(const int text:{name,chance}){
     layout.Set(text,"x",textX);layout.Set(text,"justify",justify);
   }
+  layout.Set(name,"string",readout.name);
+  layout.Set(name,"visible",double(readout.selected));
+  layout.Set(chance,"string",std::to_string(readout.chance)+"%");
+  layout.Set(chance,"visible",1.);
   return row;
 }
 

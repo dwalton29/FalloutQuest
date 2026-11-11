@@ -207,7 +207,13 @@ void Prepare(const fo3player::Player& player){
   if(chrome.revision!=key){
     chrome.Begin(player);
     auto& layout=chrome.layout;
-    layout.Set("Select_button","string",label("sVatsSelect").empty()?"Select":label("sVatsSelect"));
+    for(const auto& entry:std::array<std::array<const char*,3>,3>{{
+        {"Select_button","sVatsSelect","Select"},
+        {"accept_button","sAccept","Accept"},
+        {"return_button","sReturn","Return"}}}){
+      const auto text=label(entry[1]);
+      layout.Set(entry[0],"string",text.empty()?entry[2]:text);
+    }
     fo3menu::BindVatsChrome(layout,hpText,apText,player.Health()/std::max(1.f,player.MaxHealth()),
                            ap/maxAP,reserved/maxAP,view.name,view.health,queued,notice,aiming);
     chrome.Build();chrome.revision=key;
@@ -316,7 +322,7 @@ bool UpdateFo3Vats(double raw,double game,float lt,float rt,bool a,bool b,bool t
   return true;
 }
 
-void RenderFo3Vats(const float* vp){
+void RenderFo3Vats(const float* vp,const float* headVp){
   using namespace vatsruntime;
   if(!session.Active())return;
   const float yaw=gQ210Head[3],c=std::cos(yaw),s=std::sin(yaw);
@@ -328,16 +334,16 @@ void RenderFo3Vats(const float* vp){
     fo3menuui::WorldRegion(doc.surface,mvp,{0,0,doc.layout.width,doc.layout.height},scale);
   };
   const V head{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
-  draw(chrome,head+V{-s*1.28f,0,-c*1.28f},.001f);
+  float chromeMvp[16];
+  std::copy_n(headVp,16,chromeMvp);
+  for(int i=0;i<4;++i)chromeMvp[12+i]-=1.28f*headVp[8+i];
+  fo3menuui::World(chrome.surface,chrome.layout,chromeMvp);
   if(session.phase!=fo3vats::Phase::Aiming)return;
   // Use the centre view for both eyes so a readout has the same visibility in stereo.
   std::array<fo3menu::Box,14> occupied{};
   size_t count=0;
   for(bool selected:{true,false})for(const auto& limb:view.limbs){
     if((limb.part->type==view.selected)!=selected)continue;
-    if(!selected&&std::any_of(view.limbs.begin(),view.limbs.end(),[&](const auto& other){
-      return other.part->type==view.selected&&other.part->name==limb.part->name;
-    }))continue;
     const V toward=limb.point-head;
     const float distance=fo3vr::Length(toward);
     const float depth=-s*toward.x-c*toward.z;
@@ -352,14 +358,20 @@ void RenderFo3Vats(const float* vp){
         ((anchor.x-head.x)*c-(anchor.z-head.z)*s+(bounds.x-doc.layout.width*.5f)*scale)/z,
         (anchor.y-head.y+(doc.layout.height*.5f-bounds.y-bounds.h)*scale)/z,
         bounds.w*scale/z,bounds.h*scale/z};
-    const auto end=occupied.begin()+count;
-    if(!selected&&std::any_of(occupied.begin(),end,[&](const auto& b){
-      constexpr float gap=.006f;
-      return box.x<b.x+b.w+gap&&b.x<box.x+box.w+gap&&
-             box.y<b.y+b.h+gap&&b.y<box.y+box.h+gap;
-    }))continue;
     if(count==occupied.size())break;
-    occupied[count++]=box;
-    draw(doc,anchor,scale);
+    constexpr float gap=.006f;
+    for(const int step:{0,1,-1,2,-2,3,-3,4,-4}){
+      const float offset=step*(box.h+gap);
+      auto candidate=box;
+      candidate.y+=offset;
+      const bool overlaps=std::any_of(occupied.begin(),occupied.begin()+count,[&](const auto& b){
+        return candidate.x<b.x+b.w+gap&&b.x<candidate.x+candidate.w+gap&&
+               candidate.y<b.y+b.h+gap&&b.y<candidate.y+candidate.h+gap;
+      });
+      if(overlaps)continue;
+      occupied[count++]=candidate;
+      draw(doc,anchor+V{0,offset*z,0},scale);
+      break;
+    }
   }
 }

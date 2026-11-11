@@ -6,11 +6,12 @@ class NotificationLayering(unittest.TestCase):
     def test_final_colour_pass(self):
         eye=(CPP/'core/fo3-runtime-loop.inc').read_text().split('bool RenderEye(',1)[1]
         notice=eye.index('fo3notifyui::Render(')
-        for preceding in ('RenderScene(', 'fo3lootui::Render(', 'RenderFo3InteractionHud(', 'Q1350CompositeEyePostQ1350('):
+        for preceding in ('RenderScene(', 'fo3lootui::Render(', 'RenderFo3InteractionHud(', 'Q1350CompositeEyePostQ1350(', 'RenderFo3Vats(', 'fo3pauseui::Render('):
             self.assertLess(eye.index(preceding),notice)
         self.assertLess(notice,eye.index('glFlush()'))
         self.assertEqual(eye.count('fo3notifyui::Render('),1)
-        policy=eye[eye.rfind('if(',0,notice):notice]
+        self.assertIn('if(ordinaryHud)',eye[eye.rfind('if(',0,notice):notice])
+        policy=eye.split('const bool ordinaryHud=',1)[1].split(';',1)[0]
         for modal in ('IsFo3LoadingVisible','Fo3DialogueFocus','Fo3ScriptMessageFocus','Fo3PipboyFocus','Fo3LockpickFocus'):
             self.assertIn(modal,policy)
     def test_warm_eyes_are_read_only(self):

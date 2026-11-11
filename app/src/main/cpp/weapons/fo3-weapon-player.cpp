@@ -573,10 +573,26 @@ const Stack* Player::ActorWeapon(uint32_t reference) const {
   for(const auto& s:*c)if(s.equipped&&catalog_->items.at(s.formId).kind==ItemKind::Weapon)return &s;
   return nullptr;
 }
-bool Player::ScriptEquipActorWeapon(uint32_t reference,uint32_t form,bool locked){
-  if(!PrepareActorInventory(reference))return false;
-  const auto* contents=ContainerContents(reference);if(!contents)return false;
-  for(const auto& item:*contents)if(item.formId==form&&item.condition>0){
+bool Player::ScriptEquipActorItem(uint32_t reference,uint32_t form,bool locked){
+  const auto definition=catalog_->items.find(form);
+  if(definition==catalog_->items.end()||ActorHealth(reference)<=0||!PrepareActorInventory(reference))return false;
+  auto inventory=state_.containers.find(reference);
+  if(inventory==state_.containers.end())return false;
+  auto& contents=inventory->second;
+  const uint32_t slots=definition->second.bipedMask;
+  if(definition->second.kind==ItemKind::Armour&&slots&&!locked){
+    const auto selected=std::find_if(contents.begin(),contents.end(),[&](const Stack& stack){
+      return stack.formId==form&&stack.condition>0;
+    });
+    if(selected==contents.end())return false;
+    for(auto& stack:contents){
+      const auto& other=catalog_->items.at(stack.formId);
+      if(other.kind==ItemKind::Armour&&(other.bipedMask&slots))stack.equipped=&stack==&*selected;
+    }
+    ++revision_;return true;
+  }
+  if(definition->second.kind!=ItemKind::Weapon)return false;
+  for(const auto& item:contents)if(item.formId==form&&item.condition>0){
     const auto instance=item.id;
     if(!EquipActorWeapon(reference,instance))return false;
     auto actor=state_.actors.at(reference);actor.weaponLocked=locked;return UpdateActor(reference,actor);

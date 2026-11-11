@@ -123,6 +123,25 @@ static Q230ActorVisual Actor(uint8_t type,bool linkedFurniture=false) {
   Q230ActorVisual actor;actor.source.refFormId=42;actor.source.baseFormId=43;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.navigationGraph=Graph();return actor;
 }
+static void TravelToActorRadius(){
+  auto actor=Actor(6);auto catalog=gPlayerSession->player.Definitions();
+  auto& package=catalog.pipboy.packages.at(50);
+  package.location.radius=150;
+  catalog.references[60].base=61;catalog.actorPlacements[60].base=61;
+  catalog.pipboy.targets[60].base=61;catalog.weapons.actors[61].health=100;
+  gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  auto target=actor;target.source.refFormId=60;target.source.baseFormId=61;
+  target.stateRestored=true;target.runtime.position=Q240ScenePosition({1400,2250,20});
+  packageTargets={target};
+  for(int i=0;i<240;++i)Q240UpdateNpcPackage(actor,i*.05);
+  const auto near=Q240PlanarDistance(Q240GamePosition(actor),Q240GamePosition(target));
+  assert(actor.runtime.procedure==fo3npc::Procedure::Completed&&near>120.f&&near<=150.f);
+  packageTargets[0].runtime.position=Q240ScenePosition({1600,2400,20});
+  for(int i=240;i<480;++i)Q240UpdateNpcPackage(actor,i*.05);
+  const auto moved=Q240PlanarDistance(Q240GamePosition(actor),Q240GamePosition(packageTargets[0]));
+  assert(actor.runtime.procedure==fo3npc::Procedure::Completed&&moved>120.f&&moved<=150.f);
+  packageTargets.clear();
+}
 static void DailyPackageRetirement(){
   auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();c.references[42].base=43;c.actorPlacements[42].base=43;
   c.pipboy.packages[50].flags=0x404;c.pipboy.packages[50].procedureScripts[2].source="RewardKarma 3";
@@ -405,7 +424,8 @@ static void PackageCallbacks(){
   std::cout<<"Production NAVM package start/arrival/change callbacks and reload replay protection passed\n";
 }
 int main(int argc,char** argv) {
-  DailyPackageRetirement();EndIdleRetirement();
+  DailyPackageRetirement();
+  TravelToActorRadius();EndIdleRetirement();
   PackageCallbacks();
   {
     auto actor=Actor(6);

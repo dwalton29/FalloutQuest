@@ -6,11 +6,14 @@
 namespace fo3rag {
 using V=std::array<float,3>;
 using M=std::array<float,16>;
+struct Capsule {V a{},b{};float radius=0;};
 struct Body {
  std::string bone;
  V a{},b{},center{};
  float radius=0,mass=0,linearDamping=0,angularDamping=0,friction=0,restitution=0;
  std::array<float,9> inertia{};
+ std::vector<Capsule> extraCapsules;
+ bool collideWithSelf=true;
 };
 struct Joint {
  uint16_t a=0,b=0;bool hinge=false;

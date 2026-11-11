@@ -581,7 +581,7 @@ void WeaponUpdate(double now,bool backButton){
       }
       if(s&&held&&fo3weapon::ManualReloadEnabled()&&!animatedReload&&reloadFamily==fo3weapon::ReloadFamily::Carton){
         const bool tracked=gWeaponPalmValid[0];
-        const bool handInPouch=!support&&!magazine&&tracked&&p.CanReloadWeapon(s->id)&&pouch.Contains(left);
+        const bool handInPouch=!support&&!magazine&&tracked&&p.CanReloadWeapon(s->id)&&pouch.Contains(left,true);
         if(handInPouch&&!pouchNearby)Pulse(0,.12f);
         pouchNearby=handInPouch;
         if(inputs.l&&handInPouch&&!gQ220Grab[0].active){
@@ -589,20 +589,24 @@ void WeaponUpdate(double now,bool backButton){
           magStart=fo3anim::Multiply(HandPose(*m,0,false),GameRigid(m->asset.magazineInLeft));
           magPalm=left;std::copy(gQ218LeftHandQuat,gQ218LeftHandQuat+4,magQuat);Pulse(0);
         }
-        if(magazine&&(!tracked||gQ217FingerGrip[0]<=.25f)){magazine=false;cartonNearSince=-1;}
+        if(magazine&&!tracked){magazine=false;cartonNearSince=-1;}
         if(magazine){
           Matrix delta;Q220ControllerDeltaMatrix(RuntimePoint(magPalm),magQuat,gWeaponPalm[0],gQ218LeftHandQuat,delta.data());
           magPose=fo3anim::Multiply(delta,magStart);
           const auto carton=fo3anim::Multiply(magPose,GameRigid(m->asset.nodes.bindGlobal[m->asset.cartonNode]));
           const auto pour=fo3anim::Multiply(pose,GameRigid(m->asset.cartonPour));
           const bool aligned=fo3weapon::CartonAligned(Position(carton),Rotation(carton),Position(pour),Rotation(pour));
+          const bool released=gQ217FingerGrip[0]<=.25f;
           if(!aligned)cartonNearSince=-1;
           else if(cartonNearSince<0){cartonNearSince=now;Pulse(0,.12f);}
-          else if(now-cartonNearSince>=.20){
-            const auto id=s->id;const auto form=s->formId;
-            if(p.LoadWeaponCarton(id)){
-              Pulse(0,.32f);fo3audio::NamedSound(m->asset.reloadSounds[0]);Log("CARTON LOAD",id,form);s=p.Weapon(id);
-              FlushFo3PlayerState();
+          const bool poured=aligned&&(released||now-cartonNearSince>=.14);
+          if(poured||released){
+            if(poured){
+              const auto id=s->id;const auto form=s->formId;
+              if(p.LoadWeaponCarton(id)){
+                Pulse(0,.32f);fo3audio::NamedSound(m->asset.reloadSounds[0]);Log("CARTON LOAD",id,form);s=p.Weapon(id);
+                FlushFo3PlayerState();
+              }
             }
             magazine=false;cartonNearSince=-1;
           }

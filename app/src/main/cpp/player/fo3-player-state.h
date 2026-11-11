@@ -558,7 +558,7 @@ public:
   bool SetActorVariable(uint32_t reference,uint32_t slot,float value);
   bool KillActor(uint32_t reference);
   bool SetActorAlert(uint32_t reference,bool alert);
-  bool ScriptEquipActorWeapon(uint32_t reference,uint32_t form,bool locked);
+  bool ScriptEquipActorItem(uint32_t reference,uint32_t form,bool locked);
   int32_t ScriptItemCount(uint32_t reference,uint32_t form) const;
   bool ScriptActorDetectedPlayer(uint32_t reference) const {return scriptDetection_.count(reference)!=0;}
   void SetScriptActorDetectedPlayer(uint32_t reference,bool detected){

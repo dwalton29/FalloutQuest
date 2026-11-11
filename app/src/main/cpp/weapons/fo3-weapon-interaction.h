@@ -91,9 +91,9 @@ inline bool CollisionResident(const WorldPose&pose,int32_t gridX,int32_t gridY) 
 }
 // Compare the held carton with the retail reload's pour pose in scene space.
 inline bool CartonAligned(V carton,const R& rotation,V port,const R& pour) {
-  if(!fo3vr::Finite(carton)||!fo3vr::Finite(port)||fo3vr::Length(carton-port)>.13f)return false;
+  if(!fo3vr::Finite(carton)||!fo3vr::Finite(port)||fo3vr::Length(carton-port)>.24f)return false;
   const V axis{0,1,0};
-  return fo3vr::Dot(fo3vr::Rotate(rotation,axis),fo3vr::Rotate(pour,axis))>.65f;
+  return fo3vr::Dot(fo3vr::Rotate(rotation,axis),fo3vr::Rotate(pour,axis))>.20f;
 }
 inline float RearwardPull(const R&rotation,V origin,V palm,V startLocal) {
   const auto local=fo3vr::Rotate(fo3vr::Transpose(rotation),palm-origin);

@@ -373,6 +373,7 @@ int main(int argc,char**argv) {
     CartonAndBat(c,bb.formId,bat.formId);
     const auto r=fo3vr::Identity();
     assert(fo3weapon::CartonAligned({.05f,0,0},r,{},r));
+    assert(fo3weapon::CartonAligned({.20f,0,0},fo3vr::Axis({1,0,0},1.2f),{},r));
     assert(!fo3weapon::CartonAligned({.25f,0,0},r,{},r));
     assert(!fo3weapon::CartonAligned({},fo3vr::Axis({1,0,0},fo3vr::Pi),{},r));
   }

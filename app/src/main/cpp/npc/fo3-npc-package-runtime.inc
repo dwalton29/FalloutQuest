@@ -1607,6 +1607,15 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   if(package&&(package->type==1||package->type==7||package->type==10)&&!Q240PackageActorTarget(actor,package->target.value,anchor)) {
     state.nextPackageEvaluation=0;state.procedure=fo3npc::Procedure::InvalidTarget;package=nullptr;
   }
+  bool travelToActor=false;
+  if(package&&package->type==6&&radius>0&&(package->location.type==0||package->location.type==6)){
+    const auto reference=Q240LocationReference(actor,*package);
+    const auto& definitions=gPlayerSession->player.Definitions();
+    travelToActor=reference==fo3player::PlayerRef||definitions.actorPlacements.count(reference);
+    if(travelToActor&&!Q240PackageActorTarget(actor,reference,anchor)){
+      state.nextPackageEvaluation=0;state.procedure=fo3npc::Procedure::InvalidTarget;package=nullptr;
+    }
+  }
   auto& furniture=actor.runtime.furniture;
   if(furniture.Active()&&(furniture.interrupted||!package||packageId!=furniture.package)){
     // Switching from waiting to another search for this same seat keeps the
@@ -1703,6 +1712,15 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   }
   if(package->type==1&&Q240PlanarDistance(actor.aiAnchorGame,anchor)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.blockedSince=-1;actor.aiAnchorGame=anchor;}
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
+  const auto here=Q240GamePosition(actor);
+  const float actorDistance=travelToActor?Q240PlanarDistance(here,anchor):0.f;
+  const bool inTravelRadius=travelToActor&&actorDistance<=radius&&std::fabs(here[2]-anchor[2])<=72.f;
+  if(inTravelRadius){
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+    state.navigationDoor=0;state.blockedSince=-1;actor.aiSequence=1;
+  }else if(travelToActor&&now>=actor.aiRepathAt&&Q240PlanarDistance(actor.aiAnchorGame,anchor)>16.f){
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.aiSequence=0;
+  }
   if(actor.aiPathIndex>=actor.aiPathGame.size()) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
     // Travel builds one authored route when the package becomes active, then
@@ -1712,7 +1730,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     if(staysAtDestination&&actor.aiSequence>0) {
       // Sequence alone is not proof of arrival after save restore, combat or
       // relocation. Only a reached route endpoint can keep this actor waiting.
-      if(!actor.aiPathGame.empty()&&Q240PlanarDistance(Q240GamePosition(actor),actor.aiPathGame.back())<=8.f) {
+      if(inTravelRadius||(!travelToActor&&!actor.aiPathGame.empty()&&Q240PlanarDistance(here,actor.aiPathGame.back())<=8.f)) {
         if(actor.runtime.procedure!=fo3npc::Procedure::Completed){
           if(package->type==6){
             const auto& definitions=gPlayerSession->player.Definitions().pipboy;
@@ -1751,13 +1769,19 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     }
     if(now<actor.aiRepathAt)return;
     if(now<actor.runtime.roamWaitUntil)return;
-    if(!Q240BuildPackagePath(actor,*package,anchor,radius)){
+    auto destination=anchor;
+    if(travelToActor&&actorDistance>radius){
+      const float approach=std::max(0.f,radius-8.f)/actorDistance;
+      for(size_t axis=0;axis<2;++axis)destination[axis]+=(here[axis]-anchor[axis])*approach;
+    }
+    if(!Q240BuildPackagePath(actor,*package,destination,radius)){
       if(now<actor.runtime.roamWaitUntil){actor.runtime.procedure=fo3npc::Procedure::Waiting;return;}
       Q240AiLogOnce(actor.source.refFormId,packageId,
         "path build failed on authored NAVM graph meshes="+std::to_string(actor.navigationGraph->meshes.size())+
         " triangles="+std::to_string(actor.navigationGraph->triangleCount));
       Q240PackageRouteFailed(actor,now,"authored NAVM route unavailable");return;
     }
+    if(travelToActor)actor.aiAnchorGame=anchor;
     if(staysAtDestination)actor.aiSequence=1;
     if(actor.aiSequence<=2u||(actor.aiSequence%8u)==0u)
       Q6H_LOGI("NPC PATH actor=%08X package=%08X type=%u waypoints=%zu graphMeshes=%zu graphTriangles=%zu sequence=%u",

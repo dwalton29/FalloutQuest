@@ -639,7 +639,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     case C::RemoveAllItems:ok=ScriptRemoveAllItems();break;
     case C::EquipItem:case C::UnequipItem:
-      ok=c.type==C::EquipItem&&c.variable?ScriptEquipActorWeapon(c.index,c.form,c.value!=0):
+      ok=c.type==C::EquipItem&&c.variable?ScriptEquipActorItem(c.index,c.form,c.value!=0):
           ScriptEquipItem(c.form,c.type==C::EquipItem);break;
     case C::PipboyReset:case C::RadioRefresh:{fo3script::Action action;action.kind=c.type==C::PipboyReset?fo3script::ActionKind::PipboyReset:fo3script::ActionKind::RadioRefresh;ok=QueueScriptAction(std::move(action));break;}
     case C::RadioOff:ok=TuneRadio(0);break;
@@ -1360,6 +1360,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   Player selection(*this,ScriptCandidateTag{});
   fo3dialogue::Context context;context.player=&selection;context.talking=true;
   if(!fo3dialogue::ReferenceContext(*this,reference,context.speaker)||!fo3dialogue::ReferenceContext(*this,target,context.target))return false;
+  if(package){context.speaker.package=package;context.speaker.packageKnown=true;}
   static thread_local std::mt19937 random{std::random_device{}()};
   // This only binds the authored INFO identity in the script transaction.
   // Scene mutation capability is admitted again by the actual voice adapter.
@@ -1369,7 +1370,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   const auto selected=fo3dialogue::ResolveTopicInfo(topic,context,[&](const auto& info){return fo3dialogue::EligibleInfo(info,context,diagnostic,preview);},&random);
   // A legitimate empty selection is a no-op. An unsupported preflight must
   // roll back the caller too, rather than saving its waiting flags without speech.
-  if(!selected)return !unsupported;
+  if(!selected)return !package&&!unsupported;
   fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;action.forceSubtitle=forceSubtitle;action.package=package;
   action.sourceActor=context.speaker.reference;action.targetActor=context.target.reference;
   action.noTargetLook=noTargetLook;
