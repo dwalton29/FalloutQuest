@@ -21,7 +21,8 @@ namespace weaponruntime {
 void EmitShot(uint64_t,uint32_t attacker,uint32_t base,const fo3weapon::Definition&,fo3vr::V,fo3vr::V,fo3vr::V,fo3vr::V,float damage){++shots;emittedDamage=damage;gPlayerSession->player.ApplyAttack(attacker,base,0x14,damage);}
 }
 #ifdef FO3_NPC_DETECTION_HOST_TEST
-float gPlayerDetectionSpeed=0,gPlayerDetectionAction=0,detectionLight=0;double gPlayerDetectionActionUntil=-1;
+float gPlayerDetectionSpeed=0,detectionLight=0;
+fo3sneak::Noise gPlayerDetectionShot,gPlayerDetectionStep;
 float Q230PlayerLightLevel(const std::array<float,3>&,double){return detectionLight;}
 #endif
 #define FO3_NPC_COMBAT_HOST_TEST
@@ -245,10 +246,100 @@ static void DetectionIntegration(){
  gQ210Head[2]+=2;a.playerDetection={};Q230ObservePlayer(a,true,16);assert(!a.playerDetection.detected); // Behind the authored 190-degree cone.
  std::cout<<"Production player detection: hide, acquire, lose, last-known search, forget and friendly detection passed\n";
 }
+
+static void OccludedEvidence(const std::unordered_map<std::string,float>& settings){
+ Prepare();
+ auto catalog=gPlayerSession->player.Definitions();
+ catalog.sneakSettings=settings;
+ catalog.weapons.actors[43].perception=5;
+ gPlayerSession=std::make_unique<Session>(std::move(catalog));
+ auto& actor=gQ230NpcActors.front();
+ actor.runtime.EndDialogue();
+ auto& player=gPlayerSession->player;
+ blocked=true;detectionLight=0;
+ gPlayerDetectionShot=gPlayerDetectionStep={};
+ Q230SimulateActor(actor,1);
+ assert(!actor.runtime.combatTarget&&!actor.runtime.search.active&&
+        actor.playerDetection.Hud()==fo3sneak::Indicator::Hidden);
+ const fo3sneak::Point gunshot{.8f,.1f,-4.f};
+ gPlayerDetectionShot={gunshot,2,settings.at("iSoundLevelLoud")};
+ gQ210Head[0]+=10;
+ Q230SimulateActor(actor,2.1);
+ assert(actor.runtime.search.investigating&&!actor.runtime.combatTarget&&shots==0&&
+        actor.playerDetection.Hud()==fo3sneak::Indicator::Caution&&
+        actor.playerDetection.lastKnown==gunshot&&actor.runtime.search.origin==Q230GameThreat(gunshot));
+ const auto searchOrigin=actor.runtime.search.origin;
+ Q240UpdateNpcPackage(actor,2.1);
+ assert(actor.runtime.search.origin==searchOrigin&&actor.runtime.search.investigating);
+ gQ210Head[0]+=2;
+ Q230SimulateActor(actor,3);
+ assert(actor.playerDetection.lastKnown==gunshot&&actor.playerDetection.expires==12);
+ Q230SimulateActor(actor,13);
+ assert(!actor.runtime.search.active&&!actor.runtime.combatTarget&&actor.runtime.CanTalk());
+
+ gQ210Head[0]-=12;
+ gPlayerDetectionStep={{.5f,.1f,-4.f},14,2};
+ Q230SimulateActor(actor,14.1);
+ assert(actor.runtime.search.investigating&&actor.playerDetection.lastKnown==gPlayerDetectionStep.position);
+ const fo3sneak::Point attackOrigin{1.2f,.2f,-4.6f};
+ assert(player.ApplyAttack(0x14,10,42,5));
+ actor.playerDetection.Hit(settings,15,attackOrigin);
+ Q230SimulateActor(actor,15.1);
+ assert(actor.runtime.combatTarget==0x14&&!actor.runtime.search.investigating&&
+        actor.runtime.lastThreat==attackOrigin&&shots==0);
+ gPlayerDetectionShot=gPlayerDetectionStep={};
+}
+
+static void ChosenTargetAndSearch(){
+ Prepare();
+ auto catalog=gPlayerSession->player.Definitions();
+ AddNpc(catalog,70,71);AddNpc(catalog,80,81);
+ gQ230NpcActors[2].runtime.position[2]-=2;
+ gPlayerSession=std::make_unique<Session>(std::move(catalog));
+ auto& actor=gQ230NpcActors.front();
+ actor.runtime.EndDialogue();
+ gQ210Head[2]-=100;
+ sightRayCount=0;blockSecondSightRay=true;
+ Q230SimulateActor(actor,1);
+ blockSecondSightRay=false;
+ auto firstTarget=gQ230NpcActors[1].runtime.position;firstTarget[1]+=1;
+ assert(actor.runtime.combatTarget==70&&actor.runtime.lastThreat==firstTarget&&actor.runtime.search.active);
+
+ Prepare();
+ auto& searcher=gQ230NpcActors.front();
+ searcher.runtime.EndDialogue();
+ searcher.stateRestored=true;searcher.runtime.BeginCombat(0x14);
+ searcher.runtime.lastThreat=searcher.runtime.position;
+ searcher.runtime.lastSeen=searcher.aiLastUpdate=1;
+ searcher.playerDetection.phase=fo3sneak::Phase::Lost;
+ searcher.playerDetection.lastKnown=searcher.runtime.lastThreat;
+ searcher.playerDetection.expires=11;
+ assert(gPlayerSession->player.PrepareActorInventory(42));
+ blocked=true;
+ const auto queries=gQ240PathsPlanned;
+ Q230SimulateActor(searcher,2);Q230SimulateActor(searcher,2.1);Q230SimulateActor(searcher,2.9);
+ assert(gQ240PathsPlanned-queries==1&&searcher.runtime.speed==0);
+ Q230SimulateActor(searcher,3.2);
+ assert(searcher.runtime.search.checkedCount==1&&searcher.aiPathIndex<searcher.aiPathGame.size()&&
+        searcher.aiPathGame.back()!=searcher.runtime.search.origin);
+ blocked=false;detectionLight=100;
+ Q230SimulateActor(searcher,4);
+ assert(searcher.runtime.combatTarget==0x14&&searcher.playerDetection.detected&&!searcher.runtime.search.active);
+}
 #endif
 int main(int argc,char** argv){
 #ifdef FO3_NPC_DETECTION_HOST_TEST
- DetectionIntegration();return 0;
+ auto settings=fo3sneak::NativeSettings();
+ if(argc>1){
+   fo3player::Catalog original;std::string error;
+   assert(fo3player::LoadCatalog(argv[1],original,error));
+   settings=original.sneakSettings;
+ }
+ DetectionIntegration();
+ OccludedEvidence(settings);
+ ChosenTargetAndSearch();
+ std::cout<<"Silent occlusion, sound and hit origins, target selection, local search and reacquisition passed\n";
+ return 0;
 #endif
   EndIdleRetirement();
   ScriptOrderedFists();

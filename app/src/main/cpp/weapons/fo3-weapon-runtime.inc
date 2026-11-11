@@ -195,7 +195,7 @@ void Zones(){
   back=fo3weapon::Back(shoulder,body);
   pouch=fo3weapon::Pouch(VrPoint(Q211TransformPoint(gQ210PlayerRoot,VrSkeletonPoint(pelvis))),body);zonesReady=true;
 }
-struct Flight {bool active=false;uint64_t instance=0;uint32_t projectile=0,base=0,attacker=0x14;V position{},velocity{};float distance=0,limit=0,damage=0;};
+struct Flight {bool active=false;uint64_t instance=0;uint32_t projectile=0,base=0,attacker=0x14;V position{},velocity{},source{};float distance=0,limit=0,damage=0;};
 std::array<Flight,64> flights{};
 uint32_t randomState=0x463351;
 float Random(){randomState^=randomState<<13;randomState^=randomState>>17;randomState^=randomState<<5;return (randomState&0xffffff)/float(0x1000000);}
@@ -208,7 +208,6 @@ void ActorImpact(fo3player::Player& p,uint32_t attacker,uint32_t target,
     const double eventTime=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==target){
       actor.playerDetection.Hit(p.Definitions().sneakSettings,eventTime,{origin.x,origin.y,origin.z});
-      actor.runtime.lastThreat=actor.playerDetection.lastKnown;
       actor.runtime.nextThink=0;
       break;
     }
@@ -219,11 +218,12 @@ void ActorImpact(fo3player::Player& p,uint32_t attacker,uint32_t target,
   Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",
            attacker,base,target,unsigned(region),damage,p.ActorHealth(target));
 }
-void HeldShotEffects(const fo3player::Player& p,const fo3weapon::Definition& d,double now){
+void HeldShotEffects(const fo3player::Player& p,const fo3weapon::Definition& d,V muzzle,double now){
   if(d.soundLevel<=2){
     const auto& settings=p.Definitions().sneakSettings;
-    gPlayerDetectionAction=fo3sneak::Setting(settings,d.soundLevel==0?"iSoundLevelLoud":d.soundLevel==1?"iSoundLevelNormal":"iSoundLevelSilent");
-    gPlayerDetectionActionUntil=now+fo3sneak::Setting(settings,"fDetectionActionTimer");
+    const float strength=fo3sneak::Setting(settings,d.soundLevel==0?"iSoundLevelLoud":d.soundLevel==1?"iSoundLevelNormal":"iSoundLevelSilent");
+    const double time=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    gPlayerDetectionShot={{muzzle.x,muzzle.y,muzzle.z},time,strength,p.IsSneaking()};
   }
   const auto projectile=p.Definitions().weapons.projectiles.find(d.projectile);
   if(projectile!=p.Definitions().weapons.projectiles.end())flashUntil=now+projectile->second.flashDuration;
@@ -231,7 +231,8 @@ void HeldShotEffects(const fo3player::Player& p,const fo3weapon::Definition& d,d
   Pulse(1,std::clamp(d.rumbleRight,.15f,.65f));
   recoil=1;
 }
-bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float damage,uint32_t attacker=0x14){
+bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float damage,
+         uint32_t attacker=0x14,const V* attackSource=nullptr){
   if(!gPlayerSession)return false;
   auto&p=gPlayerSession->player;uint32_t target=0;uint8_t region=0;float nearest=limit;
   for(auto&actor:gQ230NpcActors){
@@ -270,7 +271,7 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
   Fo3WorldSurfaceHit surface;
   const bool worldHit=TraceFo3WorldSurface(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,attacker,target,&surface);
   if(target&&(!worldHit||surface.distance>=nearest)){
-    ActorImpact(p,attacker,target,base,damage,region,origin);
+    ActorImpact(p,attacker,target,base,damage,region,attackSource?*attackSource:origin);
     return true;
   }
   if(worldHit){
@@ -290,7 +291,7 @@ void EmitShot(uint64_t instance,uint32_t attacker,uint32_t base,const fo3weapon:
     const float limit=projectile.range/FO3_UNITS_PER_METRE;
     const float damage=shotDamage/d.pellets;
     if(projectile.Hitscan())Hit(instance,muzzle,direction,limit,base,damage,attacker);
-    else for(auto&f:flights)if(!f.active){f={true,instance,d.projectile,base,attacker,muzzle,direction*(projectile.speed/FO3_UNITS_PER_METRE),0,limit,damage};break;}
+    else for(auto&f:flights)if(!f.active){f={true,instance,d.projectile,base,attacker,muzzle,direction*(projectile.speed/FO3_UNITS_PER_METRE),muzzle,0,limit,damage};break;}
   }
 }
 void Shoot(uint64_t instance,const fo3weapon::Definition&d,const Model&model,float shotDamage){
@@ -310,7 +311,7 @@ void AdvanceFlights(float dt){
     while(remaining>1e-5f&&f.active){const float step=std::min(remaining,.016f);remaining-=step;
       f.velocity.y-=q->second.gravity*9.80665f*step;const auto move=f.velocity*step;const float distance=fo3vr::Length(move);
       const float travel=std::min(distance,f.limit-f.distance);
-      if(travel<=0||Hit(f.instance,f.position,fo3vr::Unit(move),travel,f.base,f.damage,f.attacker)){f.active=false;break;}
+      if(travel<=0||Hit(f.instance,f.position,fo3vr::Unit(move),travel,f.base,f.damage,f.attacker,&f.source)){f.active=false;break;}
       f.position=f.position+move;f.distance+=distance;if(f.distance>=f.limit)f.active=false;
     }
   }
@@ -632,7 +633,8 @@ void WeaponUpdate(double now,bool backButton){
         const auto id=s->id;const auto form=s->formId;
         const float shotDamage=p.WeaponDamage(id);
         if(p.FireWeapon(id)){
-          HeldShotEffects(p,d,now);Shoot(id,d,*m,shotDamage);Log("FIRE",id,form);
+          HeldShotEffects(p,d,Point(pose,GamePoint(m->asset.muzzle)),now);
+          Shoot(id,d,*m,shotDamage);Log("FIRE",id,form);
           if(!m->prime.tracks.empty()){primeStarted=now;primeSoundTime=-1;}
         }
         else{fo3audio::SoundEvent(d.dry);Pulse(1,.06f);Log("EMPTY",id,form);}

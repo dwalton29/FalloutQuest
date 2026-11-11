@@ -1,13 +1,30 @@
 #include "fo3-combat-animation.h"
 #include "rendering/performance-capture.h"
+static void Q230ClearCombatPath(Q230ActorVisual& actor) {
+  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+  actor.runtime.navigationDoor=0;actor.runtime.blockedSince=-1;actor.runtime.nextPath=0;
+}
+static void Q230RetireSearch(Q230ActorVisual& actor) {
+  if(!actor.runtime.search.active)return;
+  actor.runtime.search={};actor.runtime.headYaw=0;
+  Q230ClearCombatPath(actor);
+  actor.lastFrame=UINT64_MAX;
+}
 static void Q230StopScriptCombat(Q230ActorVisual& actor,double now) {
   auto& state=actor.runtime;
   const bool fighting=state.activity==fo3npc::Activity::Combat;
+  const bool investigating=state.search.investigating;
+  if(state.combatTarget==fo3player::PlayerRef||investigating){
+    actor.playerDetection.phase=fo3sneak::Phase::Normal;
+    actor.playerDetection.detected=false;
+    if(gPlayerSession)gPlayerSession->player.SetScriptActorDetectedPlayer(actor.source.refFormId,false);
+  }
+  Q230RetireSearch(actor);
   state.EndCombat();state.pendingAttack=false;
   if(fighting){state.packageEndIdle=0;state.packageEndIdleUntil=-1;}
-  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
-  state.navigationDoor=0;state.nextPath=0;state.nextThink=now+.25;
-  if(fighting)Q240ResumePackageWait(actor,now);
+  Q230ClearCombatPath(actor);
+  state.nextThink=now+.25;
+  if(fighting||investigating)Q240ResumePackageWait(actor,now);
 }
 // Resident actor simulation. Immutable assets are prepared in the scene worker.
 // Nonresident actors retain canonical game-coordinate state and do not advance.
@@ -112,7 +129,7 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
   saved.package=actor.aiPackage;saved.sequence=actor.aiSequence;
   const auto package=p.Definitions().pipboy.packages.find(actor.aiPackage);
   if(package!=p.Definitions().pipboy.packages.end()&&package->second.type==13&&actor.runtime.Alive())
-    saved.packageWaitSeconds=actor.runtime.activity==fo3npc::Activity::Combat?actor.runtime.suspendedPackageWait:
+    saved.packageWaitSeconds=(actor.runtime.activity==fo3npc::Activity::Combat||actor.runtime.search.investigating)?actor.runtime.suspendedPackageWait:
       (actor.aiPathGame.empty()?float(std::max(0.,actor.aiRepathAt-std::max(0.,actor.aiLastUpdate))):0);
   const auto old=p.Snapshot().actors.find(actor.source.refFormId);
   if(old!=p.Snapshot().actors.end()){
@@ -265,6 +282,79 @@ static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& ta
   Q6H_LOGI("NPC PATH actor=%08X target=%08X flee=%d waypoints=%zu",actor.source.refFormId,actor.runtime.combatTarget,flee,actor.aiPathGame.size());
   return true;
 }
+static fo3sneak::Point Q230GameThreat(const fo3sneak::Point& point){
+  return {gSceneCenterXQ1730+point[0]*FO3_UNITS_PER_METRE,
+          gSceneCenterYQ1730-(point[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
+          gSceneFloorZQ1730+(point[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
+}
+
+static void Q230Search(Q230ActorVisual& actor,const fo3sneak::Point& evidence,bool investigating,float dt,double now){
+  auto& state=actor.runtime;auto& search=state.search;
+  const auto& settings=gPlayerSession->player.Definitions().sneakSettings;
+  const auto setting=[&](const char* key){return fo3sneak::Setting(settings,key);};
+  const auto origin=Q230GameThreat(evidence);
+  const float buffer=setting("fCombatSearchBufferDistance");
+  const auto distance=[](const auto& from,const auto& to){
+    return std::hypot(Q240PlanarDistance(from,to),from[2]-to[2]);
+  };
+  if(!search.active||search.investigating!=investigating||distance(search.origin,origin)>buffer){
+    if(investigating&&!search.investigating)Q240SuspendPackageWait(actor,now);
+    Q230ClearCombatPath(actor);
+    search={};search.active=true;search.investigating=investigating;
+    search.origin=origin;search.heading=state.yaw;
+    Q230CombatRoute(actor,origin,false,now);
+  }
+  state.action=fo3npc::CombatAction::Search;
+  if(actor.aiPathIndex<actor.aiPathGame.size()){
+    Q240AdvancePath(actor,dt,now);
+    actor.lastFrame=UINT64_MAX;
+    return;
+  }
+
+  const float lookTime=setting("fCombatSearchLookTime");
+  if(search.lookUntil<0){
+    const float wait=investigating&&search.nextDirection==0?
+      std::max(lookTime,setting("fCombatSearchCheckInvestigateInitialTime")):lookTime;
+    search.lookUntil=now+wait;
+  }
+  state.speed=0;state.animation=state.equippedWeapon?fo3npc::Animation::Aim:fo3npc::Animation::Idle;
+  const float remaining=float(search.lookUntil-now);
+  state.headYaw=remaining>0&&lookTime>0?
+    fo3npc::DialoguePolicy::HeadLimit*std::sin(std::min(1.f,remaining/lookTime)*6.28318530718f):0;
+  actor.lastFrame=UINT64_MAX;
+  if(remaining>0||now<search.nextCheck||!actor.navigationGraph)return;
+
+  // Probe around the evidence using original search distances. Only grounded,
+  // connected NAVM endpoints are used. Two attempts per check bound Quest work.
+  constexpr std::array<float,8> directions{0,1,-1,2,-2,3,-3,4};
+  const float area=setting(gExteriorWorldspaceQ1890?"fCombatSearchExteriorMinRadius":"fCombatSearchInteriorMinRadius");
+  const float maximum=std::min(area,setting(investigating?"fCombatSearchCheckInvestigateMaxDistance":"fCombatSearchCheckDestinationMaxDistance"));
+  const float radius=std::clamp(setting("fCombatSearchCheckDestinationMidDistance"),
+    std::min(maximum,setting("fCombatSearchCheckDestinationMinDistance")),maximum);
+  if(radius<=0)return;
+  const float spacing=setting("fCombatSearchLocationRemoveDistance");
+  const auto current=Q240GamePosition(actor);
+  for(unsigned attempt=0;attempt<2&&search.nextDirection<directions.size();++attempt){
+    const float angle=search.heading+directions[search.nextDirection++]*.78539816339f;
+    const fo3sneak::Point probe{search.origin[0]-std::sin(angle)*radius,
+                               search.origin[1]+std::cos(angle)*radius,search.origin[2]};
+    if(!Q240ActorPath(actor,*actor.navigationGraph,current,probe,actor.aiPathGame,nullptr,&actor.aiPathSurfaces))continue;
+    const auto endpoint=actor.aiPathGame.back();
+    const bool checked=std::any_of(search.checked.begin(),search.checked.begin()+search.checkedCount,
+      [&](const auto& previous){return distance(previous,endpoint)<spacing;});
+    if(checked||distance(current,endpoint)<spacing||distance(search.origin,endpoint)>area||
+       distance(endpoint,probe)>spacing){
+      Q230ClearCombatPath(actor);
+      continue;
+    }
+    search.checked[search.checkedCount++]=endpoint;
+    actor.aiPathIndex=0;search.lookUntil=-1;
+    Q6H_LOGI("NPC SEARCH actor=%08X target=%08X probe=%zu waypoints=%zu",actor.source.refFormId,
+             state.combatTarget,search.nextDirection,actor.aiPathGame.size());
+    break;
+  }
+  search.nextCheck=now+setting(investigating?"fCombatSearchCheckInvestigateTime":"fCombatSearchCheckDestinationTime");
+}
 // Bounded Quest tactical selection over reachable original NAVM surfaces.
 // Cover is tested against live geometry; no cover markers or animations are
 // fabricated. Endpoint scoring is a standalone policy, not Bethesda parity.
@@ -416,44 +506,64 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     uint32_t policyId=0;std::array<float,3> policyAnchor{};
     const auto* policy=Q230PerceptionPackage(actor,policyId,policyAnchor,now);
     const bool defensive=fo3npc::Defensive(policy);
-    uint32_t acquire=0;std::array<float,3> point{};uint32_t base=0;
+    uint32_t acquire=0;fo3sneak::Point selectedPoint=s.position;
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
+    s.nextThink=now+std::max(.01f,fo3sneak::Setting(c.sneakSettings,"fDetectionTimerSetting"));
     const bool enemyPlayer=(saved!=p.Snapshot().actors.end()&&saved->second.hostile==0x14)||
         (defensive?Q230DefendsLeader(actor,policy,0x14):fo3npc::Acquires(ai,fo3npc::Relationship(p,actor.source.refFormId,0x14)));
     Q230ObservePlayer(actor,enemyPlayer,now);
 #endif
+    fo3sneak::Point knownPoint{};uint32_t knownBase=0;
     const bool knownThreat=saved!=p.Snapshot().actors.end()&&saved->second.hostile&&
-      Q230Target(saved->second.hostile,point,base);
-    if(knownThreat)acquire=saved->second.hostile;
+      Q230Target(saved->second.hostile,knownPoint,knownBase);
+    if(knownThreat){
+      acquire=saved->second.hostile;
+      if(acquire!=s.combatTarget){
+#if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
+        if(acquire==fo3player::PlayerRef){
+          if(actor.playerDetection.phase!=fo3sneak::Phase::Normal)selectedPoint=actor.playerDetection.lastKnown;
+        }else
+#endif
+        if(Q230Sight(actor,acquire,knownPoint))selectedPoint=knownPoint;
+      }
+    }
     if(!acquire&&s.activity!=fo3npc::Activity::Combat){
       float nearest=ai.radiusEnabled?float(ai.radius):c.weapons.detectionDistance;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
       nearest=ai.radiusEnabled?float(ai.radius):fo3sneak::Setting(c.sneakSettings,"fSneakMaxDistance")*(gExteriorWorldspaceQ1890?fo3sneak::Setting(c.sneakSettings,"fSneakExteriorDistanceMult"):1);
 #endif
       auto candidate=[&](uint32_t ref){
-        if(ref==actor.source.refFormId||!Q230Target(ref,point,base))return;
+        if(ref==actor.source.refFormId)return;
         bool hostile=defensive?Q230DefendsLeader(actor,policy,ref):fo3npc::Acquires(ai,fo3npc::Relationship(p,actor.source.refFormId,ref));
         if(!defensive&&!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(p,actor.source.refFormId,ally.source.refFormId)))hostile=true;}
+        fo3sneak::Point point{};uint32_t base=0;
+        if(!hostile||!Q230Target(ref,point,base))return;
         const float dx=point[0]-s.position[0],dy=point[1]-s.position[1],dz=point[2]-s.position[2];
         const float range=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
+        if(range>=nearest)return;
         bool perceived;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
-        if(ref==0x14)perceived=actor.playerDetection.phase!=fo3sneak::Phase::Normal;
-        else perceived=range<c.weapons.detectionDistance&&Q230Sight(actor,ref,point);
+        if(ref==0x14){
+          perceived=actor.playerDetection.detected;
+          if(perceived)point=actor.playerDetection.lastKnown;
+        }else perceived=range<c.weapons.detectionDistance&&
+          Q230InSightCone(actor,point,fo3sneak::Setting(c.sneakSettings,"fDetectionViewCone"))&&Q230Sight(actor,ref,point);
 #else
         perceived=Q230Sight(actor,ref,point);
 #endif
-        if(hostile&&range<nearest&&perceived){nearest=range;acquire=ref;}
+        if(perceived){nearest=range;acquire=ref;selectedPoint=point;}
       };
       candidate(0x14);for(const auto& other:gQ230NpcActors)candidate(other.source.refFormId);
     }
     if(acquire&&acquire!=s.combatTarget){
       if(!knownThreat&&policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue&&!Q240AdoptPackage(actor,policyId,*policy,policyAnchor))return;
       if(s.dialogue)EndFo3Dialogue("combat threat");
-      if(s.activity!=fo3npc::Activity::Combat)Q240SuspendPackageWait(actor,now);
       const bool starting=s.activity!=fo3npc::Activity::Combat;
-      s.BeginCombat(acquire);s.lastThreat=point;s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;
+      if(starting&&!s.search.investigating)Q240SuspendPackageWait(actor,now);
+      Q230RetireSearch(actor);Q230ClearCombatPath(actor);
+      s.BeginCombat(acquire);s.lastThreat=selectedPoint;s.lastSeen=now;
+      s.pendingAttack=false;s.pendingHit=s.actionUntil=0;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST)
       if(starting&&!fo3worldscript::Event(actor.source.refFormId,"OnStartCombat",acquire,true))return;
 #else
@@ -463,27 +573,44 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
         actor.source.refFormId,acquire,unsigned(ai.confidence),actor.combatWeapons.size());
     }
   }
-  if(s.activity!=fo3npc::Activity::Combat)return;
+  if(s.activity!=fo3npc::Activity::Combat){
+#if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
+    const auto& observer=actor.playerDetection;
+    if(observer.hostile&&observer.phase==fo3sneak::Phase::Alert&&now<observer.expires&&
+       !s.dialogue&&!s.furniture.Active()&&!s.OwnsAuthoredMotion(now)&&p.Health()>0){
+      const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);
+      actor.aiLastUpdate=now;
+      Q230Search(actor,observer.lastKnown,true,dt,now);
+    }else if(s.search.investigating){
+      Q230RetireSearch(actor);Q240ResumePackageWait(actor,now);
+      s.speed=0;s.animation=fo3npc::Animation::Idle;
+    }
+#endif
+    return;
+  }
   if(s.furniture.Active())return; // Original exit owns the pose before combat movement/fire.
   std::array<float,3> target{};uint32_t targetBase=0;
   const bool valid=Q230Target(s.combatTarget,target,targetBase);bool visible=valid&&Q230Sight(actor,s.combatTarget,target);
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
   if(s.combatTarget==0x14)visible=visible&&actor.playerDetection.detected;
 #endif
-  if(visible){s.lastThreat=target;s.lastSeen=now;}
-  if(valid&&!visible)target=s.lastThreat; // Search the observed location, never an unseen actor's live position.
-  bool searchExpired=now-s.lastSeen>15;
+  const auto& settings=c.sneakSettings;
+  const double hiddenFor=now-s.lastSeen;
+  bool searchExpired=hiddenFor>=fo3sneak::Setting(settings,"fCombatSearchTargetHiddenRemoveTime");
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
   if(s.combatTarget==0x14){
-    const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
-    const bool knownThreat=saved!=p.Snapshot().actors.end()&&saved->second.hostile==s.combatTarget;
-    searchExpired=actor.playerDetection.phase==fo3sneak::Phase::Normal&&(!knownThreat||searchExpired);
+    const auto& observer=actor.playerDetection;
+    const bool hasEvidence=observer.phase!=fo3sneak::Phase::Normal&&now<observer.expires;
+    if(!visible&&hasEvidence)s.lastThreat=observer.lastKnown;
+    searchExpired=searchExpired&&!hasEvidence;
   }
 #endif
-  // Bethesda's full multi-target detection event list is not decoded. This bounded
-  // loaded-scene bridge uses authored player detection expiry and the existing
-  // 15-second NPC-target search; absence/death ends immediately.
-  if(!valid||(!visible&&searchExpired&&!(s.moraleFlee&&now<s.fleeUntil)&&s.combatMovement!=fo3npc::CombatAction::Cover)){
+  if(visible){
+    s.lastThreat=target;s.lastSeen=now;Q230RetireSearch(actor);
+  }else target=s.lastThreat;
+  const bool coverGrace=s.combatMovement==fo3npc::CombatAction::Cover&&
+    hiddenFor<fo3sneak::Setting(settings,"fCombatSearchTargetHiddenMaxTime");
+  if(!valid||(!visible&&searchExpired&&!(s.moraleFlee&&now<s.fleeUntil)&&!coverGrace)){
     const auto old=s.combatTarget;Q230StopScriptCombat(actor,now);const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
@@ -516,6 +643,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     Q240AdvancePath(actor,dt,now);return;
   }
   if(!armed){
+    if(!visible){Q230Search(actor,s.lastThreat,false,dt,now);return;}
     Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no usable supported combat weapon; attempting real NAVM cover");
     const std::array<float,3> game{gSceneCenterXQ1730+target[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(target[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(target[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
     s.action=fo3npc::CombatAction::Cover;
@@ -590,10 +718,11 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     // attack into search/pursuit and release it after regaining visibility.
     if(s.pendingAttack){s.pendingAttack=false;s.pendingHit=0;s.actionUntil=0;s.animation=fo3npc::Animation::Aim;++s.actionSerial;}
     s.combatMovement=fo3npc::CombatAction::Acquire;s.coverUntil=-1;s.manoeuvreUntil=0;
-    s.action=visible?fo3npc::CombatAction::Pursue:fo3npc::CombatAction::Search;
-    const auto& point=visible?target:s.lastThreat;
-    const std::array<float,3> game{gSceneCenterXQ1730+point[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(point[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(point[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
-    Q230CombatRoute(actor,game,false,now);if(!movingFire)Q240AdvancePath(actor,dt,now);return;
+    if(!visible){Q230Search(actor,s.lastThreat,false,dt,now);return;}
+    s.action=fo3npc::CombatAction::Pursue;
+    Q230CombatRoute(actor,Q230GameThreat(target),false,now);
+    if(!movingFire)Q240AdvancePath(actor,dt,now);
+    return;
   }
   {
     const float minimum=d.minRange*(ranged&&style?style->rangeMin:1.f);

@@ -3,6 +3,7 @@
 #include "fo3-furniture.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 namespace fo3npc {
@@ -25,6 +26,14 @@ struct MovementPolicy {
   static constexpr float StandingTurn=2.1f,CrowdRadius=70.f,CrowdHeight=90.f,CrowdBodyClearance=35.f;
 };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
+struct CombatSearch {
+  bool active=false,investigating=false;
+  std::array<float,3> origin{};
+  double lookUntil=-1,nextCheck=0;
+  float heading=0;
+  std::size_t nextDirection=0,checkedCount=0;
+  std::array<std::array<float,3>,8> checked{};
+};
 struct RuntimeState {
   fo3furniture::State furniture;
   uint32_t sandboxLastTarget=0,sandboxCycles=0;
@@ -58,6 +67,7 @@ struct RuntimeState {
   float suspendedPackageWait=0;
   CombatAction action=CombatAction::Acquire;
   CombatAction combatMovement=CombatAction::Acquire;
+  CombatSearch search;
   uint8_t tacticalRouteKind=0; // 1 escape, 2 cover, 3 firing-position route.
   double coverUntil=-1;
   double nextManoeuvre=0,manoeuvreUntil=0,nextMeleeDecision=0;
@@ -90,10 +100,10 @@ struct RuntimeState {
     navigationDoor=xtelDoor=xtelCell=0;blockedSince=crowdBlockedSince=-1;
     hasLastRoamDestination=false;packageRetryAfter.clear();
     nextPath=nextDoorQuery=nextDoorProbe=nextPackageEvaluation=0;packageRevision=UINT64_MAX;
-    procedure=Procedure::Interrupted;tacticalRouteKind=0;coverUntil=-1;
+    procedure=Procedure::Interrupted;tacticalRouteKind=0;coverUntil=-1;search={};
   }
   bool Alive() const {return activity!=Activity::Dying&&activity!=Activity::Dead&&activity!=Activity::Unconscious;}
-  bool CanTalk() const {return Alive()&&activity!=Activity::Combat;}
+  bool CanTalk() const {return Alive()&&activity!=Activity::Combat&&!search.investigating;}
   void BeginCombat(uint32_t target){
     if(!Alive())return;
     if(activity!=Activity::Combat){if(!dialogue){suspended=activity;suspendedPackage=package;}dialogue=false;speaking=false;}

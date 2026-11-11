@@ -162,7 +162,7 @@ void Execute(fo3player::Player& player,const fo3player::Stack& stack,
   const float cost=session.roundsFired?0:shot->ap;
   if(!player.FireVatsRound(session.weapon,cost)){Finish(true);return;}
   pose=AimPose(model,point);
-  HeldShotEffects(player,weapon,game);
+  HeldShotEffects(player,weapon,muzzle,game);
   flashEnd=raw+std::max(.025f,float(flashUntil-game));
   const unsigned current=Chance(player,weapon,*part,muzzle,point,shot->target);
   if(Random()*100.f<float(std::min(shot->chance,current))){

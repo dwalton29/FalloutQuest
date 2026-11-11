@@ -1086,6 +1086,11 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
     if(!actor.runtime.navigationDoor&&now-actor.runtime.blockedSince>=.5 &&
        Q240AlternatePortalWaypoint(actor)){actor.runtime.blockedSince=now;return;}
     if(now-actor.runtime.blockedSince>=3) {
+      if(actor.runtime.activity==fo3npc::Activity::Combat||actor.runtime.search.investigating){
+        actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+        actor.runtime.navigationDoor=0;actor.runtime.blockedSince=-1;
+        return;
+      }
       Q240PackageRouteFailed(actor,now,"blocked-route",1);
       const auto& definitions=gPlayerSession->player.Definitions().pipboy;
       const auto p=definitions.packages.find(actor.aiPackage);
@@ -1547,6 +1552,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.furniture.Clear();return;
   }
   if(now<actor.runtime.hitUntil){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Hit;actor.aiLastUpdate=now;return;}
+  if(actor.runtime.search.investigating)return;
   if(actor.runtime.dialogue||actor.runtime.activity==fo3npc::Activity::Combat){
     const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
     if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7)

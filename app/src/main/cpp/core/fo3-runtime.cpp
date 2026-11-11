@@ -986,8 +986,7 @@ struct Q230ActorVisual {
     uint64_t profiledAnimationFrame=UINT64_MAX;
 };
 float gPlayerSneakDrop=0,gPlayerDetectionSpeed=0;
-double gPlayerDetectionActionUntil=0;
-float gPlayerDetectionAction=0;
+fo3sneak::Noise gPlayerDetectionShot,gPlayerDetectionStep;
 fo3sneak::Indicator gPlayerSneakIndicator=fo3sneak::Indicator::Hidden;
 fo3seat::State gPlayerSeat;
 float gPlayerSeatFade=0;
@@ -12179,6 +12178,7 @@ void Q230DeleteNpcActors() {
     if(Fo3DialogueFocus())EndFo3Dialogue("actor unload");
     for (auto& actor : gQ230NpcActors) {fo3rigid::Live().RemoveRagdoll(actor.source.refFormId);Q74DeleteGpuObjects(actor.objects);}
     gQ230NpcActors.clear();
+    gPlayerDetectionShot=gPlayerDetectionStep={};
     gQ230HealthBars.Clear();
     fo3healthui::Shutdown();
 }
@@ -13414,6 +13414,7 @@ void QActorPrepareStereoFrame() {
                 if(moved!=gPlayerSession->player.Snapshot().actors.end()){
                     const auto& saved=moved->second;
                     actor.runtime.Relocate(Q240ScenePosition(saved.position),saved.yaw,Q230ActorResident(saved));
+                    actor.playerDetection={};gPlayerSession->player.SetScriptActorDetectedPlayer(actor.source.refFormId,false);
                     actor.aiPackage=actor.runtime.package=saved.package;actor.aiSequence=saved.sequence;
                     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
                     actor.aiLastUpdate=npcNow;actor.aiRepathAt=npcNow;

@@ -1643,12 +1643,16 @@ private:
             gPipActivation.phase!=fo3pip::Phase::Candidate && !GetFo3LootPanel().reference;
         const float actualDistance=std::hypot(playerPosition_.x+headOffset.x-currentCenterX,
                                               playerPosition_.z+headOffset.z-currentCenterZ);
-        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance/characterScale,float(dt),walkingEnabled,gPlayerSession&&gPlayerSession->player.IsSneaking());
+        const bool sneaking=gPlayerSession&&gPlayerSession->player.IsSneaking();
+        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance/characterScale,float(dt),walkingEnabled,sneaking);
         uint32_t material=0;
-        gPlayerDetectionSpeed=dt>0?actualDistance/float(dt):0;
         if(step>=0 && SampleFo3PlayerFootstepSurface(playerPosition_.x+headOffset.x,
-                playerPosition_.z+headOffset.z,playerPosition_.y,&material))
+                playerPosition_.z+headOffset.z,playerPosition_.y,&material)){
             fo3audio::Footstep(material,unsigned(step));
+            const double time=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+            gPlayerDetectionStep={{playerPosition_.x+headOffset.x,FLOOR_Y+playerPosition_.y+.05f,
+                                   playerPosition_.z+headOffset.z},time,dt>0?actualDistance/float(dt):0,sneaking};
+        }
     }
 
     XrPosef ToVirtualPose(const XrPosef& localPose) const {
