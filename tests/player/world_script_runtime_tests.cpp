@@ -168,6 +168,7 @@ static void OriginalHallwayIntervention(const char* path){
   const auto wally=id("cg03wallymackref"),paul=id("cg03paulhannonref");
   for(uint32_t ref:{amata,butch,wally,paul}){
     ActorVisual actor;actor.source={ref,d.targets.at(ref).base};actor.runtime.position={at.x,at.y,at.z};
+    if(ref==amata)actor.aiPackage=package;
     gQ230NpcActors.push_back(actor);
   }
   fo3worldscript::SpeechTick();
@@ -352,12 +353,21 @@ int main(int argc,char** argv){try{
  Check(fo3worldscript::AllowsPlayerDialogue()&&!fo3worldscript::scriptSubtitle.visible,"completed scripted speech clears its subtitle and releases player dialogue");
  Check(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|1)==1&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==1,"INFO end precedes source filtered SayToDone");
  Check(p.SetDialogueVariable((uint64_t(40)<<32)|2,0),"clear SayToDone marker");
+ DialogueActor(40)->aiPackage=850;
  Check(fo3worldscript::PackageEvent(40,850,false),"adopt original dialogue package");
- Check(p.QueueScriptSpeech(40,500,fo3player::PlayerRef,false,false,850),"queue package-specific speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ for(int request=0;request<2;++request)
+  Check(p.QueueScriptSpeech(40,500,fo3player::PlayerRef,false,false,850),"queue package-specific speech");
+ fo3worldscript::Actions();
+ Check(fo3worldscript::speechPending.size()==1,"duplicate pending requests share one package line");
+ fo3worldscript::SpeechTick();
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(850),true)&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==0,"package speech completes its package without sending SayToDone");
+ Check(p.QueueScriptSpeech(40,500,fo3player::PlayerRef,false,false,850),"queue a stale package line");
+ fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ Check(!p.ScriptActorTalking(40)&&fo3worldscript::speechPending.empty(),"completed package drops delayed speech");
  for(bool success:{false,true}){
   worldDefer=true;const auto before=p.Snapshot().karma;
+  DialogueActor(40)->aiPackage=852;
   Check(fo3worldscript::PackageEvent(40,852,false),"start world-result package");
   Check(p.QueueScriptSpeech(40,830,fo3player::PlayerRef,false,false,852),"queue world-result speech");
   worldBusy=true;fo3worldscript::Actions();fo3worldscript::SpeechTick();
@@ -385,6 +395,8 @@ int main(int argc,char** argv){try{
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
  Check(p.SetTalkingActivatorActor(81,40),"assign remote actor to intercom");
+ ActorVisual initiator;initiator.source={41,411};initiator.aiPackage=851;
+ gQ230NpcActors.insert(gQ230NpcActors.begin(),initiator);
  Check(fo3worldscript::PackageEvent(41,851,false),"adopt specified conversation package");
  const auto expiredToken=fo3audio::token;
  Check(p.QueueScriptSpeech(41,910,81,true,false,851),"bind queued intercom actors");Check(p.SetTalkingActivatorActor(81,41),"replace queued target identity");

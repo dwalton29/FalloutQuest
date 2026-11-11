@@ -255,8 +255,8 @@ static void StartSpeech(SpeechLane& lane,unsigned index,const fo3script::Action&
     ConfigureFo3DialogueSession(speech);
     if(action.package){
         const auto* speaker=DialogueActor(action.reference);
-        if(!speaker||speaker->aiPackage!=action.package||
-           !Q230ChatEligible(*speaker,action.flags,action.package))return;
+        if(!speaker||speaker->aiPackage!=action.package||!speaker->runtime.CanTalk()||
+           !player.PackageEventNeeded(action.reference,action.package,true))return;
     }
     // A package can wait for a free lane while another line changes the quest.
     // Resolve its current INFO at playback. SCPT SayTo binds its INFO at capture.
