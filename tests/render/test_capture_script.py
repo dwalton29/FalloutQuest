@@ -15,7 +15,8 @@ s=json.loads(p.read_text()) if p.exists() else {}
 a=sys.argv[1:]
 if a==['get-state']:print('device')
 elif a[:3]==['shell','dumpsys','package']:
- print('versionName='+os.environ.get('FAKE_ADB_VERSION','0.97.0-terrain-layer-fusion-O2'))
+ print('    versionCode=350 minSdk=29 targetSdk=35')
+ print('    versionName='+os.environ.get('FAKE_ADB_VERSION','0.195.0-cpu-profiling-O2'))
 elif a[:3]==['shell','setprop','debug.falloutquest.perf_capture']:
  if a[3]!='0':s={'token':a[3]}
  else:s['stopped']=True
@@ -40,18 +41,19 @@ class CaptureScript(unittest.TestCase):
         self.env=dict(os.environ,FAKE_ADB_STATE=str(self.directory/'state.json'))
     def run_script(self):
         return subprocess.run(['pwsh','-NoProfile','-File',str(self.script),'-Seconds','10',
-             '-OutputDirectory',str(self.directory/'captures')],env=self.env,
+             '-Scene','capitol','-OutputDirectory',str(self.directory/'captures')],env=self.env,
              cwd=ROOT,capture_output=True,text=True,timeout=35)
     def test_finds_adb_next_to_script_and_exports_new_matching_session(self):
         r=self.run_script();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
         token=json.loads((self.directory/'state.json').read_text())['token']
-        csv=self.directory/'captures'/f'megaton-v238-{token}.csv'
-        log=self.directory/'captures'/f'megaton-v238-{token}-logcat.txt'
+        csv=self.directory/'captures'/f'capitol-v350-{token}.csv'
+        log=self.directory/'captures'/f'capitol-v350-{token}-logcat.txt'
         self.assertIn('session='+token,csv.read_text())
+        self.assertIn('versionCode=350',log.read_text())
         self.assertIn('CAPTURE_END id='+token,log.read_text())
     def test_rejects_debug_before_starting_recording(self):
-        self.env['FAKE_ADB_VERSION']='0.97.0-terrain-layer-fusion'
+        self.env['FAKE_ADB_VERSION']='0.195.0-cpu-profiling'
         r=self.run_script();self.assertNotEqual(r.returncode,0)
-        self.assertIn('Install the v238 O2 APK',r.stdout+r.stderr)
+        self.assertIn('Install the FalloutQuest O2 profile APK',r.stdout+r.stderr)
         self.assertFalse((self.directory/'state.json').exists())
 if __name__=='__main__':unittest.main()

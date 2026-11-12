@@ -2080,6 +2080,8 @@ private:
                     lastFrameTime_ = 0;
                 }
                 hitch.Mark("scripts+player");
+                fqperf::Scope vrInteractionUpdate(fqperf::VrInteractionUpdate);
+                fqperf::Scope playerRigUpdate(fqperf::PlayerRigUpdate);
                 // Q21.0: drive the Fallout body root from the exact virtual
                 // HMD/controller poses used by locomotion and interaction.
                 XrPosef q210HeadLocal=views[0].pose;
@@ -2132,6 +2134,7 @@ private:
                 fqactor::player={};fqactor::npc={};
                 SynchronizeFo3PipboyEquipment();
                 if(!IsFo3LoadingVisible() && Q210EnsurePlayerBody())Q211UpdatePlayerRig();
+                playerRigUpdate.Finish();
                 const auto pipHead=MatrixFromPose(q210VirtualHead);
                 const auto headTracking=fo3vr::LocationTracking(viewState.viewStateFlags,
                     XR_VIEW_STATE_POSITION_VALID_BIT|XR_VIEW_STATE_ORIENTATION_VALID_BIT,
@@ -2139,9 +2142,11 @@ private:
                 gVrHeadTracking=headTracking;
                 gVrLeftGripTracking={gripHandPoseValid_[0],gripHandTracked_[0]};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
+                fqperf::Scope vatsUpdate(fqperf::VatsUpdate);
                 const bool vatsOwned=UpdateFo3Vats(double(frameState.predictedDisplayTime)*1e-9,gameplaySeconds,
                     fingerTriggerValue_[0],fingerTriggerValue_[1],activateDownQ1700_,pipBackDown_,
                     sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid);
+                vatsUpdate.Finish();
                 if(vatsOwned){
                     activateLatched_=true;
                     if(!Fo3VatsFocus()){
@@ -2152,6 +2157,7 @@ private:
                 }
                 bool dialogueControls=vatsOwned;
                 const bool movieControls=Fo3MovieFocus();
+                fqperf::Scope menuUpdate(fqperf::MenuUpdate);
                 if(!Fo3PlayerDead())UpdateFo3Movie(gameplaySeconds,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,
                     !Fo3GameplayBlocked()&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED,
                     q210RightValid&&sessionState_==XR_SESSION_STATE_FOCUSED,gQ210Head);
@@ -2179,6 +2185,7 @@ private:
                         q210RightValid&&activateDownQ1700_,
                         q210RightValid&&pipBackDown_,
                         sessionState_==XR_SESSION_STATE_FOCUSED);
+                    fqperf::Scope pipboyUpdate(fqperf::PipboyUpdate);
                     UpdateFo3Pipboy(gStereoFrame,gameplaySeconds,pipHead.m,
                         gVrPipTracking.Step(gSceneReady&&!weaponInHand&&!(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3LevelUpFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
                             headTracking,{gripHandPoseValid_[0],gripHandTracked_[0]},{handPoseValid_[0],pipLeftAimTracked_},
@@ -2187,6 +2194,7 @@ private:
                         q210RightValid&&!Fo3LevelUpFocus()?lootScrollY_:0,
                         q210RightValid&&!Fo3LevelUpFocus()&&activateDownQ1700_,
                         q210RightValid&&!Fo3LevelUpFocus()&&pipBackDown_,fingerGripValue_[0],fingerTriggerValue_[1]);
+                    pipboyUpdate.Finish();
                     const bool terminalControls=Fo3TerminalFocus();
                     UpdateFo3Terminal(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,
@@ -2203,14 +2211,21 @@ private:
                     if(Fo3LevelUpFocus())ResetFo3Pipboy();
                     dialogueControls=terminalControls||Fo3TerminalInputBlocked()||lockControls||Fo3LockpickFocus()||
                         Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    menuUpdate.Finish();
+                    fqperf::Scope dialogueUpdate(fqperf::DialogueUpdate);
                     UpdateFo3Dialogue(gameplaySeconds,
                         !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid?lootScrollY_:0,
                         !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid&&activateDownQ1700_,
                         !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid&&pipBackDown_,
                         sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
                         q210LeftValid?fingerTriggerValue_[0]:0,q210LeftValid&&barterConfirmDown_);
+                    dialogueUpdate.Finish();
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
-                    WeaponUpdate(gameplaySeconds,(dialogueControls||gPlayerSeat.Active()||seatConsumeB_)?false:pipBackDown_);
+                    {
+                        FQ_PERF_SCOPE(WeaponUpdate);
+                        WeaponUpdate(gameplaySeconds,(dialogueControls||gPlayerSeat.Active()||seatConsumeB_)?false:pipBackDown_);
+                    }
+                    fqperf::Scope unarmedUpdate(fqperf::UnarmedUpdate);
                     std::array<std::optional<fo3vr::V>,2> fistTracking{};
                     if(!dialogueControls&&!Fo3DialogueFocus()&&!Fo3MovieFocus()&&!Fo3PipboyFocus()&&
                        !gPlayerSeat.Busy()&&!GetFo3LootPanel().reference&&headTracking.tracked&&
@@ -2222,9 +2237,14 @@ private:
                         }
                     }
                     UpdateFo3Unarmed(gameplaySeconds,playerYaw_,fistTracking);
+                    unarmedUpdate.Finish();
                     if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
-                    DeliverFo3ScriptSounds();
+                    {
+                        FQ_PERF_SCOPE(ScriptSounds);
+                        DeliverFo3ScriptSounds();
+                    }
                 }else ResetFo3Unarmed();
+                menuUpdate.Finish();
                 if(vatsOwned||!Fo3GameplayBlocked()){
                     for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                         XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
@@ -2235,6 +2255,7 @@ private:
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
                 const XrPosef q1890VirtualHead = q210VirtualHead;
+                vrInteractionUpdate.Finish();
                 if(fqperf::capture.recording)perf.us[fqperf::Gameplay]+=fqopaque::Micros(gameplayStarted);
                 { FQ_PERF_SCOPE(Streaming);
                 hitch.Mark("interactions");

@@ -10621,9 +10621,13 @@ void Q223BuildMotionDelta(
 }
 
 void Q223AdvanceDynamicBodies() {
+    FQ_PERF_SCOPE(RigidWorldUpdate);
     static auto previous=Fo3GameplayNow();const auto now=Fo3GameplayNow();
     const float seconds=std::chrono::duration<float>(now-previous).count();previous=now;
-    SynchronizeFo3RigidWorld(gQ210Head[0],gQ210Head[2]);
+    {
+        FQ_PERF_SCOPE(RigidSync);
+        SynchronizeFo3RigidWorld(gQ210Head[0],gQ210Head[2]);
+    }
     auto& world=fo3rigid::Live();
     for(auto i=gQ223DynamicBodies.begin();i!=gQ223DynamicBodies.end();){
         const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject&&o.refFormId==i->first;});
@@ -10641,9 +10645,18 @@ void Q223AdvanceDynamicBodies() {
         auto palm=fo3rigid::Identity();const float identityQ[4]{0,0,0,1};
         Q220ControllerDeltaMatrix({},identityQ,point,quat,palm.data());world.Target(hand,palm);
     }
-    Q230PrepareRagdolls();
-    world.Step(seconds);
-    Q230CaptureRagdolls();
+    {
+        FQ_PERF_SCOPE(RagdollUpdate);
+        Q230PrepareRagdolls();
+    }
+    {
+        FQ_PERF_SCOPE(RigidStep);
+        world.Step(seconds);
+    }
+    {
+        FQ_PERF_SCOPE(RagdollUpdate);
+        Q230CaptureRagdolls();
+    }
     for(auto& entry:gQ223DynamicBodies){
         auto& body=entry.second;fo3rigid::M pose;fo3rigid::V linear,angular;
         if(!world.Pose(entry.first,pose,&linear,&angular))continue;

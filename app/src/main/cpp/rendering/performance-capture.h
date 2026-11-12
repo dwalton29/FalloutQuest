@@ -13,7 +13,9 @@ enum Metric : unsigned {
     Wait,Begin,Input,Gameplay,Streaming,ActorPrep,Simulation,Packages,Persistence,
     Unloaded,Arrivals,Animation,Facial,Palette,Upload,Target,Sight,Path,Movement,
     WeaponChoice,Eye0,Eye1,End,Work,Cadence,ScenePrep,Clip,Pose,
-    Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Scripts,Motion,Interaction,NpcGround,NpcPortal,NpcObstruction,NpcCrowd,NpcArrivalPart,Count
+    Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Scripts,Motion,Interaction,NpcGround,NpcPortal,NpcObstruction,NpcCrowd,NpcArrivalPart,
+    VrInteractionUpdate,PlayerRigUpdate,VatsUpdate,MenuUpdate,PipboyUpdate,DialogueUpdate,
+    WeaponUpdate,RigidWorldUpdate,RigidSync,RigidStep,RagdollUpdate,LooseGrab,UnarmedUpdate,ScriptSounds,Count
 };
 inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","gameplayUs",
     "streamingUs","actorPrepUs","npcSimulationUs","npcPackagesUs","npcPersistenceUs",
@@ -22,7 +24,10 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "npcWeaponChoiceUs","eye0CpuUs","eye1CpuUs","xrEndUs","workUs","cadenceUs",
     "scenePrepUs","npcClipUs","npcPoseUs","native0CpuUs","native1CpuUs",
     "detail0CpuUs","detail1CpuUs","npcDraw0CpuUs","npcDraw1CpuUs","playerDraw0CpuUs","playerDraw1CpuUs","swapchainAcquireWaitUs","scriptsUs","playerMotionUs","interactionUs",
-    "npcGroundUs","npcPortalUs","npcObstructionUs","npcCrowdUs","npcArrivalPartUs"};
+    "npcGroundUs","npcPortalUs","npcObstructionUs","npcCrowdUs","npcArrivalPartUs",
+    "vrInteractionUpdateUs","playerRigUpdateUs","vatsUpdateUs","menuUpdateUs","pipboyUpdateUs","dialogueUpdateUs",
+    "weaponUpdateUs","rigidWorldUpdateUs","rigidSyncUs","rigidStepUs","ragdollUpdateUs","looseGrabUs",
+    "unarmedUpdateUs","scriptSoundsUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
 enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
     GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,
@@ -118,7 +123,11 @@ struct Scope {
     bool active=capture.recording;
     Clock::time_point start=active?Clock::now():Clock::time_point{};
     explicit Scope(Metric m):metric(m){}
-    ~Scope(){if(active&&capture.recording)capture.current.us[metric]+=Us(start);}
+    void Finish() {
+        if(active&&capture.recording)capture.current.us[metric]+=Us(start);
+        active=false;
+    }
+    ~Scope(){Finish();}
 };
 } // namespace fqperf
 #define FQ_PERF_JOIN_(a,b) a##b

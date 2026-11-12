@@ -28,6 +28,8 @@ int main() {
     s.GpuStage(serial-1,0,GpuTerrain,999);
     assert(s.frames[0].gpuPassUs[0][GpuTerrain]==150);
     s.frames[0].hdrRttEyes=2;s.frames[0].implicitColorResolvePixels=123456;
+    s.frames[0].us[VrInteractionUpdate]=48000;
+    s.frames[0].us[RigidStep]=29000;
     assert(s.Write("/tmp/fq-perf-test.csv"));
     std::ifstream in("/tmp/fq-perf-test.csv");std::string line;
     unsigned lines=0;while(std::getline(in,line)){
@@ -43,5 +45,13 @@ int main() {
     capture.Start(1);capture.BeginFrame();
     {Scope scope(Sight);}
     assert(capture.current.us[Sight]>=0);
+    double measured=0;
+    {
+        Scope weapon(WeaponUpdate);
+        weapon.Finish();
+        measured=capture.current.us[WeaponUpdate];
+        weapon.Finish();
+    }
+    assert(capture.current.us[WeaponUpdate]==measured);
     capture.FinishFrame();assert(capture.size==1);
 }
