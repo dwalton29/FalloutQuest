@@ -13,6 +13,8 @@ from pathlib import Path
 p=Path(os.environ['FAKE_ADB_STATE'])
 s=json.loads(p.read_text()) if p.exists() else {}
 a=sys.argv[1:]
+if os.environ.get('FAKE_ADB_UNAUTHORIZED'):
+ sys.exit('adb: device unauthorized')
 if a==['get-state']:print('device')
 elif a[:3]==['shell','dumpsys','package']:
  print('    versionCode=350 minSdk=29 targetSdk=35')
@@ -22,9 +24,12 @@ elif a[:3]==['shell','setprop','debug.falloutquest.perf_capture']:
  else:s['stopped']=True
  p.write_text(json.dumps(s))
 elif a[:2]==['logcat','-d']:
- print('FQPerf: CAPTURE_START id='+s['token']+' gpuSupported=1')
- if s.get('stopped'):print('FQPerf: CAPTURE_END id='+s['token']+' frames=100 saved=1')
+ if 'token' in s:
+  print('FQPerf: CAPTURE_START id='+s['token']+' gpuSupported=1')
+  if s.get('stopped'):print('FQPerf: CAPTURE_END id='+s['token']+' frames=100 saved=1')
+ else:print('FalloutQuest: ready')
 elif a[:3]==['exec-out','run-as','com.falloutquest.app']:
+ if os.environ.get('FAKE_ADB_PULL_FAIL'):sys.exit('run-as: could not read files/performance.csv')
  print('# format=233 session='+s['token']+' native=profile-O2')
  print('serial,loading,workUs')
  print('1,0,1000')
@@ -51,9 +56,32 @@ class CaptureScript(unittest.TestCase):
         self.assertIn('session='+token,csv.read_text())
         self.assertIn('versionCode=350',log.read_text())
         self.assertIn('CAPTURE_END id='+token,log.read_text())
+        self.assertIn(str(log),r.stdout)
     def test_rejects_debug_before_starting_recording(self):
         self.env['FAKE_ADB_VERSION']='0.195.0-cpu-profiling'
         r=self.run_script();self.assertNotEqual(r.returncode,0)
         self.assertIn('Install the FalloutQuest O2 profile APK',r.stdout+r.stderr)
         self.assertFalse((self.directory/'state.json').exists())
+        log, = (self.directory/'captures').glob('capitol-v350-*-logcat.txt')
+        self.assertIn('Capture failed:',log.read_text())
+        self.assertIn('FalloutQuest: ready',log.read_text())
+
+    def test_preserves_log_when_csv_pull_fails(self):
+        self.env['FAKE_ADB_PULL_FAIL']='1'
+        r=self.run_script();self.assertNotEqual(r.returncode,0)
+        state=json.loads((self.directory/'state.json').read_text())
+        self.assertTrue(state['stopped'])
+        log, = (self.directory/'captures').glob('capitol-v350-*-logcat.txt')
+        self.assertIn('adb exec-out failed:',log.read_text())
+        self.assertIn('CAPTURE_END id='+state['token'],log.read_text())
+        self.assertFalse(list((self.directory/'captures').glob('*.csv')))
+
+    def test_writes_connection_error_when_adb_cannot_read_logcat(self):
+        self.env['FAKE_ADB_UNAUTHORIZED']='1'
+        r=self.run_script();self.assertNotEqual(r.returncode,0)
+        log, = (self.directory/'captures').glob('capitol-*-logcat.txt')
+        self.assertIn('Capture failed: adb get-state failed: adb: device unauthorized',log.read_text())
+        self.assertIn('Could not read headset logcat',log.read_text())
+        self.assertFalse(list((self.directory/'captures').glob('*.csv')))
+
 if __name__=='__main__':unittest.main()
