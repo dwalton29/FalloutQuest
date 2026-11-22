@@ -302,8 +302,19 @@ void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=f
         const auto view=fqvk::renderer->textures.at(7).view;
         const auto descriptors=fqvk::renderer->descriptorAllocations;
         const auto allocations=fqvk::renderer->stagingAllocations;
+        if(fqrender::nativeOnly){
+            // Many different poses in the same submission. The drawn pose must
+            // come from the last slice; offset zero holds the unshifted pose.
+            palette[12]=0;
+            for(int i=0;i<96;++i)fqvk::Skin(9,7,nullptr,0,palette,1);
+            palette[12]=.8f;
+        }
         fqvk::Skin(9,7,nullptr,0,palette,1);
-        if(fqrender::nativeOnly)assert(fqvk::renderer->textures.at(7).view==view&&fqvk::renderer->paletteUpdates==1);
+        if(fqrender::nativeOnly){
+            auto& r=*fqvk::renderer;
+            assert(r.textures.at(7).view==view&&r.paletteUpdates==97);
+            assert(r.uploadBatch.staging.size()==1&&r.uploadBatch.paletteUsed==97*128);
+        }
         assert(fqvk::BeginWorldProbe(left,left,eye,eye));
         Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         fqvk::EndWorldProbe();
@@ -732,6 +743,24 @@ void AsyncResources() {
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     assert(r.descriptorResets>=resets&&r.descriptorResets>resetsBeforeReplacement&&r.descriptorRevision==r.viewRevision); // upload completion may allow collection before frame 5 or frame 6
     const auto pixels=r.Readback();Near(Pixel(pixels,0,32,32,2),1);Near(Pixel(pixels,1,32,32,2),1);
+    // A walking-frame-sized burst crosses both page and submission boundaries.
+    // Initialization and subsequent poses share the same staging accounting.
+    {
+        std::array<float,7*32> pose{};
+        fqperf::capture.Start(355);fqperf::capture.BeginFrame();
+        auto image=r.UploadPalette(pose.data(),7);
+        for(int i=1;i<960;++i){
+            pose[12]=float(i);
+            r.UpdatePalette(image,pose.data(),7);
+        }
+        r.FlushUploads();
+        const auto& frame=fqperf::capture.current;
+        assert(frame.paletteStagedCopies==960&&frame.paletteStagingPages==15);
+        assert(frame.calls[fqperf::UploadFenceWait]==0);
+        fqperf::capture.FinishFrame();fqperf::capture.active=false;
+        assert(vkQueueWaitIdle(r.queue)==VK_SUCCESS);r.PollUploads();r.Destroy(image);
+        assert(r.uploadBytes==0&&r.uploadStagingBuffers==0);
+    }
     // Exercise bounded staging/backpressure with rapidly replaced native images.
     r.uploadBatchLimit=1;r.uploadMemoryLimit=16;r.uploadBufferLimit=2;
     for(int i=0;i<32;++i)fqvk::Texture(5,1,1,i%2?green:blue);

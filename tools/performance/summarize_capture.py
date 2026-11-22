@@ -70,6 +70,15 @@ def diagnostic_summary(rows):
         print(f'{key} | {statistics.median(values)/1000:.3f} | {p95/1000:.3f} | '
               f'{max(values)/1000:.3f} | {statistics.mean(calls) if calls and max(calls) else "unavailable"} | '
               f'{longest/1000 if longest >= 0 else "unavailable"}')
+    if 'paletteStagingPages' in rows[0]:
+        copies = sum(int(r['paletteStagedCopies']) for r in selected)
+        pages = sum(int(r['paletteStagingPages']) for r in selected)
+        waits = sum(int(r['vkUploadFenceWaitUsCalls']) for r in selected)
+        wait_ms = sum(float(r['vkUploadFenceWaitUs']) for r in selected) / 1000
+        print(f'Palette staging: {copies} copies, {pages} pages. Upload pressure: {waits} fence waits, {wait_ms:.2f} ms total.')
+        scans = sum(int(r['npcGroundFullScans']) for r in selected)
+        triangles = sum(int(r['npcGroundScannedTriangles']) for r in selected)
+        print(f'NPC grounding: {scans} full scans, {triangles} triangles visited by full scans.')
     if 'ragdollApplied' in rows[0]:
         ticks = sum(int(r['rigidTickUsCalls']) for r in selected)
         solves = sum(int(r['rigidSolveUsCalls']) for r in selected)

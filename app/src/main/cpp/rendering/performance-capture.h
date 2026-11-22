@@ -24,7 +24,7 @@ enum Metric : unsigned {
     Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Scripts,Motion,Interaction,NpcGround,NpcPortal,NpcObstruction,NpcCrowd,NpcArrivalPart,
     VrInteractionUpdate,PlayerRigUpdate,VatsUpdate,MenuUpdate,PipboyUpdate,DialogueUpdate,
     WeaponUpdate,RigidWorldUpdate,RigidSync,RigidStep,RagdollUpdate,LooseGrab,UnarmedUpdate,ScriptSounds,
-    ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,Count
+    ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,UploadFenceWait,Count
 };
 inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","gameplayUs",
     "streamingUs","actorPrepUs","npcSimulationUs","npcPackagesUs","npcPersistenceUs",
@@ -36,7 +36,7 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "npcGroundUs","npcPortalUs","npcObstructionUs","npcCrowdUs","npcArrivalPartUs",
     "vrInteractionUpdateUs","playerRigUpdateUs","vatsUpdateUs","menuUpdateUs","pipboyUpdateUs","dialogueUpdateUs",
     "weaponUpdateUs","rigidWorldUpdateUs","rigidSyncUs","rigidStepUs","ragdollUpdateUs","looseGrabUs",
-    "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs"};
+    "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs","vkUploadFenceWaitUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
 enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
     GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,
@@ -58,6 +58,8 @@ struct Frame {
     // Per-frame peak subdivision requests; bone indices refer to the actor's ragdoll definition.
     uint32_t ragdollRequested=0,ragdollRequestActor=0,ragdollRequestBone=0;
     uint32_t ragdollApplied=0,ragdollApplyActor=0,ragdollApplyBone=0;
+    uint32_t paletteStagedCopies=0,paletteStagingPages=0,npcGroundFullScans=0;
+    uint64_t npcGroundScannedTriangles=0;
     bool spacewarp=false,focused=false;
     double vkWorldUs=0,vkUiUs=0;
     std::array<double,VkPassCount> vkPassUs{};
@@ -131,7 +133,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -154,8 +156,9 @@ struct Session {
             const bool vkCpuComplete=v.vkExpected>0&&v.vkCpuTimed==v.vkExpected;
             std::fprintf(f,",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",v.vkExpected?v.vkRecordUs:-1,vkCpuComplete?v.vkUploadUs:-1,vkCpuComplete?v.vkDrawUs:-1,vkCpuComplete?v.vkQueueUs:-1,v.vkExpected?v.vkReuseWaitUs:-1,v.vkExpected?v.vkFinishWaitUs:-1,vkComplete?v.vkXrWaitUs:-1);
             for(unsigned m=0;m<Count;++m)std::fprintf(f,",%u,%.3f",v.calls[m],v.maxUs[m]);
-            std::fprintf(f,",%u,%u,%u,%u,%u,%u\n",v.ragdollRequested,v.ragdollRequestActor,v.ragdollRequestBone,
-                v.ragdollApplied,v.ragdollApplyActor,v.ragdollApplyBone);
+            std::fprintf(f,",%u,%u,%u,%u,%u,%u,%u,%u,%u,%llu\n",v.ragdollRequested,v.ragdollRequestActor,v.ragdollRequestBone,
+                v.ragdollApplied,v.ragdollApplyActor,v.ragdollApplyBone,v.paletteStagedCopies,v.paletteStagingPages,v.npcGroundFullScans,
+                (unsigned long long)v.npcGroundScannedTriangles);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

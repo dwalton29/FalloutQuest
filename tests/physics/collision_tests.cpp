@@ -192,8 +192,18 @@ static void IndexedActorGroundParityQ226() {
     float ground=0;
     assert(FindGroundWide(0,0,1.f,ground)&&ground==0.f); // lower-index tie
     assert(FindGroundWide(0,0,2.f,ground)&&ground==2.f);
+    // A changed collection policy that removes no geometry keeps the live index.
+    SetFo3CollectedCollisionRefs({0x123456});
+    assert(gQ226GroundIndexRevision==gCollisionPublicationRevision);
+    SetFo3CollectedCollisionRefs({});
+    assert(gQ226GroundIndexRevision==gCollisionPublicationRevision);
     // Collision publication epoch change must never consult stale buckets.
     AdvanceFo3CollisionPublicationRevision();
+    fqperf::capture.Start(1);fqperf::capture.BeginFrame();
+    assert(FindGroundWide(0,0,2.f,ground,nullptr,true)&&ground==2.f);
+    assert(fqperf::capture.current.npcGroundFullScans==1);
+    assert(fqperf::capture.current.npcGroundScannedTriangles==gWorldTriangles.size());
+    fqperf::capture.FinishFrame();fqperf::capture.active=false;
     parity();
     Q225RebuildDynamicGrid();
     parity();
@@ -379,6 +389,7 @@ int main(int argc,char**argv) {
     const bool exchanged=ExchangeFo3CollisionMutationSnapshot(mutation);
     forbidAllocations=false;
     assert(exchanged && countRef(10)==0 && countRef(2)==2);
+    assert(gQ226GroundIndexRevision==gCollisionPublicationRevision);
     assert(gSafeSpawnResolved && !gHkManifoldValidQ800 && gHkManifoldQ800.empty());
     assert(gPipLocalMapRevision>oldMapRevision && GetFo3CollisionPublicationRevision()>oldCollisionRevision);
     assert(!HasFo3InteractionOccluder(0,1,0,1,0,0,2,0));
@@ -390,6 +401,7 @@ int main(int argc,char**argv) {
     const bool rolledBack=ExchangeFo3CollisionMutationSnapshot(mutation);
     forbidAllocations=false;
     assert(rolledBack && countRef(10)==2 && gWorldTriangles.data()==oldData);
+    assert(gQ226GroundIndexRevision==gCollisionPublicationRevision);
     assert(gQ225DynamicGrid==oldGrid && gSafeSpawnResolved);
     assert(gWorldTriangles.back().a.x==oldTriangle.a.x &&
            gWorldTriangles.back().a.z==oldTriangle.a.z); // authored rotated door restored exactly

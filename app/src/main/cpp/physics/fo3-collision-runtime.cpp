@@ -1,6 +1,7 @@
 extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-collision-overlay.h"
 #include "fo3-rigid-world.h"
+#include "rendering/performance-capture.h"
 #include "player/fo3-vr-height.h"
 #include "fo3-nif-collision.h"
 #include "fo3-transition.h"
@@ -492,7 +493,7 @@ bool FindStepGroundQ713(float x, float z, float feetY, float& groundY) {
 // Q22.6: Spatially index NPC standing-height queries without changing which
 // authored Havok/LAND surface wins. Neighbouring cells cover the 0.02m bound
 // tolerance and boundary points; large triangles are independently indexed.
-bool FindGroundWide(float x, float z, float referenceY, float& groundY, size_t* triangleIndex=nullptr) {
+bool FindGroundWide(float x, float z, float referenceY, float& groundY, size_t* triangleIndex=nullptr, bool actorQuery=false) {
     bool found = false;
     float bestDistance = std::numeric_limits<float>::max();
     float bestY = referenceY;
@@ -531,6 +532,10 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY, size_t* 
             }
         for (uint32_t index:gInteractionLargeTriangles) consider(index);
     } else {
+        if(actorQuery&&fqperf::capture.recording&&!gWorldTriangles.empty()){
+            ++fqperf::capture.current.npcGroundFullScans;
+            fqperf::capture.current.npcGroundScannedTriangles+=gWorldTriangles.size();
+        }
         // Safe original algorithm when the spatial index is absent/stale
         // during authored collision publication or a scene transition.
         for (size_t index=0;index<gWorldTriangles.size();++index)
@@ -1610,7 +1615,7 @@ bool ResolveFo3PlayerMotionLegacyQ716(float currentX, float currentZ,
 struct Q1930PreparedCollisionSnapshot {
     CollisionTransformContext context;
     // Only explicit mutation candidates may be exchanged, never legacy tokens.
-    bool exchangeReady = false, exchanged = false;
+    bool exchangeReady = false, exchanged = false, groundIndexReady = false;
     bool ownsPolicy=false,policyApplied=false;
     std::unordered_set<std::string> expectedPolicy,candidatePolicyIdentity,policyPayload;
     uint64_t expectedRevision = 0u;
@@ -2020,6 +2025,7 @@ static bool PrepareFo3CollisionSnapshotInternal(
         snapshot->weldReady = snapshot->shapesReady = snapshot->broadphaseReady = exterior;
         Q225BuildDynamicGrid(triangles, snapshot->dynamicGrid,
                              snapshot->dynamicLarge, snapshot->dynamicStamp);
+        snapshot->groundIndexReady=true;
     }
     snapshot->assemblyUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2218,7 +2224,10 @@ bool ExchangeFo3CollisionMutationSnapshot(uint64_t token) {
     gHkManifoldQ800.clear();
     gHkManifoldValidQ800 = false;
     ++gPipLocalMapRevision;
+    const bool outgoingIndexReady=gQ226GroundIndexRevision==gCollisionPublicationRevision;
     AdvanceFo3CollisionPublicationRevision();
+    gQ226GroundIndexRevision=snapshot.groundIndexReady?gCollisionPublicationRevision:0;
+    snapshot.groundIndexReady=outgoingIndexReady;
     snapshot.expectedRevision = gCollisionPublicationRevision;
     snapshot.exchanged = true;
     return true;
@@ -2335,7 +2344,13 @@ void InvalidateDerivedCollisionCachesQ17() {
 
 void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs) {
     const bool changed = refs != gCollectedCollisionRefs;
-    if (changed) AdvanceFo3CollisionPublicationRevision();
+    if (changed) {
+        const bool indexReady=gQ226GroundIndexRevision==gCollisionPublicationRevision;
+        AdvanceFo3CollisionPublicationRevision();
+        // Updating collection policy alone leaves all triangle indices intact.
+        // If triangles are removed below we rebuild the grid before returning.
+        if(indexReady)gQ226GroundIndexRevision=gCollisionPublicationRevision;
+    }
     gCollectedCollisionRefs=refs;
     if (refs.empty()) return;
     const auto before=gWorldTriangles.size();
@@ -2748,7 +2763,7 @@ bool SampleFo3ActorGroundQ240(float x, float z, float referenceY,
     };
 
     float authoredY = referenceY;
-    if (FindGroundWide(x, z, referenceY, authoredY)) consider(authoredY);
+    if (FindGroundWide(x, z, referenceY, authoredY,nullptr,true)) consider(authoredY);
 
     float terrainOffset = 0.0f;
     if ((!gWorldTriangles.empty() || gExteriorAllBhksQ78A) &&

@@ -335,6 +335,8 @@ public:
     struct UploadBatch {
         VkCommandBuffer command{};VkFence fence{};uint64_t serial=0,bytes=0;uint32_t operations=0;
         std::vector<Buffer> staging;
+        size_t palettePage=SIZE_MAX;
+        VkDeviceSize paletteUsed=0;
     };
     UploadBatch uploadBatch;
     std::deque<UploadBatch> uploadFlight;
@@ -402,7 +404,10 @@ public:
         PollUploads();
         while((uploadBytes>uploadMemoryLimit||uploadStagingBuffers>uploadBufferLimit)&&!uploadFlight.empty()) {
             ++uploadPressureWaits;
-            Check(vkWaitForFences(device,1,&uploadFlight.front().fence,VK_TRUE,UINT64_MAX),"upload staging backpressure");
+            {
+                FQ_PERF_SCOPE(UploadFenceWait);
+                Check(vkWaitForFences(device,1,&uploadFlight.front().fence,VK_TRUE,UINT64_MAX),"upload staging backpressure");
+            }
             PollUploads();
         }
         return uploadSerial;
@@ -420,8 +425,8 @@ public:
     template<class Fn>void UploadTransfer(Fn fn) {
         ++uploadOperations;
         if(!AsyncUploads()){++uploadQueueIdles;Transfer(fn);return;}
-        PollUploads();
         if(!uploadBatch.command) {
+            PollUploads();
             VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ai.commandPool=uploads;ai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ai.commandBufferCount=1;
             Check(vkAllocateCommandBuffers(device,&ai,&uploadBatch.command),"allocate batched uploads");
             VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -429,11 +434,23 @@ public:
         }
         fn(uploadBatch.command);++uploadBatch.operations;
     }
+    void OwnStaging(Buffer& staging) {
+        uploadBatch.staging.push_back(staging);
+        uploadBytes+=staging.allocationBytes;
+        ++uploadStagingBuffers;
+        uploadPeakBytes=std::max(uploadPeakBytes,uploadBytes);
+        uploadPeakBuffers=std::max(uploadPeakBuffers,uploadStagingBuffers);
+        staging={};
+    }
+    void FinishUpload(VkDeviceSize bytes) {
+        uploadBatch.bytes+=bytes;
+        if(uploadBatch.bytes>=uploadBatchLimit||uploadBatch.operations>=uploadOperationLimit||uploadBytes>uploadMemoryLimit||uploadStagingBuffers>uploadBufferLimit)FlushUploads();
+    }
     void KeepStaging(Buffer& staging) {
         if(!AsyncUploads()){Destroy(staging);return;}
-        uploadBatch.staging.push_back(staging);uploadBatch.bytes+=staging.size;uploadBytes+=staging.allocationBytes;++uploadStagingBuffers;
-        uploadPeakBytes=std::max(uploadPeakBytes,uploadBytes);uploadPeakBuffers=std::max(uploadPeakBuffers,uploadStagingBuffers);staging={};
-        if(uploadBatch.bytes>=uploadBatchLimit||uploadBatch.operations>=uploadOperationLimit||uploadBytes>uploadMemoryLimit||uploadStagingBuffers>uploadBufferLimit)FlushUploads();
+        const auto bytes=staging.size;
+        OwnStaging(staging);
+        FinishUpload(bytes);
     }
     uint32_t MemoryType(uint32_t bits,VkMemoryPropertyFlags flags) {
         for(uint32_t i=0;i<memory.memoryTypeCount;++i)
@@ -576,52 +593,68 @@ public:
         }catch(...){CancelUploads();Destroy(staging);Destroy(result);throw;}
         return result;
     }
-    Image UploadPalette(const float* data,size_t rows) {
-        UploadCpu uploadCpu(*this);
-        ++paletteAllocations;
-        const size_t bytes=rows*8*4*sizeof(float);
-        Buffer staging=MakeStaging(bytes);Image image;
+    // Palette rows are 128 bytes, so every slice satisfies the 16-byte texel
+    // block alignment. The open batch owns the pages until its fence signals.
+    void CopyPalette(Image& image,const float* data,size_t rows,bool initialize) {
+        const VkDeviceSize bytes=rows*8*4*sizeof(float);
+        VkDeviceSize offset=0;
+        Buffer local;
         try {
-            std::memcpy(staging.mapped,data,bytes);
-            image=MakeImage(8,uint32_t(rows),VK_FORMAT_R32G32B32A32_SFLOAT,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1);
-            image.palette=true;
+            Buffer* source=&local;
+            if(AsyncUploads()){
+                const auto page=uploadBatch.palettePage;
+                if(page==SIZE_MAX||bytes>uploadBatch.staging[page].size-uploadBatch.paletteUsed){
+                    constexpr VkDeviceSize pageSize=64*1024;
+                    local=MakeStaging(std::max(pageSize,bytes));
+                    OwnStaging(local);
+                    uploadBatch.palettePage=uploadBatch.staging.size()-1;
+                    uploadBatch.paletteUsed=0;
+                    if(fqperf::capture.recording)++fqperf::capture.current.paletteStagingPages;
+                }
+                source=&uploadBatch.staging[uploadBatch.palettePage];
+                offset=uploadBatch.paletteUsed;
+                uploadBatch.paletteUsed+=bytes;
+            }else local=MakeStaging(bytes);
+            std::memcpy(static_cast<char*>(source->mapped)+offset,data,bytes);
             UploadTransfer([&](VkCommandBuffer cb){
                 VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
                 b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-                b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
-                b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;b.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
-                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
-                VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={8,uint32_t(rows),1};
-                vkCmdCopyBufferToImage(cb,staging.buffer,image.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
-                b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
-                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
-            });
-            KeepStaging(staging);
-        }catch(...){CancelUploads();Destroy(staging);Destroy(image);throw;}
-        return image;
-    }
-    void UpdatePalette(Image& image,const float* data,size_t rows) {
-        UploadCpu uploadCpu(*this);
-        // Only before command recording: queued draws must retain their palette contents.
-        if(begun)throw std::runtime_error("palette reuse during frame recording");
-        Buffer staging=MakeStaging(rows*8*4*sizeof(float));
-        try {
-            std::memcpy(staging.mapped,data,size_t(staging.size));
-            UploadTransfer([&](VkCommandBuffer cb){
-                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
-                b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-                b.oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                b.srcAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
-                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
-                VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={8,uint32_t(rows),1};
-                vkCmdCopyBufferToImage(cb,staging.buffer,image.image,b.newLayout,1,&copy);
+                b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                b.oldLayout=initialize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcAccessMask=initialize?0:VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+                const VkPipelineStageFlags before=initialize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT;
+                vkCmdPipelineBarrier(cb,before,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
+                VkBufferImageCopy copy{};copy.bufferOffset=offset;copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+                copy.imageExtent={8,uint32_t(rows),1};
+                vkCmdCopyBufferToImage(cb,source->buffer,image.image,b.newLayout,1,&copy);
                 b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
             });
-            KeepStaging(staging);++paletteUpdates;
-        }catch(...){CancelUploads();Destroy(staging);throw;}
+            if(AsyncUploads()){
+                if(fqperf::capture.recording)++fqperf::capture.current.paletteStagedCopies;
+                FinishUpload(bytes);
+            }else Destroy(local);
+        }catch(...){CancelUploads();Destroy(local);throw;}
+    }
+    Image UploadPalette(const float* data,size_t rows) {
+        UploadCpu uploadCpu(*this);
+        ++paletteAllocations;
+        auto image=MakeImage(8,uint32_t(rows),VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1);
+        image.palette=true;
+        try {CopyPalette(image,data,rows,true);}
+        catch(...){Destroy(image);throw;}
+        return image;
+    }
+    void UpdatePalette(Image& image,const float* data,size_t rows) {
+        UploadCpu uploadCpu(*this);
+        if(begun)throw std::runtime_error("palette reuse during frame recording");
+        CopyPalette(image,data,rows,false);
+        ++paletteUpdates;
     }
     Image UploadCube(const Fo3RgbaCubeTexture& source) {
         UploadCpu uploadCpu(*this);
