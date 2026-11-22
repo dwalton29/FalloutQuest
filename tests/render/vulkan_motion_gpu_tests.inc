@@ -50,13 +50,14 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         uint8_t white[4]{255,255,255,uint8_t(cutout?0:255)};assert(fqvk::Texture(22,1,1,white));
         assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye));
         VkClearAttachment clear{};clear.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;clear.clearValue.depthStencil={occluded?.2f:.5f,0};VkClearRect rect{{{0,0},{64,64}},0,1};vkCmdClearAttachments(r.command,1,&clear,1,&rect);
-        std::array<fqspacewarp::Coverage,2> coverage{};const auto uploads=r.motionUploads,allocations=r.paletteAllocations;
+        std::array<fqspacewarp::Coverage,2> coverage{};const auto uploads=r.motionUploads,allocations=r.paletteAllocations,priorDraws=r.motionDraws;
         fqvk::PostSettings post;fqvk::PostProcess(post);
         fqvk::QueueSpacewarp(capture,coverage);
         std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{};
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
         assert(output[0].next&&output[1].next&&r.finishWaitUs==0);
         assert(coverage[0].Complete(3)==(mode!=7)&&coverage[1].Complete(3)==(mode!=7));
+        assert(r.motionDraws-priorDraws==(mode==7?0u:1u)); // One submission covers both eyes.
         if(skinned)assert(r.motionUploads-uploads==sizeof(fqskin::PaletteRow));
         if(mode==5||mode==6)assert(r.paletteAllocations==allocations); // Reuse the previous-pose image across frames.
         if(deformed)assert(r.motionUploads-uploads==4*3*sizeof(float));
@@ -129,10 +130,13 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
     auto vp=[&](float x){auto m=projection;m[12]=-projection[0]*x;return m;};
     fqspacewarp::History bodyHistory;fqspacewarp::Frame bodyFrame;bodyFrame.scene=1;bodyFrame.world=0x3c;bodyFrame.sceneReady=bodyFrame.focused=true;
     fqspacewarp::Drawable oldBody;oldBody.geometry=71;oldBody.model[12]=157;oldBody.palette={identity};
-    bodyFrame.viewProjection={vp(157),vp(157)};
+    // Stereo disparity on the sloped surface gives each eye a distinct depth
+    // pattern. Reading the other layer would expose camera motion on the body.
+    constexpr float halfIpd=.032f;
+    bodyFrame.viewProjection={vp(157-halfIpd),vp(157+halfIpd)};
     for(unsigned i=1;i<=2;++i){bodyFrame.serial=i;bodyFrame.displayTime=i*27777778;assert(bodyHistory.Begin(bodyFrame));assert(bodyHistory.Record(71,oldBody));bodyHistory.EyeRendered(0);bodyHistory.EyeRendered(1);assert(bodyHistory.Finish(true));}
     auto currentBody=oldBody;currentBody.model[12]+=4.84f/36;
-    bodyFrame.serial=3;bodyFrame.displayTime=3*27777778;bodyFrame.viewProjection={vp(currentBody.model[12]),vp(currentBody.model[12])};
+    bodyFrame.serial=3;bodyFrame.displayTime=3*27777778;bodyFrame.viewProjection={vp(currentBody.model[12]-halfIpd),vp(currentBody.model[12]+halfIpd)};
     assert(bodyHistory.Begin(bodyFrame));fqmotion::Capture bodyCapture;bodyCapture.Begin(bodyHistory);bodyCapture.Main();
     fqmotion::Draw bodyDraw;bodyDraw.identity=71;bodyDraw.mesh=71;bodyDraw.vbo=71;bodyDraw.vertices=int(bodyQuad.size()/18);bodyDraw.count=int(bodyIndices.size());bodyDraw.indexed=true;bodyDraw.cull=false;bodyDraw.skinMode=1;bodyDraw.paletteTexture=72;assert(bodyCapture.Record(bodyDraw,currentBody));
     Set(70,"uObjectTransformQ2017",{1,0,0,0,0,1,0,0,0,0,1,0,currentBody.model[12],0,0,1});

@@ -7,7 +7,7 @@ layout(location=0) out vec2 uv;
 void main(){vec2 p=vec2(float((gl_VertexIndex<<1)&2),float(gl_VertexIndex&2));uv=p;gl_Position=vec4(p*2-1,0,1);}
 )FQMV";
 inline constexpr const char* static_frag=R"FQMV(#version 450
-layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
+layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP[2];mat4 previousVP[2];mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
 layout(set=0,binding=2) uniform sampler2DArray sceneDepth;
 layout(set=0,binding=3) uniform sampler2DArray dynamicMotion;
 layout(location=0) in vec2 uv;
@@ -20,12 +20,15 @@ void main(){
  vec4 previous=clipReprojection*current;velocity=vec4(0);
  if(d<1&&previous.w>0.000001)velocity.xyz=(current.xyz-previous.xyz/previous.w)*scaleEye.xyz;
  // Match the exact full-resolution texel selected for retained scene depth.
- vec4 objectMotion=texelFetch(dynamicMotion,ivec3(pixel,int(scaleEye.w)),0);
- if(objectMotion.w>.5)velocity.xyz=objectMotion.xyz;
+ if(flags.x>0){
+  vec4 objectMotion=texelFetch(dynamicMotion,ivec3(pixel,int(scaleEye.w)),0);
+  if(objectMotion.w>.5)velocity.xyz=objectMotion.xyz;
+ }
 }
 )FQMV";
 inline constexpr const char* dynamic_vert=R"FQMV(#version 450
-layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
+#extension GL_EXT_multiview : require
+layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP[2];mat4 previousVP[2];mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
 layout(set=0,binding=4) uniform sampler2D palette;
 layout(set=0,binding=5) uniform sampler2D previousPalette;
 layout(location=0) in vec3 position;
@@ -48,14 +51,15 @@ vec3 skin(sampler2D p,vec3 v){
  return (m*vec4(v,1)).xyz;
 }
 void main(){
- currentClip=currentVP*(model*vec4(skin(palette,position),1));
- previousClip=previousVP*(previousModel*vec4(skin(previousPalette,previousPosition),1));
+ currentClip=currentVP[gl_ViewIndex]*(model*vec4(skin(palette,position),1));
+ previousClip=previousVP[gl_ViewIndex]*(previousModel*vec4(skin(previousPalette,previousPosition),1));
  gl_Position=vec4(currentClip.x,-currentClip.y,(currentClip.z+currentClip.w)*.5,currentClip.w);
  uv=texcoord;vertexAlpha=colour.a;
 }
 )FQMV";
 inline constexpr const char* dynamic_frag=R"FQMV(#version 450
-layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
+#extension GL_EXT_multiview : require
+layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP[2];mat4 previousVP[2];mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
 layout(set=0,binding=2) uniform sampler2DArray sceneDepth;
 layout(set=0,binding=3) uniform sampler2D diffuse;
 layout(location=0) in vec4 currentClip;
@@ -65,7 +69,7 @@ layout(location=3) in float vertexAlpha;
 layout(location=0) out vec4 velocity;
 void main(){
  // This pass has the retained scene depth's exact resolution and samples.
- if(gl_FragCoord.z>texelFetch(sceneDepth,ivec3(ivec2(gl_FragCoord.xy),int(scaleEye.w)),0).r+2.0/16777215.0)discard;
+ if(gl_FragCoord.z>texelFetch(sceneDepth,ivec3(ivec2(gl_FragCoord.xy),gl_ViewIndex),0).r+2.0/16777215.0)discard;
  if(flags.y>0&&texture(diffuse,uv).a*flags.w*(flags.z>0?vertexAlpha:1)<target.z)discard;
  velocity=vec4(0,0,0,1);
  if(previousClip.w>0.000001&&currentClip.w>0.000001)velocity.xyz=(currentClip.xyz/currentClip.w-previousClip.xyz/previousClip.w)*scaleEye.xyz;

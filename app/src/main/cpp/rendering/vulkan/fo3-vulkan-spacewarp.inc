@@ -1,10 +1,11 @@
 // Included inside Renderer. Motion shares the existing frame command buffer,
 // upload queue, descriptor cache and fenced per-frame arena. No GLES/readback.
 struct MotionConstants {
-    fqspacewarp::Matrix currentVP,previousVP,clipReprojection,model,previousModel;
+    std::array<fqspacewarp::Matrix,2> currentVP,previousVP;
+    fqspacewarp::Matrix clipReprojection,model,previousModel;
     std::array<float,4> scaleEye{},flags{},target{};
 };
-static_assert(sizeof(MotionConstants)==368);
+static_assert(sizeof(MotionConstants)==496);
 struct MotionTarget {
     XrSwapchain motion=XR_NULL_HANDLE,depth=XR_NULL_HANDLE;
     uint32_t width=0,height=0,motionIndex=0,depthIndex=0;
@@ -15,8 +16,7 @@ struct MotionTarget {
 std::array<MotionTarget,2> motionTargets;
 VkRenderPass motionPass{},dynamicMotionPass{};
 Image dynamicMotionImage;
-std::array<VkImageView,2> dynamicMotionViews{};
-std::array<VkFramebuffer,2> dynamicMotionFrames{};
+VkFramebuffer dynamicMotionFrame{};
 VkShaderModule motionModules[2][2]{};
 std::unordered_map<unsigned,VkPipeline> motionPipelines;
 struct MotionPose {Image palette;uint64_t used=0;};
@@ -46,8 +46,8 @@ void DestroyMotion() {
     layouts[MotionKind]={};
     if(sets[MotionKind])vkDestroyDescriptorSetLayout(device,sets[MotionKind],nullptr);
     sets[MotionKind]={};
-    for(auto& fb:dynamicMotionFrames){if(fb)vkDestroyFramebuffer(device,fb,nullptr);fb={};}
-    for(auto& view:dynamicMotionViews){if(view)vkDestroyImageView(device,view,nullptr);view={};}
+    if(dynamicMotionFrame)vkDestroyFramebuffer(device,dynamicMotionFrame,nullptr);
+    dynamicMotionFrame={};
     Destroy(dynamicMotionImage);
     if(dynamicMotionPass)vkDestroyRenderPass(device,dynamicMotionPass,nullptr);
     dynamicMotionPass={};
@@ -93,13 +93,14 @@ void CreateDynamicMotion(){
     deps[1].srcSubpass=0;deps[1].dstSubpass=VK_SUBPASS_EXTERNAL;deps[1].srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;deps[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     deps[1].dstStageMask=VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;deps[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
     VkRenderPassCreateInfo pi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};pi.attachmentCount=1;pi.pAttachments=&attachment;pi.subpassCount=1;pi.pSubpasses=&sub;pi.dependencyCount=2;pi.pDependencies=deps.data();
-    Check(vkCreateRenderPass(device,&pi,nullptr,&dynamicMotionPass),"full-resolution dynamic motion pass");
-    for(unsigned eye=0;eye<2;++eye){
-        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=dynamicMotionImage.image;vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=VK_FORMAT_R16G16B16A16_SFLOAT;vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,eye,1};
-        Check(vkCreateImageView(device,&vi,nullptr,&dynamicMotionViews[eye]),"dynamic motion eye view");
-        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=dynamicMotionPass;fi.attachmentCount=1;fi.pAttachments=&dynamicMotionViews[eye];fi.width=width;fi.height=height;fi.layers=1;
-        Check(vkCreateFramebuffer(device,&fi,nullptr,&dynamicMotionFrames[eye]),"dynamic motion eye framebuffer");
-    }
+    const uint32_t bothEyes=3;
+    VkRenderPassMultiviewCreateInfo stereo{VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO};
+    stereo.subpassCount=1;stereo.pViewMasks=&bothEyes;stereo.correlationMaskCount=1;stereo.pCorrelationMasks=&bothEyes;
+    pi.pNext=&stereo;
+    Check(vkCreateRenderPass(device,&pi,nullptr,&dynamicMotionPass),"stereo dynamic motion pass");
+    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=dynamicMotionPass;fi.attachmentCount=1;
+    fi.pAttachments=&dynamicMotionImage.view;fi.width=width;fi.height=height;fi.layers=1;
+    Check(vkCreateFramebuffer(device,&fi,nullptr,&dynamicMotionFrame),"stereo dynamic motion framebuffer");
 }
 void InitializeMotion(const std::array<MotionSwapchainTarget,2>& targets,VkFormat depthFormat) {
     DestroyMotion();CreateMotionPass(depthFormat);CreateDynamicMotion();
@@ -180,14 +181,16 @@ std::vector<PreparedMotion> PrepareMotion(const fqmotion::Capture& capture) {
     }
     return prepared;
 }
-bool DynamicMotionEye(unsigned eye,const fqmotion::Capture& capture,const std::vector<PreparedMotion>& prepared){
+bool DynamicMotion(const fqmotion::Capture& capture,const std::vector<PreparedMotion>& prepared){
+    if(prepared.empty())return capture.draws.empty();
+    if(fqperf::capture.recording)++fqperf::capture.current.motionReplayPasses;
     const auto& frame=capture.history->CurrentFrame();const auto& prior=capture.history->SubmittedFrames()?capture.history->PreviousFrame():frame;
-    MotionConstants c{};c.currentVP=frame.viewProjection[eye];c.previousVP=prior.viewProjection[eye];
-    c.scaleEye={1,-1,.5f,float(eye)};
+    MotionConstants c{};c.currentVP=frame.viewProjection;c.previousVP=prior.viewProjection;
+    c.scaleEye={1,-1,.5f,0};
     c.target={float(width),float(height),0,0};
     VkClearValue clear{};
-    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=dynamicMotionPass;bi.framebuffer=dynamicMotionFrames[eye];bi.renderArea.extent={width,height};bi.clearValueCount=1;bi.pClearValues=&clear;
-    BeginPass(Motion,bi);
+    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=dynamicMotionPass;bi.framebuffer=dynamicMotionFrame;bi.renderArea.extent={width,height};bi.clearValueCount=1;bi.pClearValues=&clear;
+    BeginPass(MotionGeometry,bi);
     const VkViewport viewport{0,0,float(width),float(height),0,1};const VkRect2D scissor{{0,0},{width,height}};
     vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
     std::vector<VkDescriptorImageInfo> images{{nearest,worldDepthReady?worldDepthSnapshot.view:depth.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{sampler,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
@@ -210,17 +213,18 @@ bool DynamicMotionEye(unsigned eye,const fqmotion::Capture& capture,const std::v
     }
     EndPass();return complete&&prepared.size()==capture.draws.size();
 }
-bool MotionEye(unsigned eye,VkFramebuffer framebuffer,const fqmotion::Capture& capture){
+bool MotionEye(unsigned eye,VkFramebuffer framebuffer,const fqmotion::Capture& capture,bool hasDynamic){
     const auto& frame=capture.history->CurrentFrame();const auto& prior=capture.history->SubmittedFrames()?capture.history->PreviousFrame():frame;
-    MotionConstants c{};c.currentVP=frame.viewProjection[eye];c.previousVP=prior.viewProjection[eye];
+    MotionConstants c{};c.flags[0]=hasDynamic?1.f:0.f;
     c.scaleEye={1,-1,.5f,float(eye)};
-    if(!fqspacewarp::ClipReprojection(c.currentVP,c.previousVP,c.clipReprojection))return false;
+    if(!fqspacewarp::ClipReprojection(frame.viewProjection[eye],prior.viewProjection[eye],c.clipReprojection))return false;
     auto& t=motionTargets[eye];c.target={float(t.width),float(t.height),0,0};
     VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=motionPass;bi.framebuffer=framebuffer;bi.renderArea.extent={t.width,t.height};
     BeginPass(Motion,bi);
     const VkViewport viewport{0,0,float(t.width),float(t.height),0,1};const VkRect2D scissor{{0,0},{t.width,t.height}};
     vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
-    const std::vector<VkDescriptorImageInfo> images{{nearest,worldDepthReady?worldDepthSnapshot.view:depth.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,dynamicMotionImage.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    const auto depthView=worldDepthReady?worldDepthSnapshot.view:depth.view;
+    const std::vector<VkDescriptorImageInfo> images{{nearest,depthView,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,hasDynamic?dynamicMotionImage.view:depthView,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     const bool complete=MotionBind(c,images,32);if(complete)vkCmdDraw(command,3,1,0,0);
     EndPass();return complete;
 }
@@ -235,12 +239,13 @@ void RenderMotion() {
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=depth.image;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,2};
     b.oldLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
     if(!worldDepthReady)vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
-    const std::array<bool,2> dynamicComplete{DynamicMotionEye(0,capture,prepared),DynamicMotionEye(1,capture,prepared)};
+    const bool dynamicComplete=DynamicMotion(capture,prepared);
+    if(fqperf::capture.recording)fqperf::capture.current.motionReplayDraws+=uint32_t(motionDraws-drawBefore);
     for(unsigned eye=0;eye<2;++eye){auto& t=motionTargets[eye];
         auto acquire=[&](XrSwapchain chain,uint32_t& index,bool& ready){XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(chain,&ai,&index),"acquire motion");XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wi.timeout=XR_INFINITE_DURATION;const auto status=Proc<PFN_xrWaitSwapchainImage>(xrInstance,"xrWaitSwapchainImage")(chain,&wi);if(status!=XR_SUCCESS)throw std::runtime_error("motion wait failed");ready=true;};
         acquire(t.motion,t.motionIndex,t.motionReady);acquire(t.depth,t.depthIndex,t.depthReady);
         if(t.motionIndex>=t.motionViews.size()||t.depthIndex>=t.depthViews.size())throw std::runtime_error("motion index out of range");
-        const bool rendered=MotionEye(eye,t.framebuffers[t.motionIndex*t.depthViews.size()+t.depthIndex],capture)&&dynamicComplete[eye];
+        const bool rendered=MotionEye(eye,t.framebuffers[t.motionIndex*t.depthViews.size()+t.depthIndex],capture,!prepared.empty())&&dynamicComplete;
         (*result)[eye]=capture.Coverage(rendered&&!lateWorldDepthWrite);
     }
     b.oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.srcAccessMask=VK_ACCESS_SHADER_READ_BIT;b.dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;

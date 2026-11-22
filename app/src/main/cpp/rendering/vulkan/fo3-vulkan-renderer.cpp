@@ -138,7 +138,8 @@ public:
     uint64_t foveatedDraws=0,specializedDraws=0;
     uint64_t solidDraws=0,guardedDraws=0,worldDraws=0,landDraws=0,fusedLandDraws=0;
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
-    enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,Motion,Composition,PassCount};
+    enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,Motion,Composition,MotionGeometry,PassCount};
+    static_assert(PassCount==fqperf::VkPassCount);
     static constexpr uint32_t QueryCount=4096;
     struct GpuSpan {GpuPass kind;uint32_t begin,end;};
     bool passTiming=false,configuredPassTiming=false;uint32_t queryCursor=4,timingDropped=0;int activeSpan=-1;
@@ -1493,6 +1494,9 @@ public:
             if(passTiming&&timestampSupported){
                 ++frame->vkTimed;frame->vkTimingDropped+=timingDropped;
                 for(unsigned i=0;i<PassCount;++i)frame->vkPassUs[i]+=passMs[i]*1000;
+                // Keep vk_motionUs comparable with captures that timed the whole
+                // producer, while also exposing the geometry replay separately.
+                frame->vkPassUs[Motion]+=passMs[MotionGeometry]*1000;
             }
         }
         if(passTiming) {
@@ -1503,7 +1507,7 @@ public:
                 timestampSupported?passMs[Scene]:-1.0,timestampSupported?passMs[SceneResume]:-1.0,
                 timestampSupported?passMs[Ui]:-1.0,timestampSupported?passMs[Adapt]:-1.0,timestampSupported?passMs[Bloom]:-1.0,
                 timestampSupported?passMs[Film]:-1.0,timestampSupported?passMs[Overlay]:-1.0,timestampSupported?passMs[Output]:-1.0,
-                timestampSupported?passMs[Snapshot]:-1.0,timestampSupported?passMs[DepthCopy]:-1.0,timestampSupported?passMs[Motion]:-1.0,timestampSupported?passMs[Composition]:-1.0);
+                timestampSupported?passMs[Snapshot]:-1.0,timestampSupported?passMs[DepthCopy]:-1.0,timestampSupported?(passMs[Motion]+passMs[MotionGeometry]):-1.0,timestampSupported?passMs[Composition]:-1.0);
         }
         if(sample.logFrame)VKLOG("FQVK RESOURCES uploadOperations=%llu uploadBatches=%llu uploadQueueIdles=%llu stagingBytes=%llu stagingPeakBytes=%llu stagingPressureWaits=%llu stagingBuffers=%llu stagingPeakBuffers=%llu descriptorAllocations=%llu descriptorHits=%llu descriptorResets=%llu paletteAllocations=%llu paletteUpdates=%llu stagingAllocations=%llu stagingReuses=%llu stagingEvictions=%llu stagingPoolBytes=%llu stagingPoolBuffers=%zu directFilmFrames=%llu presentationCopies=%llu",
             (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
