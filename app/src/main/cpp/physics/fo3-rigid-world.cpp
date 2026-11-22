@@ -59,7 +59,13 @@ struct World::Impl {
     Grip grips[2];
     float accumulated=0;
     std::vector<std::pair<Entry*,btTransform>> previous;
-    Impl(){world.setForceUpdateAllAabbs(false);world.setGravity({0,-9.80665f,0});world.getSolverInfo().m_numIterations=20;world.getSolverInfo().m_splitImpulse=true;}
+    Impl() {
+        // Keep Bullet's contact-expanded broadphase bounds for thin walls.
+        // The scenery filter below prunes fixed/fixed pairs independently.
+        world.setGravity({0,-9.80665f,0});
+        world.getSolverInfo().m_numIterations=20;
+        world.getSolverInfo().m_splitImpulse=true;
+    }
     void ClipMotion(Entry& entry,const btTransform& from,const btTransform& to,const btCollisionObject* carriedCompanion=nullptr){
         auto& body=*entry.body;
         const float rotation=from.getRotation().angleShortestPath(to.getRotation());
