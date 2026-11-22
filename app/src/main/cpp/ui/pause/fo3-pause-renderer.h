@@ -70,7 +70,7 @@ inline void Prepare(const fo3debug::Menu& menu){
             const auto border=v.size();quad(x-.024f,y+.009f,w,.0015f);quad(x-.024f,y-.0335f,w,.0015f);
             quad(x-.024f,y+.009f,.0015f,.044f);quad(x+w-.0255f,y+.009f,.0015f,.044f);record(border,r.solid,1,true,200.f/255);
         }
-        text(label,x,y,root?.80f:1.36f,1,root&&i>0&&i<5?128.f/255:1.f);
+        text(label,x,y,root?.80f:1.36f,1,root&&i>0&&i<5&&i!=3?128.f/255:1.f);
     }
     text(menu.panel.footer,-.69f,-.385f,1.38f,2);
     glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);

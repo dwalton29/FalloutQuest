@@ -376,6 +376,12 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       if(type=="ACTI")next.activatorBases.insert(form);
       if(type=="IMAD")next.imageModifiers.emplace(form,fo3script::DecodeImageModifier(payload));
       if(type=="REFR"||type=="ACHR"||type=="ACRE") {
+        if(const auto* activation=Find(subs,"XAPD");activation&&activation->size==1&&(activation->data[0]&1))
+          next.parentActivateOnly.insert(form);
+        for(const auto& sub:subs)if(sub.type=="XAPR"&&sub.size==8){
+          const uint32_t parent=fo3esm::ReadU32(sub.data);const float delay=fo3esm::ReadF32(sub.data+4);
+          if(parent&&std::isfinite(delay)&&delay>=0)next.activationChildren[parent].push_back({form,delay});
+        }
         if(Find(subs,"XEZN"))next.encounterZoneReferences.insert(form);
         // Keep the complete graph, including parents outside the resident cell.
         // Do not expand each of the hundreds of thousands of Reference objects.
@@ -1161,9 +1167,19 @@ bool Player::PickupPlacedItem(uint32_t id,bool scripted) {
   return true;
 }
 bool Player::CanOpenDoor(uint32_t id) const {return CanActorOpenDoor(PlayerRef,id);}
+bool Player::IsActivationParent(uint32_t child,uint32_t parent)const{
+  const auto found=catalog_->activationChildren.find(parent);
+  if(found==catalog_->activationChildren.end())return false;
+  return std::any_of(found->second.begin(),found->second.end(),[=](const auto& link){return link.reference==child;});
+}
 bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {return CanOpenDoorImpl(actor,id,false);}
 bool Player::CanScriptActivateDoor(uint32_t id,uint32_t actor) const {
   const auto r=catalog_->references.find(id);
+  if(actor!=PlayerRef&&!catalog_->actorPlacements.count(actor)&&IsActivationParent(id,actor)){
+    bool disabled=true;std::string error;
+    return r!=catalog_->references.end()&&catalog_->doorBases.count(r->second.base)&&
+      ReferenceDisabled(actor,disabled,error)&&!disabled&&!GetLock(id).locked&&CanOpenDoorImpl(actor,id,true);
+  }
   return r!=catalog_->references.end()&&catalog_->doorBases.count(r->second.base)&&CanOpenDoorImpl(actor,id,true);
 }
 bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) const {
@@ -1171,6 +1187,7 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
   if (r == catalog_->references.end())
     return false;
   const auto &ref = r->second;
+  if(catalog_->parentActivateOnly.count(id)&&!IsActivationParent(id,actor))return false;
   // Ownership controls trespass/crime, not whether an unlocked door opens.
   if (!ref.valid || (ref.flags & 0x20u) ||
       (!sourceDelegated && catalog_->scriptedBases.count(ref.base) &&
@@ -1178,7 +1195,8 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
     return false;
   bool disabled=false;std::string error;
   if(!ReferenceDisabled(id,disabled,error)||disabled)return false;
-  if(actor!=PlayerRef&&ActorHealth(actor)<=0)return false;
+  if(actor!=PlayerRef&&ActorHealth(actor)<=0&&
+     (catalog_->actorPlacements.count(actor)||!IsActivationParent(id,actor)))return false;
   if (!GetLock(id).locked)
     return true;
   // Personal NPC doors can be locked against the player even when the

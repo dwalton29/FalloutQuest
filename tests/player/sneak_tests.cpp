@@ -7,8 +7,8 @@
 using namespace fo3sneak;
 int main(int argc,char** argv){
  Stance stance;stance.Step(1.7f,true,true,false,.02f);assert(!stance.sneaking);
- stance.Step(1.4f,true,true,false,.02f);assert(stance.sneaking&&stance.physical&&stance.offset==0);
- stance.Step(1.5f,true,true,false,.02f);assert(stance.physical);stance.Step(1.6f,true,true,false,.02f);assert(!stance.sneaking);
+ for(int i=0;i<8;++i){stance.Step(1.4f,true,true,false,.02f);}assert(stance.sneaking&&stance.physical&&stance.offset==0);
+ stance.Step(1.48f,true,true,false,.02f);assert(stance.physical);for(int i=0;i<8;++i){stance.Step(1.6f,true,true,false,.02f);}assert(!stance.sneaking);
  stance.Step(1.7f,true,true,true,.02f);assert(stance.manual);for(int i=0;i<40;++i)stance.Step(1.7f,true,true,true,.02f);assert(stance.manual&&std::abs(stance.offset+.595f)<.001f);
  stance.Step(1.1f,true,true,false,.02f);assert(stance.sneaking&&stance.offset==0); // No double lowering.
  stance.Step(1.1f,false,true,true,.02f);assert(stance.manual); // Bad tracking cannot toggle.

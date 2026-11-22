@@ -1054,15 +1054,20 @@ bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
   const auto placed=catalog_->references.find(reference);
   if(placed==catalog_->references.end()||!placed->second.valid)return false;
   const auto base=placed->second.base;
+  if(catalog_->parentActivateOnly.count(reference)&&!IsActivationParent(reference,activator))return false;
+  auto parents=[&]{if(!catalog_->activationChildren.count(reference))return true;
+    fo3script::Action action;action.kind=fo3script::ActionKind::ActivationParents;
+    action.reference=reference;return QueueScriptAction(std::move(action));};
   if(catalog_->activatorBases.count(base)&&scriptAnimationDefinitions_){
     const auto animation=scriptAnimationDefinitions_->find(reference);
     if(animation!=scriptAnimationDefinitions_->end()&&!fo3script::OpenStateGroup(animation->second,true).empty()){
       bool disabled=false;std::string error;
       const int state=ScriptOpenState(reference);
       return ReferenceDisabled(reference,disabled,error)&&!disabled&&
-             (state==2||state==4||ScriptDoorState(reference,state==3));
+             (state==2||state==4||ScriptDoorState(reference,state==3))&&parents();
     }
   }
+  if(catalog_->activatorBases.count(base)&&catalog_->activationChildren.count(reference))return parents();
   if(reference!=scriptReference_)return false;
   if(placed!=catalog_->references.end()&&catalog_->items.count(placed->second.base)){
     // Commit inventory, world removal, and the rest of OnActivate together.
@@ -1090,6 +1095,8 @@ bool Player::QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon
 bool Player::QueueScriptAction(fo3script::Action action){
   if(pendingScriptActions_.size()>=64)return false;
   if(action.kind==fo3script::ActionKind::ImageModifier&&(!catalog_->imageModifiers.count(action.form)||!catalog_->imageModifiers.at(action.form).valid))return false;
+  if(action.kind==fo3script::ActionKind::DefaultActivate||action.kind==fo3script::ActionKind::ActivationParents)
+    action.activationDepth=uint8_t(std::min(scriptActivationDepth_,8u));
   pendingScriptActions_.push_back(std::move(action));++scriptEffectRevision_;return true;
 }
 bool Player::PollScriptAction(fo3script::Action& out){

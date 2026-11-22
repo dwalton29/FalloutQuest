@@ -131,7 +131,10 @@ fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
     // The real native bridge reserves an asynchronous scene owner. The host
     // harness can model Pending without claiming an immediate script commit.
     if(forcePendingActivation)return fo3player::ScriptEventResult::Pending;
-    return gPlayerSession->player.DispatchReferenceEvent(ref,"OnActivate",activator,error);
+    auto& player=gPlayerSession->player;
+    if(!player.HasReferenceEvent(ref,"OnActivate")&&!player.HasNativeActivation(ref))return fo3player::ScriptEventResult::NoHandler;
+    auto plan=player.PrepareActivationTransaction(ref,activator,error);
+    return plan&&player.CommitScriptTransaction(*plan)?fo3player::ScriptEventResult::Executed:fo3player::ScriptEventResult::Unsupported;
 }
 static uint32_t testSeat=0,testSeated=0;static bool seatAllowed=true,seatBlocked=false;static int seatRequests=0;
 bool Fo3PlayerSeatBlocked(){return seatBlocked;}
@@ -617,6 +620,13 @@ int main() {
     Check(collector.IsCollected(10)&&collector.ItemCount(100)==3&&collector.Snapshot().special[0]==6&&
           collector.Snapshot().pipboy.bobbleheadsFound==1,"A runs native pickup and script effects together");
     Check(!CollectFo3WorldReference(10)&&collector.Snapshot().pipboy.bobbleheadsFound==1,"collected item cannot repeat its script");
+    auto switches=c;switches.references[10].base=700;switches.activatorBases.insert(700);
+    switches.eventBaseNames[700]="Switch";switches.activationChildren[10].push_back({20,.5f});
+    gPlayerSession=std::make_unique<fo3player::Session>(switches);
+    gObjects={GpuObject{}};gObjects.front().baseFormId=700;gObjects.front().baseRecordType="ACTI";
+    Check(query()&&t.scripted&&t.allowed&&!t.pickup&&std::string(t.prompt.data())=="Activate Switch","native activation-parent switch is targetable without SCRI");
+    activate();fo3script::Action activation;
+    Check(gPlayerSession->player.PollScriptAction(activation)&&activation.kind==fo3script::ActionKind::ActivationParents&&activation.reference==10,"A commits native switch activation");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

@@ -1,6 +1,7 @@
 extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-collision-overlay.h"
 #include "fo3-rigid-world.h"
+#include "player/fo3-vr-height.h"
 #include "fo3-nif-collision.h"
 #include "fo3-transition.h"
 #include "fo3-nif-metadata.h"
@@ -2954,7 +2955,8 @@ void SetFo3PlayerScale(float scale){
  PLAYER_HEIGHT*=scale/gPlayerCollisionScale;PLAYER_RADIUS=PLAYER_BASE_RADIUS*scale;gPlayerCollisionScale=scale;
 }
 float SetFo3PlayerStanceHeight(float x,float z,float feetOffset,float height){
- height=std::clamp(height,.7f*gPlayerCollisionScale,1.7f*gPlayerCollisionScale);
+ if(!std::isfinite(height))return PLAYER_HEIGHT;
+ height=fo3vrheight::CapsuleHeight(height,CollisionRadiusQ712(),gPlayerCollisionScale);
  if(height>PLAYER_HEIGHT+.001f){SynchronizeFo3RigidWorld(x,z);if(!fo3rigid::Live().CanExpandCapsule({x,gCollisionFloorY+feetOffset,z},CollisionRadiusQ712(),PLAYER_HEIGHT,height))return PLAYER_HEIGHT;}
  PLAYER_HEIGHT=height;return PLAYER_HEIGHT;
 }

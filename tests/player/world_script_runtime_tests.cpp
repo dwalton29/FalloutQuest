@@ -37,7 +37,7 @@ float gQ210Head[4]{};
 Fo3DoorTeleport defaultTeleport;int defaultTransitions=0;uint32_t defaultSource=0,defaultDestination=0;bool localOpen=false;
 bool ResolveFo3DoorTeleportQ1700(uint32_t,Fo3DoorTeleport* out){*out=defaultTeleport;return out->valid;}
 bool QueueFo3DoorTransitionQ1700(uint32_t source,uint32_t destination,float x,float y,float z,float,float,float){Check(x==100&&y==200&&z==300,"original default arrival passed through");++defaultTransitions;defaultSource=source;defaultDestination=destination;return true;}
-bool Q2400ToggleInteriorDoor(uint32_t,float,float){localOpen=!localOpen;return true;}
+bool Q2400ToggleInteriorDoor(uint32_t reference,float,float){localOpen=!localOpen;return gPlayerSession->player.ScriptDoorState(reference,localOpen);}
 bool Q2400DoorOpen(uint32_t){return localOpen;}
 struct ActorVisual {
   struct Source{uint32_t refFormId=0,baseFormId=0;}source;
@@ -47,7 +47,7 @@ std::vector<ActorVisual> gQ230NpcActors;
 uint64_t gQ230NpcResidenceRevision=0;
 ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
 bool Q2400FindSwingDoorObject(uint32_t){return !defaultTeleport.valid;}
-namespace fo3audio {void Open(uint32_t){}}
+namespace fo3audio {void Open(uint32_t){}void Close(uint32_t){}}
 #include "world/interaction/fo3-script-default-activation.inc"
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
 void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
@@ -222,6 +222,28 @@ static void OriginalHallwayIntervention(const char* path){
  }
  std::cout<<"Original hallway interruption, intimidation, Speech outcomes and departure lines passed\n";
 }
+static void OriginalSecretDoor(const char* path){
+ fo3player::Catalog catalog;std::string error;Check(fo3player::LoadCatalog(path,catalog,error),"original switch catalogue");
+ const auto parent=catalog.pipboy.formNames.at("cg04doorswitchref");
+ const auto door=catalog.pipboy.formNames.at("cg04secretdoorref");
+ const auto links=catalog.activationChildren.find(parent);
+ Check(links!=catalog.activationChildren.end()&&links->second.size()==1&&links->second.front().reference==door&&links->second.front().delay==.5f,"authored secret door activation link and delay");
+ gPlayerSession=std::make_unique<fo3player::Session>(std::move(catalog));auto& player=gPlayerSession->player;
+ gObjects.clear();gQ230NpcActors.clear();++gQ230NpcResidenceRevision;fo3worldscript::Register();
+ defaultTeleport={};localOpen=false;
+ auto clickDoor=player.PrepareActivationTransaction(door,fo3player::PlayerRef,error);
+ Check(clickDoor&&player.CommitScriptTransaction(*clickDoor),"original secret OnActivate executes");fo3worldscript::Actions();
+ Check(!localOpen&&player.ScriptOpenState(door)==3,"secret door script blocks direct player use");
+ auto clickSwitch=player.PrepareActivationTransaction(parent,fo3player::PlayerRef,error);
+ Check(clickSwitch&&!localOpen&&player.ScriptOpenState(door)==3,"switch preparation is private");
+ Check(player.CommitScriptTransaction(*clickSwitch),"commit native switch");fo3worldscript::Actions();
+ Check(!localOpen&&fo3worldscript::parentActivations.size()==1,"switch schedules its child");
+ fo3worldscript::seconds=.49;fo3worldscript::Actions();Check(!localOpen,"authored delay is retained");
+ fo3worldscript::seconds=.51;fo3worldscript::Actions();
+ Check(localOpen&&player.ScriptOpenState(door)==1&&fo3worldscript::parentActivations.empty(),"switch action reference passes original script and opens resident door");
+ Check(!player.PrepareActivationTransaction(parent,fo3player::PlayerRef,error,8),"activation chains remain bounded");
+ std::cout<<"Original tunnel switch: XAPR link, half-second delay, action reference, secret OnActivate and door opening passed\n";
+}
 int main(int argc,char** argv){try{
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
  c.references[10].base=100;c.references[10].cell=1;c.pipboy.targets[10].cell=1;
@@ -236,6 +258,14 @@ int main(int argc,char** argv){try{
  c.items[900].formId=900;c.items[900].name="Original goods";c.eventBaseScripts[800]=801;
  c.pipboy.scripts[801].source="Begin OnActivate\nActivate player\nEnd";c.eventPrograms[801]=fo3script::ParseEvents(c.pipboy.scripts[801]);
  c.references[30].base=300;c.doorBases.insert(300);c.scriptedBases.insert(300);c.eventBaseScripts[300]=301;
+ c.references[90].base=910;c.references[90].cell=1;c.activatorBases.insert(910);
+ c.references[91].base=911;c.references[91].cell=1;c.doorBases.insert(911);c.scriptedBases.insert(911);c.eventBaseScripts[911]=912;
+ c.pipboy.scripts[912].source="Begin OnActivate\nif IsActionRef player == 0\nActivate\nendif\nEnd";
+ c.eventPrograms[912]=fo3script::ParseEvents(c.pipboy.scripts[912]);c.activationChildren[90].push_back({91,.5f});
+ c.references[93].base=913;c.references[93].cell=1;c.activatorBases.insert(913);
+ c.activationChildren[93].push_back({93,0});c.parentActivateOnly.insert(93);
+ c.references[94].base=911;c.references[94].cell=1;c.parentActivateOnly.insert(94);
+ c.references[95].base=915;c.references[95].cell=1;c.activatorBases.insert(915);c.activationChildren[95].push_back({94,0});
  c.pipboy.scripts[301].source="Begin OnActivate\nActivate\nEnd";c.eventPrograms[301]=fo3script::ParseEvents(c.pipboy.scripts[301]);
  c.actorPlacements[40].base=400;
  c.pipboy.packages[850].type=15;c.pipboy.packages[850].dialogueType=1;c.pipboy.packages[850].dialogueTopic=500;c.pipboy.packages[850].target.valid=true;c.pipboy.packages[850].target.value=fo3player::PlayerRef;
@@ -474,6 +504,26 @@ int main(int argc,char** argv){try{
  Check(p.CommitScriptTransaction(*savePlan),"autosave commit");
  fo3worldscript::Actions();Check(saves==savedBefore+1,"committed autosave reaches production persistence adapter");
  fo3worldscript::Actions();Check(saves==savedBefore+1,"autosave request consumed once");
- if(argc>1){OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);OriginalHallwayIntervention(argv[1]);}
+ {
+  std::string error;localOpen=false;defaultTeleport={};
+  auto door=p.PrepareActivationTransaction(91,fo3player::PlayerRef,error);
+  Check(door&&p.CommitScriptTransaction(*door),"direct player event executes");fo3worldscript::Actions();Check(!localOpen,"source script still blocks direct player activation");
+  const auto revision=p.Revision();auto plan=p.PrepareActivationTransaction(90,fo3player::PlayerRef,error);
+  Check(plan&&p.Revision()==revision&&fo3worldscript::parentActivations.empty(),"native switch preparation has no live effects");
+  Check(p.CommitScriptTransaction(*plan),"native parent commits");fo3worldscript::Actions();
+  const double began=fo3worldscript::seconds;Check(fo3worldscript::parentActivations.size()==1&&!localOpen,"parent relay queued");
+  fo3worldscript::seconds=began+.49;fo3worldscript::Actions();Check(!localOpen,"relay delay not shortened");
+  fo3worldscript::seconds=began+.51;fo3worldscript::Actions();Check(localOpen&&p.ScriptOpenState(91)==1,"parent reference reaches child script and opens door");
+  Check(!p.PrepareActivationTransaction(90,fo3player::PlayerRef,error,8),"parent activation recursion bounded");
+  Check(!p.CanOpenDoor(94)&&!p.PrepareActivationTransaction(94,fo3player::PlayerRef,error),"parent-only door rejects direct use");
+  localOpen=false;auto parentOnly=p.PrepareActivationTransaction(95,fo3player::PlayerRef,error);
+  Check(parentOnly&&p.CommitScriptTransaction(*parentOnly),"parent-only door switch commits");
+  fo3worldscript::Actions();fo3worldscript::Actions();Check(localOpen&&p.ScriptOpenState(94)==1,"native switch can activate a parent-only door");
+  Check(!p.PrepareActivationTransaction(93,fo3player::PlayerRef,error),"parent-only references reject direct player use");
+  auto cycle=p.PrepareActivationTransaction(93,93,error);Check(cycle&&p.CommitScriptTransaction(*cycle),"declared parent can activate parent-only child");
+  for(int i=0;i<10;++i){fo3worldscript::Actions();fo3worldscript::seconds+=.1;}
+  Check(fo3worldscript::parentActivations.empty(),"cyclic activation data cannot keep dispatching indefinitely");
+ }
+ if(argc>1){OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);OriginalHallwayIntervention(argv[1]);OriginalSecretDoor(argv[1]);}
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

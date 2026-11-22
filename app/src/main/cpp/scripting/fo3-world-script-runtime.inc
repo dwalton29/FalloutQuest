@@ -20,6 +20,35 @@ struct LookTarget { uint32_t reference=0; bool rotateBody=false; };
 static std::unordered_map<uint32_t,LookTarget> lookTargets;
 static fo3script::ImageStack modifiers;
 static double seconds=0;
+struct ParentActivation {uint32_t parent=0,child=0;double due=0;unsigned depth=0;};
+static std::vector<ParentActivation> parentActivations;
+static void QueueActivationChildren(fo3player::Player& player,const fo3script::Action& action){
+    if(action.activationDepth>=7)return;
+    const auto links=player.Definitions().activationChildren.find(action.reference);
+    if(links==player.Definitions().activationChildren.end())return;
+    for(const auto& link:links->second){
+        if(parentActivations.size()>=128){Q6H_LOGW("ACTIVATION PARENT QUEUE FULL ref=%08X",action.reference);break;}
+        parentActivations.push_back({action.reference,link.reference,seconds+link.delay,unsigned(action.activationDepth)+1});
+    }
+}
+static void DeliverActivationChildren(fo3player::Player& player){
+    for(size_t i=0;i<parentActivations.size();){
+        if(parentActivations[i].due>seconds){++i;continue;}
+        const auto activation=parentActivations[i];parentActivations.erase(parentActivations.begin()+i);
+        bool disabled=true;std::string error;
+        if(!player.ReferenceDisabled(activation.parent,disabled,error)||disabled)continue;
+        auto plan=player.PrepareActivationTransaction(activation.child,activation.parent,error,activation.depth);
+        if(!plan){Q6H_LOGW("ACTIVATION PARENT REJECTED parent=%08X child=%08X reason=%s",activation.parent,activation.child,error.c_str());continue;}
+        bool committed=!plan->HasReferenceChanges()?player.CommitScriptTransaction(*plan):PublishFo3DialogueReferences(player,*plan,error);
+        if(!committed&&plan->HasReferenceChanges()){
+            const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+            if(ticket){gFo3ResidentGameplayTicket=ticket;FlushFo3PlayerState();return;}
+            parentActivations.push_back(activation);return;
+        }
+        if(committed)FlushFo3PlayerState();
+        if(Fo3ResidentFrameBlocked())return;
+    }
+}
 struct SpeechLane {
     fo3dialogue::Session dialogue;
     uint32_t reference=0,identity=0,target=0,listener=0,topic=0,token=0;
@@ -351,7 +380,7 @@ void Register(){
         player.SetScriptActorFurniture(actor.source.refFormId,ref,marker,sitting);
     }
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();parentActivations.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -475,6 +504,7 @@ void Actions(){
     if(move.pending&&!IsFo3LoadingVisible()&&!HasPendingFo3CellTransitionRequestQ74())
         QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
     fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
+    DeliverActivationChildren(player);if(Fo3ResidentFrameBlocked())return;
     while(player.PollScriptAction(action)){
         if(action.kind==fo3script::ActionKind::StopCombat){
             if(action.flags&1){for(auto& actor:gQ230NpcActors)if(actor.runtime.combatTarget==action.reference)Q230StopScriptCombat(actor,seconds);}
@@ -512,8 +542,11 @@ void Actions(){
             else Q6H_LOGW("SCRIPT WEAPON HIT QUEUE FULL ref=%08X",action.reference);
             Hits();if(Fo3ResidentFrameBlocked())return;
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
-            if(!DeliverFo3ScriptDefaultActivation(action.reference,action.flags))
+            if(DeliverFo3ScriptDefaultActivation(action.reference,action.flags))QueueActivationChildren(player,action);
+            else
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
+        }else if(action.kind==fo3script::ActionKind::ActivationParents){
+            QueueActivationChildren(player,action);
         }else if(action.kind==fo3script::ActionKind::SoundAt){
             const auto source=SpeechContext(action.reference,fo3player::PlayerRef);
             const auto& emitter=source.speaker;const auto& listener=source.target;

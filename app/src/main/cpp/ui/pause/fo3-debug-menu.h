@@ -1,6 +1,7 @@
 #pragma once
 #include "weapons/fo3-reload-policy.h"
 #include "player/fo3-player-state.h"
+#include "player/fo3-vr-height.h"
 #include "scripting/fo3-script-quest-entry.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include <algorithm>
@@ -13,7 +14,7 @@ inline std::string Time(float hour){char b[16];const int m=int(hour*60+.001f)%14
 // persistence; no highlighted row ever changes canonical player state.
 class Menu {
 public:
-  enum class Page { Root,Debug,Time,XP,Categories,Items,Hex,Item,Points,Perks,Perk,Special,Quests,Quest };
+  enum class Page { Root,Settings,VrSettings,Debug,Time,XP,Categories,Items,Hex,Item,Points,Perks,Perk,Special,Quests,Quest };
   fo3dialogue::Panel panel;
   Page page=Page::Root;
   size_t selected=0,itemPage=0,perkPage=0,questPage=0;
@@ -21,6 +22,8 @@ public:
   fo3player::Player* owner=nullptr;
   std::vector<uint32_t> items,perks,quests;
   std::function<bool(fo3player::Player&,uint32_t,std::string&)> startQuest;
+  fo3vrheight::Settings* vrSettings=nullptr;
+  std::function<bool()> calibrateHeight,saveVrSettings;
   std::array<uint8_t,7> special{};
   int hour=0,minute=0,points=0,category=0;
   uint32_t form=0,hex=0;
@@ -50,6 +53,18 @@ public:
         }
         add("Debug");
         break;
+      case Page::Settings:panel.title="SETTINGS";add("VR Height and Crouching");break;
+      case Page::VrSettings:{
+        panel.title="VR HEIGHT AND CROUCHING";
+        panel.subtitle="Stand upright before calibrating. Left/right adjusts values.\n"+feedback;
+        if(!vrSettings){add("Tracking settings unavailable");break;}
+        char value[96];
+        std::snprintf(value,sizeof value,"Height adjustment: %+.0f cm",vrSettings->adjustment*100);add(value);
+        std::snprintf(value,sizeof value,"Calibrate standing height (%.0f cm)",vrSettings->standing*100);add(value);
+        add(std::string("Physical crouching: ")+(vrSettings->physicalCrouch?"On":"Off"));
+        std::snprintf(value,sizeof value,"Crouch detection drop: %.0f cm",vrSettings->crouchDrop*100);add(value);
+        add("Reset VR height settings");break;
+      }
       case Page::Debug:
         for(const char* s:{"Set Time","Add XP / Level","Add Items","Perk Points","Chosen Perks","SPECIAL Allocations"}) {add(s);}
         add(std::string("Performance HUD: ")+(perfHudMode==0?"Off":perfHudMode==1?"FPS":"Detailed"));
@@ -112,10 +127,21 @@ public:
     panel.selected=selected;panel.revision=++serial;
   }
   void Move(int direction){if(panel.choices.empty())return;
-    if(page==Page::Root){selected=selected==0?5:0;Refresh();return;}
+    if(page==Page::Root){
+      static constexpr size_t enabled[]={0,3,5};size_t at=0;
+      while(at<2&&enabled[at]!=selected)++at;
+      selected=enabled[(int(at)+direction+3)%3];Refresh();return;
+    }
     selected=size_t((int(selected)+direction+int(panel.choices.size()))%int(panel.choices.size()));Refresh();}
   void Adjust(int direction){
-    if(page==Page::Time&&selected<2){int& v=selected?minute:hour;const int max=selected?60:24;v=(v+direction+max)%max;}
+    if(page==Page::VrSettings&&vrSettings){
+      if(selected==0)vrSettings->adjustment=float(std::clamp(int(std::round(vrSettings->adjustment*100))+direction,-50,50))/100;
+      else if(selected==2)vrSettings->physicalCrouch=!vrSettings->physicalCrouch;
+      else if(selected==3)vrSettings->crouchDrop=float(std::clamp(int(std::round(vrSettings->crouchDrop*100))+direction,15,50))/100;
+      else return;
+      if(saveVrSettings&&!saveVrSettings())feedback="Could not save VR settings";
+    }
+    else if(page==Page::Time&&selected<2){int& v=selected?minute:hour;const int max=selected?60:24;v=(v+direction+max)%max;}
     else if(page==Page::Hex&&selected<8){const int shift=int(7-selected)*4;const auto digit=((hex>>shift)+direction)&15u;hex=(hex&~(15u<<shift))|(digit<<shift);}
     else if(page==Page::Points&&selected==0)points=std::clamp(points+direction,0,1000);
     else if(page==Page::Special&&selected<7)special[selected]=uint8_t(std::clamp(int(special[selected])+direction,1,10));
@@ -137,7 +163,20 @@ public:
     if(!owner)return false;
     auto& p=*owner;const auto index=selected;bool changed=false;
     switch(page){
-      case Page::Root:if(index==0)Close();else if(index==5)Go(Page::Debug);break;
+      case Page::Root:if(index==0)Close();else if(index==3)Go(Page::Settings);else if(index==5)Go(Page::Debug);break;
+      case Page::Settings:Go(Page::VrSettings);break;
+      case Page::VrSettings:
+        if(!vrSettings)break;
+        if(index==1){
+          const bool ok=calibrateHeight&&calibrateHeight();
+          feedback=ok?"Standing height calibrated":"Stand upright with headset tracking available";
+          if(ok&&saveVrSettings&&!saveVrSettings())feedback="Calibrated; could not save VR settings";
+          Refresh();
+        }else if(index==4){
+          *vrSettings={};if(calibrateHeight)calibrateHeight();
+          feedback=saveVrSettings&&!saveVrSettings()?"Could not save VR settings":"VR defaults restored";Refresh();
+        }else Adjust(1);
+        break;
       case Page::Debug:
         if(index==0){const int m=int(p.Snapshot().gameHour*60)%1440;hour=m/60;minute=m%60;Go(Page::Time);}
         else if(index==1)Go(Page::XP);else if(index==2)Go(Page::Categories);
@@ -180,6 +219,6 @@ public:
       case Page::Special:if(index==7){changed=p.SetPlayerAttributes(special,p.Snapshot().skills);Feedback(changed,"SPECIAL applied");}else Adjust(1);break;
     }return changed;
   }
-  void Back(){switch(page){case Page::Root:Close();break;case Page::Debug:Go(Page::Root);break;case Page::Items:case Page::Hex:Go(Page::Categories);break;case Page::Quest:Go(Page::Quests);break;case Page::Quests:Go(Page::Debug);break;case Page::Item:Go(Page::Categories);break;case Page::Perk:Go(Page::Perks);break;default:Go(Page::Debug);break;}}
+  void Back(){switch(page){case Page::Root:Close();break;case Page::Settings:Go(Page::Root);break;case Page::VrSettings:Go(Page::Settings);break;case Page::Debug:Go(Page::Root);break;case Page::Items:case Page::Hex:Go(Page::Categories);break;case Page::Quest:Go(Page::Quests);break;case Page::Quests:Go(Page::Debug);break;case Page::Item:Go(Page::Categories);break;case Page::Perk:Go(Page::Perks);break;default:Go(Page::Debug);break;}}
 };
 }

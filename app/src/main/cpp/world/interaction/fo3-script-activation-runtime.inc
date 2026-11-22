@@ -9,9 +9,8 @@ fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
         error="script activation scene or save unavailable";return Result::Unsupported;
     }
     auto& player=gPlayerSession->player;
-    if(!player.HasReferenceEvent(reference,"OnActivate"))return Result::NoHandler;
-    auto plan=player.PrepareReferenceEventTransaction(reference,"OnActivate",activator,error,
-        fo3player::ScriptProgramCapture::EnteredPrograms);
+    if(!player.HasReferenceEvent(reference,"OnActivate")&&!player.HasNativeActivation(reference))return Result::NoHandler;
+    auto plan=player.PrepareActivationTransaction(reference,activator,error);
     if(!plan)return Result::Unsupported;
     if(!plan->HasReferenceChanges()){
         if(player.CommitScriptTransaction(*plan))return Result::Executed;

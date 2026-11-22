@@ -126,6 +126,35 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareReferenceEventTransaction(
     return candidate.RunSourceEventDirect(script,event,reference,activator,e,filterForm);
   },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
+bool Player::HasNativeActivation(uint32_t reference)const{
+  const auto ref=catalog_->references.find(reference);
+  if(ref==catalog_->references.end()||!ref->second.valid||!catalog_->activatorBases.count(ref->second.base))return false;
+  if(catalog_->activationChildren.count(reference))return true;
+  if(!scriptAnimationDefinitions_)return false;
+  const auto animation=scriptAnimationDefinitions_->find(reference);
+  return animation!=scriptAnimationDefinitions_->end()&&!fo3script::OpenStateGroup(animation->second,true).empty();
+}
+std::unique_ptr<ScriptTransactionPlan> Player::PrepareActivationTransaction(
+    uint32_t reference,uint32_t activator,std::string& error,unsigned depth)const{
+  error.clear();bool disabled=true;
+  if(depth>=8||!ReferenceDisabled(reference,disabled,error)||disabled||
+     (catalog_->parentActivateOnly.count(reference)&&!IsActivationParent(reference,activator))){
+    error="activation reference unavailable or parent required";return {};
+  }
+  const bool scripted=HasReferenceEvent(reference,"OnActivate");
+  if(!scripted&&!HasNativeActivation(reference)&&!CanScriptActivateDoor(reference,activator)){
+    error="native activation unavailable";return {};
+  }
+  return PrepareScriptTransaction([=](Player& candidate,std::string& e){
+    const unsigned previous=candidate.scriptActivationDepth_;
+    struct RestoreDepth {unsigned& value;unsigned old;~RestoreDepth(){value=old;}} restore{candidate.scriptActivationDepth_,previous};
+    candidate.scriptActivationDepth_=depth;
+    if(scripted)return candidate.RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(reference).base),"OnActivate",reference,activator,e);
+    const auto old=candidate.scriptReference_;candidate.scriptReference_=reference;
+    const bool ok=candidate.QueueScriptDefaultActivate(reference,activator);candidate.scriptReference_=old;
+    return ok;
+  },error,true);
+}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareWeaponHitTransaction(uint32_t reference,uint32_t attacker,uint32_t weapon,
     std::string& error,ScriptProgramCapture capture)const{
   const auto ref=catalog_->references.find(reference);const auto item=catalog_->items.find(weapon);bool disabled=true;

@@ -93,7 +93,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         // Scripted activators use their original ACTI SCRI rather than being
         // treated as pickup items or a fabricated FalloutQuest interaction.
         const bool scripted=(object.baseRecordType=="ACTI" || container || furniture) &&
-            player.HasReferenceEvent(object.refFormId,"OnActivate");
+            (player.HasReferenceEvent(object.refFormId,"OnActivate")||player.HasNativeActivation(object.refFormId));
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
         if (object.nonvisualResident || player.IsCollected(object.refFormId) ||
@@ -120,6 +120,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
                 (furniture&&!dispatchScript?CanFo3PlayerSit(target.reference):(dispatchScript||terminal) ? (IsFo3ReferenceEnabled(player,target.reference)&&
+                    (!catalog.parentActivateOnly.count(target.reference)||player.IsActivationParent(target.reference,fo3player::PlayerRef))&&
                     (!container||player.CanScriptActivateContainer(target.reference)))
                   : (container ? player.CanLootContainer(target.reference) :
                     player.CanPickup(target.reference)||player.CanActivatePlacedItem(target.reference)));

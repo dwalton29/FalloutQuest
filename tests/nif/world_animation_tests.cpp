@@ -41,6 +41,19 @@ static void VisibilityAdmissionTests(){
 }
 int main(int argc,char** argv){
   VisibilityAdmissionTests();
+  if(argc==3&&std::string(argv[1])=="--secret-door"){
+    std::vector<uint8_t> bytes;assert(LoadFalloutMeshFile(argv[2],bytes,nullptr));
+    fo3anim::Skeleton hierarchy;std::vector<int> blocks;std::vector<fo3anim::Clip> clips;
+    assert(fo3anim::DecodeUiAnimation(bytes,hierarchy,blocks,clips));
+    fo3dooranim::Asset door;assert(fo3dooranim::Configure(std::move(hierarchy),std::move(blocks),std::move(clips),door,true));
+    fo3anim::Pose closed,middle,open;
+    const auto duration=fo3dooranim::Duration(door,true);assert(duration>2.6&&duration<2.7);
+    assert(fo3dooranim::Sample(door,true,0,closed)&&fo3dooranim::Sample(door,true,duration*.5,middle)&&fo3dooranim::Sample(door,true,duration,open));
+    const auto& clip=*fo3dooranim::Sequence(door,true);assert(clip.tracks.size()==1);
+    const auto bone=fo3anim::FindBone(door.hierarchy,clip.tracks.front().bone);assert(bone>=0);
+    assert(closed.delta[bone]!=middle.delta[bone]&&middle.delta[bone]!=open.delta[bone]);
+    std::cout<<"Original tunnel secret door: authored Open/Close decode and intermediate/final node motion passed\n";return 0;
+  }
   fo3pipdata::Definitions audio;
   audio.formNames["originaldoor"]=42;audio.sounds[42]="sound/original.wav";
   assert(fo3animsound::Resolve(audio,"sound: OriginalDoor SoundNodeMainDoor")==42);

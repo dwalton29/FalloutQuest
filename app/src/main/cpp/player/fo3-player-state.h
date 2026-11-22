@@ -323,6 +323,9 @@ struct Catalog {
   }
   std::unordered_set<uint32_t> scriptedBases;
   std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
+  struct ActivationChild {uint32_t reference=0;float delay=0;};
+  std::unordered_map<uint32_t,std::vector<ActivationChild>> activationChildren;
+  std::unordered_set<uint32_t> parentActivateOnly;
   std::unordered_map<std::string, std::string> strings;
   std::unordered_map<uint32_t, Container> containers;
   std::unordered_map<uint32_t, Container> actorInventories;
@@ -585,6 +588,10 @@ public:
   std::unique_ptr<ScriptTransactionPlan> PrepareReferenceEventTransaction(
       uint32_t reference,const char* event,uint32_t activator,std::string& error,
       ScriptProgramCapture capture=ScriptProgramCapture::None,uint32_t filterForm=0) const;
+  bool IsActivationParent(uint32_t child,uint32_t parent) const;
+  bool HasNativeActivation(uint32_t reference) const;
+  std::unique_ptr<ScriptTransactionPlan> PrepareActivationTransaction(
+      uint32_t reference,uint32_t activator,std::string& error,unsigned depth=0) const;
   bool PackageEventNeeded(uint32_t reference,uint32_t package,bool completed) const;
   std::unique_ptr<ScriptTransactionPlan> PreparePackageEventTransaction(
       uint32_t reference,uint32_t package,bool completed,std::string& error,

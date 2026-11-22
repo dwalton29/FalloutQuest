@@ -3,6 +3,20 @@
 bool DeliverFo3ScriptDefaultActivation(uint32_t reference,uint32_t activator){
     if(!gPlayerSession||Fo3ResidentFrameBlocked())return false;
     auto& player=gPlayerSession->player;
+    // A switch is a legal action reference for its authored activation children.
+    // It has no NPC runtime/health and must not be rejected as a dead actor.
+    if(activator!=fo3player::PlayerRef&&!player.Definitions().actorPlacements.count(activator)&&
+       player.IsActivationParent(reference,activator)){
+        if(!player.CanScriptActivateDoor(reference,activator))return false;
+        if(!Q2400FindSwingDoorObject(reference))return player.ScriptDoorState(reference,player.ScriptOpenState(reference)==3);
+        const bool wasOpen=Q2400DoorOpen(reference);
+        if(!Q2400ToggleInteriorDoor(reference,gQ210Head[0],gQ210Head[2]))return false;
+        const auto placed=player.Definitions().references.find(reference);
+        if(placed!=player.Definitions().references.end()){
+            if(wasOpen)fo3audio::Close(placed->second.base);else fo3audio::Open(placed->second.base);
+        }
+        FlushFo3PlayerState();return true;
+    }
     if(activator!=fo3player::PlayerRef){
         const auto* actor=DialogueActor(activator);
         if(!actor||actor->runtime.offScene||!player.CanScriptActivateDoor(reference,activator)||

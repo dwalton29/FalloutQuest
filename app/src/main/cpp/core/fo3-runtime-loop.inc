@@ -340,6 +340,14 @@ class FalloutQuestXr {
 public:
     explicit FalloutQuestXr(android_app* app) : app_(app) {
         SetFo3AndroidAppQ1860(app);
+        vrSettingsPath_=std::string(app_->activity->internalDataPath)+"/vr-settings.cfg";
+        vrSettings_.Load(vrSettingsPath_);
+        gFo3PauseMenu.vrSettings=&vrSettings_;
+        gFo3PauseMenu.saveVrSettings=[this]{return vrSettings_.Save(vrSettingsPath_);};
+        gFo3PauseMenu.calibrateHeight=[this]{
+            if(!heightTracking_.Calibrate(vrSettings_))return false;
+            sneak_.Calibrate(vrSettings_.standing,sneakDown_);return true;
+        };
     }
 
 
@@ -443,6 +451,8 @@ public:
     }
 
     void Shutdown() {
+        vrSettings_.Save(vrSettingsPath_);
+        gFo3PauseMenu.vrSettings=nullptr;gFo3PauseMenu.calibrateHeight={};gFo3PauseMenu.saveVrSettings={};
         // Explicit even when initialization never created either framebuffer.
         // UI, canonical session and GL ownership caches must still be alive.
         if(!ShutdownFo3ResidentWorkflow()){
@@ -492,6 +502,7 @@ public:
         fqvk::DestroyGameplaySwapchain();
 #endif
         if (scratchColor_) glDeleteTextures(1,&scratchColor_);
+        if (floorSpace_ != XR_NULL_HANDLE) xrDestroySpace(floorSpace_);
         if (localSpace_ != XR_NULL_HANDLE) xrDestroySpace(localSpace_);
         if (session_ != XR_NULL_HANDLE) xrDestroySession(session_);
         if (actionSet_ != XR_NULL_HANDLE) xrDestroyActionSet(actionSet_);
@@ -891,7 +902,14 @@ private:
         XrReferenceSpaceCreateInfo info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
         info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
         info.poseInReferenceSpace.orientation.w = 1.0f;
-        return CheckXr(xrCreateReferenceSpace(session_, &info, &localSpace_), "xrCreateReferenceSpace");
+        if(!CheckXr(xrCreateReferenceSpace(session_, &info, &localSpace_), "xrCreateReferenceSpace"))return false;
+        // Keep LOCAL for room-scale origin/yaw. Locate STAGE inside it solely
+        // for the runtime's physical floor; older runtimes retain calibration.
+        info.referenceSpaceType=XR_REFERENCE_SPACE_TYPE_STAGE;
+        const auto floorResult=xrCreateReferenceSpace(session_,&info,&floorSpace_);
+        if(XR_FAILED(floorResult))floorSpace_=XR_NULL_HANDLE;
+        FQ_LOGI("VR HEIGHT floorReference=%s",floorSpace_!=XR_NULL_HANDLE?"STAGE":"calibrated-LOCAL");
+        return true;
     }
 
     bool CreateSwapchains() {
@@ -1331,12 +1349,20 @@ private:
     void ProcessXrEvents() {
         XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
         while (xrPollEvent(instance_, &event) == XR_SUCCESS) {
+            if(event.type==XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING){
+                const auto* change=reinterpret_cast<const XrEventDataReferenceSpaceChangePending*>(&event);
+                if(change->referenceSpaceType==XR_REFERENCE_SPACE_TYPE_LOCAL){
+                    heightRecenterTime_=change->changeTime;heightRecenterY_=change->poseInPreviousSpace.position.y;
+                    heightRecenterValid_=change->poseValid==XR_TRUE;
+                }
+            }
             if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
                 const auto* changed = reinterpret_cast<const XrEventDataSessionStateChanged*>(&event);
                 if (sessionState_ == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
                 if(sessionState_!=XR_SESSION_STATE_FOCUSED){
+                    vrSettings_.Save(vrSettingsPath_);
                     // STOPPING may submit no more frames. Latch here, before
                     // waiting for a later focused frame, to exclude the gap.
                     PauseFo3ResidentGameplayTime();gFo3FocusPaused=true;
@@ -1530,14 +1556,33 @@ private:
         }
     }
 
+    float TrackingLift()const{return heightTracking_.Shift(FLOOR_Y,vrSettings_)+sneak_.offset;}
+    void ObserveVrHeight(float headY,XrTime time,bool tracked){
+        bool recentered=false;
+        if(heightRecenterTime_&&time>=heightRecenterTime_){
+            if(heightRecenterValid_)heightTracking_.Recenter(heightRecenterY_);
+            else heightTracking_.floorReady=false;
+            heightRecenterTime_=0;spacewarpHistory_.Reset();recentered=true;
+        }
+        XrSpaceLocation floor{XR_TYPE_SPACE_LOCATION};
+        const bool floorValid=floorSpace_!=XR_NULL_HANDLE&&XR_SUCCEEDED(xrLocateSpace(floorSpace_,localSpace_,time,&floor))&&
+            (floor.locationFlags&XR_SPACE_LOCATION_POSITION_VALID_BIT);
+        heightTracking_.Observe(headY,tracked&&sessionState_==XR_SESSION_STATE_FOCUSED,floorValid,floor.pose.position.y,vrSettings_);
+        const float dt=heightSampleTime_&&time>heightSampleTime_?float(time-heightSampleTime_)*1e-9f:0;
+        heightSampleTime_=time;
+        if(heightTracking_.AutoCalibrate(vrSettings_,dt))sneak_.Calibrate(vrSettings_.standing,sneakDown_);
+        if(vrSettings_.standing>0)sneak_.standing=vrSettings_.standing;
+        if(!heightLiftReady_||recentered){appliedHeightLift_=TrackingLift();heightLiftReady_=true;}
+    }
     XrVector3f ScaledLocal(XrVector3f point) const {
+        point.y+=heightTracking_.Shift(FLOOR_Y,vrSettings_);
         const auto mapped=fo3scale::Local({point.x,point.y,point.z},Fo3PlayerTrackingScale(),FLOOR_Y);
         return {mapped[0],mapped[1],mapped[2]};
     }
     void UpdatePlayer(const XrView& headView, XrTime frameTime,bool headTracked) {
         FQ_PERF_SCOPE(Motion);
         const float characterScale=Fo3PlayerTrackingScale();SetFo3PlayerScale(characterScale);
-        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;beforeApp.position.y+=sneak_.offset*characterScale;
+        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;beforeApp.position.y+=appliedHeightLift_*characterScale;
         const auto beforeMatrix=MatrixFromPose(beforeApp);
         double dt = 1.0 / 72.0;
         if (lastFrameTime_ != 0 && frameTime > lastFrameTime_) {
@@ -1558,7 +1603,7 @@ private:
             playerYaw_=pose.yaw-YawFromQuaternion(headView.pose.orientation);
             const auto local=RotateYaw(ScaledLocal(headView.pose.position),playerYaw_);
             const bool sitting=seatCommit==fo3seat::State::Commit::Sit;
-            const float physicalDrop=sitting?0:std::max(0.f,sneak_.standing-(headView.pose.position.y-FLOOR_Y))*characterScale;
+            const float physicalDrop=sitting?0:std::max(0.f,sneak_.standing-heightTracking_.PhysicalHeight(headView.pose.position.y))*characterScale;
             playerPosition_={pose.eye[0]-local.x,pose.eye[1]-physicalDrop-local.y,pose.eye[2]-local.z};
             if(sitting)seatTrackedY_=headView.pose.position.y;
             ResetFo3PlayerGravity();
@@ -1591,12 +1636,14 @@ private:
         }
 
         const bool sneakInput= !gPlayerSeat.Active()&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3DialogueFocus()&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!gFo3PauseOpen;
-        sneak_.Step(headView.pose.position.y-FLOOR_Y,headTracked,sneakInput,sneakDown_,float(dt));
+        const float physicalHeight=heightTracking_.PhysicalHeight(headView.pose.position.y);
+        sneak_.Step(physicalHeight,headTracked,sneakInput,sneakDown_,float(dt),vrSettings_.physicalCrouch,vrSettings_.crouchDrop,vrSettings_.adjustment);
         const auto stanceHead=RotateYaw(ScaledLocal(headView.pose.position),playerYaw_);
-        const float desiredHeight=std::clamp(headView.pose.position.y-FLOOR_Y+sneak_.offset+.10f,.7f,1.7f)*characterScale;
+        const float eyeHeight=physicalHeight+vrSettings_.adjustment;
+        const float desiredHeight=(eyeHeight+sneak_.offset+.10f)*characterScale;
         if(headTracked&&sneakInput){const float actualHeight=SetFo3PlayerStanceHeight(stanceHead.x+playerPosition_.x,stanceHead.z+playerPosition_.z,playerPosition_.y,desiredHeight);
-            if(actualHeight+.001f<desiredHeight){sneak_.offset=std::min(sneak_.offset,actualHeight/characterScale-.10f-headView.pose.position.y+FLOOR_Y);sneak_.sneaking=true;}
-            sneak_.drop=std::max(0.f,sneak_.standing-headView.pose.position.y+FLOOR_Y-sneak_.offset);
+            if(actualHeight+.001f<desiredHeight){sneak_.offset=std::min(sneak_.offset,actualHeight/characterScale-.10f-eyeHeight);sneak_.sneaking=true;}
+            sneak_.drop=std::max(0.f,sneak_.standing-physicalHeight-sneak_.offset);
             if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
         }
         gPlayerSneakDrop=gPlayerSeat.seated?std::max(0.f,gPlayerSeat.sitting.bodyDrop+seatTrackedY_-headView.pose.position.y):sneak_.drop;
@@ -1634,11 +1681,12 @@ private:
             playerPosition_.x = desiredPlayerX;
             playerPosition_.z = desiredPlayerZ;
         }
-        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;afterApp.position.y+=sneak_.offset*characterScale;
+        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;afterApp.position.y+=TrackingLift()*characterScale;
         const auto afterMatrix=MatrixFromPose(afterApp);
         fo3rigid::M previousApp,currentApp;
         std::copy_n(beforeMatrix.m,16,previousApp.begin());std::copy_n(afterMatrix.m,16,currentApp.begin());
         fo3rigid::Live().MoveHeld(previousApp,currentApp,float(dt));
+        appliedHeightLift_=TrackingLift();
         const bool walkingEnabled=!gPlayerSeat.Active()&&(std::fabs(requestedDx)+std::fabs(requestedDz)>.0001f) &&
             !IsFo3LoadingVisible() && !Fo3BarterFocus() &&
             !Fo3LockpickFocus() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() &&
@@ -1932,6 +1980,8 @@ private:
                 loadingHead.position.x=(views[0].pose.position.x+views[1].pose.position.x)*0.5f;
                 loadingHead.position.y=(views[0].pose.position.y+views[1].pose.position.y)*0.5f;
                 loadingHead.position.z=(views[0].pose.position.z+views[1].pose.position.z)*0.5f;
+                const bool heightTracked=(viewState.viewStateFlags&(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT))==(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT);
+                ObserveVrHeight(loadingHead.position.y,frameState.predictedDisplayTime,heightTracked);
                 fo3loadingvr::SetHead(loadingHead.position.x,loadingHead.position.y,loadingHead.position.z,
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
@@ -2078,9 +2128,18 @@ private:
                 }
                 ApplyAuthoredDoorFacingQ1810(views[0]);
                 if (!Fo3GameplayBlocked() && !IsFo3LoadingVisible()) {
-                    UpdatePlayer(views[0], frameState.predictedDisplayTime,
+                    XrView playerHead=views[0];playerHead.pose.position=loadingHead.position;
+                    UpdatePlayer(playerHead, frameState.predictedDisplayTime,
                         (viewState.viewStateFlags&(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT))==(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT));
                 } else {
+                    // Consume stick edges and physical lowering while menus
+                    // pause locomotion, so closing a menu cannot toggle sneak.
+                    if(!gPlayerSeat.Active()){
+                        sneak_.Step(heightTracking_.PhysicalHeight(loadingHead.position.y),heightTracking_.headTracked,false,sneakDown_,
+                            float(frameState.predictedDisplayPeriod)*1e-9f,vrSettings_.physicalCrouch,vrSettings_.crouchDrop,vrSettings_.adjustment);
+                        gPlayerSneakDrop=sneak_.drop;
+                        if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
+                    }
                     lastFrameTime_ = 0;
                 }
                 hitch.Mark("scripts+player");
@@ -2399,7 +2458,7 @@ private:
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
                     frame.trackingScale=Fo3PlayerTrackingScale();
                     frame.modal=Fo3PlayerDead()||Fo3VatsFocus()||gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
-                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset*frame.trackingScale;
+                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=TrackingLift()*frame.trackingScale;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
                         std::copy(vp.m,vp.m+16,frame.viewProjection[eye].begin());}
@@ -3101,6 +3160,13 @@ private:
     XrSystemId systemId_{XR_NULL_SYSTEM_ID};
     XrSession session_{XR_NULL_HANDLE};
     XrSpace localSpace_{XR_NULL_HANDLE};
+    XrSpace floorSpace_{XR_NULL_HANDLE};
+    fo3vrheight::Settings vrSettings_;
+    fo3vrheight::Tracking heightTracking_;
+    std::string vrSettingsPath_;
+    XrTime heightRecenterTime_=0,heightSampleTime_=0;
+    float heightRecenterY_=0,appliedHeightLift_=0;
+    bool heightRecenterValid_=false,heightLiftReady_=false;
     XrPosef notificationHead_{};
     XrSessionState sessionState_{XR_SESSION_STATE_UNKNOWN};
     bool sessionRunning_{false};

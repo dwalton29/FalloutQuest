@@ -78,6 +78,17 @@ int main(int argc,char** argv){
   }
   assert(p.DebugSetPerkPoints(0)&&p.Save(path,error)&&restored.Restore(path,error)&&restored.Snapshot().debugPerkPoints==0);unlink(path.c_str());
   fo3debug::Menu m;m.Open(p);const auto rev=p.Revision();
+  fo3vrheight::Settings height,savedHeight;int heightSaves=0;
+  m.vrSettings=&height;m.saveVrSettings=[&]{savedHeight=height;++heightSaves;return true;};
+  m.calibrateHeight=[&]{height.standing=1.57f;return true;};
+  m.Move(1);assert(m.selected==3);m.Confirm();assert(m.page==fo3debug::Menu::Page::Settings);
+  m.Confirm();assert(m.page==fo3debug::Menu::Page::VrSettings&&m.panel.choices.size()==5);
+  m.Adjust(1);assert(height.adjustment==.01f&&savedHeight.adjustment==.01f&&heightSaves==1);
+  m.selected=1;m.Confirm();assert(height.standing==1.57f&&savedHeight.standing==1.57f);
+  m.selected=2;m.Confirm();assert(!height.physicalCrouch);
+  m.selected=3;m.Adjust(1);assert(std::abs(height.crouchDrop-.29f)<1e-5f);
+  m.selected=4;m.Confirm();assert(height.adjustment==0&&height.physicalCrouch&&height.crouchDrop==.28f);
+  assert(p.Revision()==rev);m.Back();assert(m.page==fo3debug::Menu::Page::Settings);m.Back();assert(m.page==fo3debug::Menu::Page::Root);
   m.Go(fo3debug::Menu::Page::Debug);m.selected=6;
   assert(m.perfHudMode==0&&m.panel.choices.size()==10);
   assert(!m.Confirm()&&m.perfHudMode==1&&p.Revision()==rev);
