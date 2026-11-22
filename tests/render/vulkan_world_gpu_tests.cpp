@@ -20,7 +20,7 @@ XrResult XRAPI_CALL Requirements(XrInstance,XrSystemId,XrGraphicsRequirementsVul
     out->minApiVersionSupported=XR_MAKE_VERSION(1,1,0);out->maxApiVersionSupported=XR_MAKE_VERSION(1,3,0);return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Instance(XrInstance,const XrVulkanInstanceCreateInfoKHR* info,VkInstance* out,VkResult* result) {
-    fqvk::renderer->passTiming=true;
+    fqvk::renderer->configuredPassTiming=fqvk::renderer->passTiming=true;
     auto create=*info->vulkanCreateInfo;
     VkValidationFeatureEnableEXT synchronization=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
     VkValidationFeaturesEXT validation{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
@@ -833,7 +833,7 @@ std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false,bool m
     std::array<XrCompositionLayerProjectionView,2> output{};std::vector<uint8_t> result;
     for(int frame=0;frame<4;++frame) {
         if(frame==2){fqvk::DestroyGameplaySwapchain();assert(fqvk::CreateGameplaySwapchain(session,modal));}
-        r.passTiming=(frame%2)==0;
+        r.configuredPassTiming=r.passTiming=(frame%2)==0;
         assert(fqvk::BeginWorldProbe(identity,right,eye,eye));
         fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(true);fqgl::state.blend.Change(false);
         fqgl::state.texture2d[0].Change(5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
@@ -983,6 +983,32 @@ void TimingCapacity() {
     fqvk::ShutdownWorldProbe();
 }
 
+void PerformanceCapture() {
+    fqrender::nativeOnly=true;
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Scene(false);
+    auto& r=*fqvk::renderer;r.configuredPassTiming=r.passTiming=false;
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    fqperf::capture.Start(351);
+    for(unsigned i=0;i<8;++i){
+        fqperf::capture.BeginFrame();
+        assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::EndWorldProbe();fqperf::capture.FinishFrame();
+    }
+    r.WaitFrames();
+    bool sampled=false;
+    for(size_t i=0;i<fqperf::capture.size;++i){
+        const auto& f=fqperf::capture.frames[i];
+        assert(f.vkExpected==1&&f.vkReceived==1&&f.vkWorldUs>=0);
+        assert(f.vkTimed==(f.serial%8==0?1u:0u));
+        if(f.vkTimed){sampled=true;assert(!f.vkTimingDropped&&f.vkPassUs[r.Scene]>0);}
+    }
+    assert(sampled);
+    fqperf::capture.active=false;
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));assert(!r.passTiming);
+    fqvk::EndWorldProbe();fqvk::ShutdownWorldProbe();
+}
+
 void GameplayPresentation(bool withDepth) {
     fqrender::nativeOnly=true;fqgl::Reset();
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
@@ -1053,7 +1079,7 @@ int main() {
     NativeMotion();NativeMotion(true);NativeMotion(true,true);
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
-    BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();
+    BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();PerformanceCapture();
     NativeLodMaterials();SolidMaterialParity();AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {

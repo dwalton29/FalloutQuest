@@ -431,6 +431,9 @@ public:
             ProcessAndroidEvents();
             ProcessXrEvents();
             fo3audio::Context(Fo3AudioCell(), sessionState_ == XR_SESSION_STATE_FOCUSED);
+            // Keep stop/export responsive when the headset is removed or XR stops.
+            // File I/O happens between measured frames.
+            fqperf::Control();
             if (sessionRunning_) RenderFrame();
             else {
                 // STOPPING still drains cancellation and the deferred safe save.
@@ -1806,8 +1809,8 @@ private:
     void RenderFrame() {
         // Stop/write and arm outside the measured frame. Each token records
         // at most 4096 frames, including loading and non-rendered XR frames.
-        fqperf::Control();
         fqperf::capture.BeginFrame();
+        fqperf::FrameGuard perfFrameGuard;
         if(fqperf::capture.recording && !fqperf::capture.size) {
 #ifdef FQ_OPTIMIZED_PROFILE
             const char* nativeVariant="profile-O2";
@@ -1815,7 +1818,7 @@ private:
             const char* nativeVariant="debug-default";
 #endif
 #ifdef FQ_ENABLE_VULKAN
-            const bool vulkanProbe=fqvk::WorldProbeActive();
+            const bool vulkanProbe=fqvk::WorldProbeActive()&&!vulkanGameplay_;
 #else
             const bool vulkanProbe=false;
 #endif
@@ -1824,13 +1827,14 @@ private:
                 "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=%s vulkanProbe=%d benchmarkValid=%d",
                 FQ_SOURCE_COMMIT,nativeVariant,model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
                 vulkanGameplay_?1:q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
-                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan-experimental":"gles",vulkanProbe,!vulkanProbe);
+                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan":"gles",vulkanProbe,!vulkanProbe);
         }
         const auto waitStarted=fqopaque::Clock::now();
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
         const auto appFrameStarted=fqopaque::Clock::now();
+        const double perfThreadStart=fqperf::capture.recording?fqperf::ThreadUs():-1;
         static uint64_t hitchSerial=0;
         fqframehitch::Trace hitch(++hitchSerial,[](uint64_t serial,uint64_t total,const fqframehitch::Span* spans,size_t count){
             FQ_LOGI("Q284 FRAME HITCH serial=%llu totalUs=%llu loading=%d",(unsigned long long)serial,(unsigned long long)total,IsFo3LoadingVisible());
@@ -2612,6 +2616,10 @@ private:
         if(fqperf::capture.recording) {
             perf.us[fqperf::End]=perfEndUs;
             perf.us[fqperf::Work]=fqopaque::Micros(appFrameStarted);
+            const double threadEnd=fqperf::ThreadUs();
+            perf.threadCpuUs=perfThreadStart>=0&&threadEnd>=perfThreadStart?threadEnd-perfThreadStart:-1;
+            perf.spacewarp=spacewarpAttached;
+            perf.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
             perf.us[fqperf::Cadence]=fqperf::capture.size?appCadenceUs:0.0;
             perf.loading=perf.loading||perfLoadingAtSubmit;
             perf.blocked=Fo3GameplayBlocked();perf.submitted=q1700FrameSubmitted&&layerCount>0;

@@ -23,16 +23,27 @@ elif a[:3]==['shell','setprop','debug.falloutquest.perf_capture']:
  if a[3]!='0':s={'token':a[3]}
  else:s['stopped']=True
  p.write_text(json.dumps(s))
+elif a[:2]==['shell','dumpsys']:
+ print('Device diagnostic '+str(a[2:]))
 elif a[:2]==['logcat','-d']:
- if 'token' in s:
+ if 'token' in s and not os.environ.get('FAKE_ADB_LOST_MARKERS'):
   print('FQPerf: CAPTURE_START id='+s['token']+' gpuSupported=1')
-  if s.get('stopped'):print('FQPerf: CAPTURE_END id='+s['token']+' frames=100 saved=1')
+  if s.get('stopped'):print('FQPerf: CAPTURE_END id='+s['token']+' frames=2 saved=1')
  else:print('FalloutQuest: ready')
 elif a[:3]==['exec-out','run-as','com.falloutquest.app']:
+ if a[-1]=='files/performance-status.txt':
+  if not os.environ.get('FAKE_ADB_STATUS') or 'token' not in s:sys.exit('No status file')
+  print('format=351')
+  print('session='+s['token'])
+  print('state='+('complete' if s.get('stopped') else 'recording'))
+  print('frames=2')
+  print('saved=1')
+  sys.exit(0)
  if os.environ.get('FAKE_ADB_PULL_FAIL'):sys.exit('run-as: could not read files/performance.csv')
- print('# format=233 session='+s['token']+' native=profile-O2')
- print('serial,loading,workUs')
- print('1,0,1000')
+ print('# format='+('351' if os.environ.get('FAKE_ADB_STATUS') else '233')+' session='+('stale' if os.environ.get('FAKE_ADB_STALE') else s['token'])+' native=profile-O2')
+ print('serial,loading,blocked,submitted,workUs,threadCpuUs,rigidStepUs,cell,world,residents,draws,slowObjectRef')
+ print('1,0,0,1,40000,10000,29000,42,60,64,2000,4660')
+ if not os.environ.get('FAKE_ADB_TRUNCATED'):print('2,1,1,1,9000000,20000,100,42,60,64,2000,0')
 else:sys.exit('Unexpected adb operation: '+str(a))
 '''
 @unittest.skipUnless(shutil.which('pwsh'),'PowerShell not installed on this host')
@@ -65,6 +76,32 @@ class CaptureScript(unittest.TestCase):
         log, = (self.directory/'captures').glob('capitol-v350-*-logcat.txt')
         self.assertIn('Capture failed:',log.read_text())
         self.assertIn('FalloutQuest: ready',log.read_text())
+
+    def test_status_survives_missing_logcat_markers_and_writes_diagnosis(self):
+        self.env.update(FAKE_ADB_STATUS='1',FAKE_ADB_LOST_MARKERS='1')
+        r=self.run_script();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+        report, = (self.directory/'captures').glob('*-summary.txt')
+        text=report.read_text()
+        self.assertIn('Active gameplay: 1',text)
+        self.assertIn('rigidStepUs | 1 | 29.000',text)
+        self.assertNotIn('9000.000',text)
+        device, = (self.directory/'captures').glob('*-device.txt')
+        self.assertIn('before capture',device.read_text())
+        self.assertIn('after capture',device.read_text())
+        self.assertIn('thermalservice',device.read_text())
+
+    def test_rejects_stale_csv_but_preserves_diagnostics(self):
+        self.env.update(FAKE_ADB_STATUS='1',FAKE_ADB_STALE='1')
+        r=self.run_script();self.assertNotEqual(r.returncode,0)
+        log, = (self.directory/'captures').glob('*-logcat.txt')
+        self.assertIn('empty, stale, or from the wrong build',log.read_text())
+        self.assertFalse(list((self.directory/'captures').glob('*.csv')))
+
+    def test_rejects_truncated_csv(self):
+        self.env.update(FAKE_ADB_STATUS='1',FAKE_ADB_TRUNCATED='1')
+        r=self.run_script();self.assertNotEqual(r.returncode,0)
+        log, = (self.directory/'captures').glob('*-logcat.txt')
+        self.assertIn('CSV was truncated',log.read_text())
 
     def test_preserves_log_when_csv_pull_fails(self):
         self.env['FAKE_ADB_PULL_FAIL']='1'

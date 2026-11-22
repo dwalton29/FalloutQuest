@@ -3,6 +3,7 @@
 #include "fo3-vulkan-bridge.h"
 #include "fo3-vulkan-shaders.h"
 #include "rendering/spacewarp/fo3-motion-vectors.h"
+#include "rendering/performance-capture.h"
 #include "fo3-vulkan-foveation.h"
 #include <GLES3/gl3.h> // Legacy numeric material enums only; no GLES calls.
 #include <algorithm>
@@ -140,7 +141,8 @@ public:
     enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,Motion,Composition,PassCount};
     static constexpr uint32_t QueryCount=4096;
     struct GpuSpan {GpuPass kind;uint32_t begin,end;};
-    bool passTiming=false;uint32_t queryCursor=4,timingDropped=0;int activeSpan=-1;
+    bool passTiming=false,configuredPassTiming=false;uint32_t queryCursor=4,timingDropped=0;int activeSpan=-1;
+    uint64_t captureId=0,captureFrame=0;
     std::vector<GpuSpan> gpuSpans;
     std::array<double,PassCount> passMs{};
     uint64_t submissionSerial=0;
@@ -253,6 +255,7 @@ public:
         descriptorCache.emplace(std::move(key),set);++descriptorAllocations;return set;
     }
     struct FrameSample {
+        uint64_t captureId=0,captureFrame=0;
         uint64_t solid=0,guarded=0,world=0,land=0,fusedLand=0,foveated=0,specialized=0;bool compact=false;
         uint64_t serial=0,frame=0,copies=0,record=0,queueCpu=0,drawCpu=0,reuse=0,finish=0,xrWait=0,uploadCpu=0;
         uint64_t drawCount=0,vertexCount=0,skipCount=0;std::array<uint64_t,6> reasons{};uint32_t firstSkip=0,diagnostic=0,dropped=0;
@@ -266,6 +269,10 @@ public:
         uint64_t descriptorRevision=0,serial=0;bool pending=false;FrameSample sample;
     };
     std::array<FrameSlot,3> frameSlots;
+    Renderer(){
+        gpuSpans.reserve(QueryCount/4);
+        for(auto& slot:frameSlots)slot.sample.spans.reserve(QueryCount/4);
+    }
     size_t activeSlot=0,nextWorldSlot=0;bool contextsReady=false,synchronous=false;
     uint64_t graphicsCompleted=0;
     bool Buffered()const{return gameplay&&fqrender::nativeOnly&&!synchronous;}
@@ -735,7 +742,7 @@ public:
         visualDiagnostics=uint32_t(std::strtoul(visualProp,nullptr,0))&7u;
         __system_property_get("debug.falloutquest.vulkan_present_copy",visualProp);
         legacyPresentation=std::atoi(visualProp)==1;
-        __system_property_get("debug.falloutquest.vulkan_timing",visualProp);passTiming=std::atoi(visualProp)==1;
+        __system_property_get("debug.falloutquest.vulkan_timing",visualProp);configuredPassTiming=passTiming=std::atoi(visualProp)==1;
         __system_property_get("debug.falloutquest.vulkan_sync",visualProp);synchronous=std::atoi(visualProp)==1;
         __system_property_get("debug.falloutquest.vulkan_generic_shaders",visualProp);genericShaders=std::atoi(visualProp)==1;
 #endif
@@ -1300,6 +1307,14 @@ public:
     }
     void StartCommands(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
         if(begun)throw std::runtime_error("overlapping frame recording");
+        captureId=fqperf::capture.recording?fqperf::capture.id:0;
+        captureFrame=fqperf::capture.recording?fqperf::capture.serial:0;
+        // Whole submission timestamps already exist. Sample detailed passes to
+        // limit instrumentation overhead, without restarting the application.
+        passTiming=configuredPassTiming||(captureId&&captureFrame%8==0);
+        if(captureId&&!fqperf::capture.graphics[0])std::snprintf(fqperf::capture.graphics,sizeof(fqperf::capture.graphics),
+            "vkDevice=%s vkVendor=%u vkDeviceId=%u vkDriver=%u vkTimestampBits=%u vkTimestampPeriodNs=%.6f vkBuffered=%d vkTimingForced=%d",
+            properties.deviceName,properties.vendorID,properties.deviceID,properties.driverVersion,timestampBits,properties.limits.timestampPeriod,Buffered(),configuredPassTiming);
         loadingFrame=loading;modalActive=false;
         FlushUploads();
         if(Buffered()){CreateContexts();SelectSlot(offscreen?2:nextWorldSlot);if(!offscreen)nextWorldSlot=1-nextWorldSlot;}
@@ -1388,7 +1403,9 @@ public:
         recordSpanUs=NowUs()-recordStarted;
         auto& slot=frameSlots[activeSlot];slot.pending=true;slot.serial=++submissionSerial;
         if(!offscreen)++frames;
-        FrameSample sample;sample.copies=presentationCopies;sample.serial=submissionSerial;sample.frame=offscreen?frames+1:frames;
+        auto& sample=slot.sample;sample.finish=0;sample.spans.clear();
+        sample.copies=presentationCopies;sample.serial=submissionSerial;sample.frame=offscreen?frames+1:frames;
+        sample.captureId=captureId;sample.captureFrame=captureFrame;
         sample.foveated=foveatedDraws;sample.specialized=specializedDraws;sample.compact=compactFrame&&!offscreen;sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;sample.fusedLand=fusedLandDraws;
         sample.record=recordSpanUs;sample.queueCpu=queueCpuUs;sample.drawCpu=drawCpuUs;sample.reuse=reuseWaitUs;sample.xrWait=xrWaitUs;
         sample.uploadCpu=uploadPrepareUs-lastUploadPrepareUs;lastUploadPrepareUs=uploadPrepareUs;
@@ -1396,10 +1413,16 @@ public:
         sample.diagnostic=visualDiagnostics;sample.dropped=timingDropped;sample.offscreen=offscreen;sample.profile=passTiming;sample.supported=timestampSupported;
         sample.direct=directOutput&&!(visualDiagnostics&2u);sample.buffered=Buffered();sample.logFrame=!offscreen&&((frames-1)%120)==0;
         if(passTiming)sample.spans=gpuSpans;
-        slot.sample=std::move(sample);
+        if(auto* frame=fqperf::capture.Find(captureId,captureFrame)){
+            ++frame->vkExpected;
+            if(sample.profile)++frame->vkCpuTimed;
+            frame->vkRecordUs+=sample.record;frame->vkUploadUs+=sample.uploadCpu;
+            frame->vkDrawUs+=sample.drawCpu;frame->vkQueueUs+=sample.queueCpu;frame->vkReuseWaitUs+=sample.reuse;
+        }
         if(!Buffered()) {
             const auto finishStarted=NowUs();Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"finish synchronous submission");
             finishWaitUs=NowUs()-finishStarted;slot.sample.finish=finishWaitUs;
+            if(auto* frame=fqperf::capture.Find(captureId,captureFrame))frame->vkFinishWaitUs+=finishWaitUs;
         }
         PollFrames();Collect();if(!offscreen&&!gameplay)Dump();
         if(!offscreen&&(frames%180)==0){
@@ -1426,6 +1449,17 @@ public:
             if(begin==VK_SUCCESS&&end==VK_SUCCESS) {
                 const uint64_t mask=timestampBits==64?~uint64_t{0}:(uint64_t{1}<<timestampBits)-1;
                 gpuMs=double((t[1]-t[0])&mask)*properties.limits.timestampPeriod/1e6;
+            }
+        }
+        if(auto* frame=fqperf::capture.Find(sample.captureId,sample.captureFrame)){
+            if(timestampSupported&&gpuMs>=0){
+                ++frame->vkReceived;
+                (offscreen?frame->vkUiUs:frame->vkWorldUs)+=gpuMs*1000;
+            }
+            frame->vkXrWaitUs+=sample.xrWait;
+            if(passTiming&&timestampSupported){
+                ++frame->vkTimed;frame->vkTimingDropped+=timingDropped;
+                for(unsigned i=0;i<PassCount;++i)frame->vkPassUs[i]+=passMs[i]*1000;
             }
         }
         if(passTiming) {

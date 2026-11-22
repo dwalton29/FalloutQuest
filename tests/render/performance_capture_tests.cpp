@@ -33,18 +33,27 @@ int main() {
     assert(s.Write("/tmp/fq-perf-test.csv"));
     std::ifstream in("/tmp/fq-perf-test.csv");std::string line;
     unsigned lines=0;while(std::getline(in,line)){
-        if(lines==0)assert(line.find("format=233")!=std::string::npos);
+        if(lines==0)assert(line.find("format=351")!=std::string::npos);
         if(lines==1)assert(line.find(",sceneSamples,submittedVertices")!=std::string::npos);
         if(lines==2)assert(line.find(",1,0,-1.000")!=std::string::npos);
         if(lines==3)assert(line.find(",2,0,-1.000")!=std::string::npos);
         ++lines;
     }
     assert(lines==Capacity+2);
+    assert(!s.Write("/does-not-exist/fq-perf.csv"));
+#ifdef __linux__
+    assert(!s.Write("/dev/full")); // Buffered writes must report disk-full too.
+#endif
     s.Start(224);assert(s.size==0);
     s.Gpu(serial,0,999);assert(s.size==0); // previous session queries cannot populate this one
     capture.Start(1);capture.BeginFrame();
+    auto* current=capture.Find(1,capture.serial);
+    assert(current==&capture.current);
+    assert(!capture.Find(2,capture.serial));
     {Scope scope(Sight);}
     assert(capture.current.us[Sight]>=0);
+    assert(capture.current.calls[Sight]==1);
+    assert(capture.current.maxUs[Sight]==capture.current.us[Sight]);
     double measured=0;
     {
         Scope weapon(WeaponUpdate);
@@ -53,5 +62,20 @@ int main() {
         weapon.Finish();
     }
     assert(capture.current.us[WeaponUpdate]==measured);
+    assert(capture.current.calls[WeaponUpdate]==1);
+    {Scope door(DoorResolve,0x1234);}
+    assert(capture.current.slowObjectRef==0x1234);
+    assert(capture.current.slowObjectMetric==DoorResolve);
     capture.FinishFrame();assert(capture.size==1);
+    assert(capture.Find(1,capture.serial)==&capture.frames[0]);
+    capture.BeginFrame();
+    Scope stale(Animation);
+    capture.FinishFrame();capture.BeginFrame();stale.Finish();
+    assert(capture.current.calls[Animation]==0);
+    {FrameGuard guard;}
+    assert(!capture.recording&&capture.size==3);
+    capture.active=false;
+    assert(!capture.Find(1,capture.serial));
+    const double cpu=ThreadUs();
+    assert(cpu==-1||cpu>=0);
 }

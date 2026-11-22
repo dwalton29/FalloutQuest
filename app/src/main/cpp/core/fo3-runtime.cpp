@@ -2336,6 +2336,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
                                       bool wastelandExterior,
                                       Fo3DoorTeleport& out) {
+    fqperf::Scope doorScope(fqperf::DoorResolve,refFormId);
     static std::mutex cacheMutex;
     std::lock_guard<std::mutex> cacheLock(cacheMutex);
     static std::unordered_map<uint32_t, Fo3DoorTeleport> cache;
@@ -2553,6 +2554,7 @@ bool PrepareExpandedVertexStreamQ1960(
 
 bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
                      GpuObject& gpu) {
+    fqperf::Scope uploadScope(fqperf::ObjectUpload,cpu.placement.refFormId);
     if(cpu.nonvisualResident){
         gpu={};gpu.refFormId=cpu.placement.refFormId;gpu.baseFormId=cpu.placement.baseFormId;
         gpu.editorId=cpu.placement.editorId;gpu.modelPath=cpu.placement.modelPath;
@@ -15454,8 +15456,7 @@ bool ShutdownFo3SceneGpu() {
     if(gLoadingUploadFence){glDeleteSync(gLoadingUploadFence);gLoadingUploadFence=nullptr;}
     gLoadingGpuTimer.Shutdown();
     fqopaque::timer.Shutdown();
-    if(fqperf::capture.active)fqperf::capture.Write("/data/user/0/com.falloutquest.app/files/performance.csv");
-    fqperf::capture.active=fqperf::capture.recording=false;
+    fqperf::Complete("shutdown");
     fqperf::gpu.Shutdown();
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();

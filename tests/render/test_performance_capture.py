@@ -5,6 +5,8 @@ sys.dont_write_bytecode = True
 import importlib.util
 from pathlib import Path
 import unittest
+import contextlib
+import io
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('summary', ROOT/'tools/performance/summarize_capture.py')
 summary = importlib.util.module_from_spec(spec)
@@ -56,6 +58,29 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(int(rows[0]['hdrRttEyes']), 2)
         self.assertEqual(int(rows[0]['implicitColorResolvePixels']), 123456)
         self.assertEqual(float(rows[-1]['workUs']), 5095)
+        self.assertEqual(float(rows[0]['vkWorldGpuUs']), -1)
+        self.assertEqual(float(rows[0]['vk_sceneUs']), -1)
+        self.assertEqual(int(rows[0]['npcAnimationUsCalls']), 0)
+
+    def test_diagnosis_excludes_loading_and_identifies_slow_reference(self):
+        def row(**kw):
+            base=dict(serial='1',loading='0',blocked='0',submitted='1',workUs='40000',
+                      threadCpuUs='10000',cell='42',world='60',residents='64',draws='2000',
+                      rigidStepUs='29000',rigidStepUsCalls='3',rigidStepUsMaxUs='20000',
+                      slowObjectRef='4660',slowObjectUs='12000')
+            return dict(base,**kw)
+        out=io.StringIO()
+        with contextlib.redirect_stdout(out):
+            summary.diagnostic_summary([row(),row(serial='2',loading='1',workUs='9000000')])
+        text=out.getvalue()
+        self.assertIn('25.0%',text)
+        self.assertIn('rigidStepUs | 29.000',text)
+        self.assertIn('00001234',text)
+        self.assertNotIn('9000.000',text)
+
+    def test_unfocused_frames_are_not_active_gameplay(self):
+        self.assertFalse(summary.gameplay(dict(loading='0',blocked='0',submitted='1',focused='0')))
+        self.assertTrue(summary.gameplay(dict(loading='0',blocked='0',submitted='1',focused='1')))
 
     def test_v226_npc_movement_and_arrival_attribution(self):
         header=(ROOT/'app/src/main/cpp/rendering/performance-capture.h').read_text()
