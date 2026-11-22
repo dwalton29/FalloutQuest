@@ -35,7 +35,7 @@ struct SurfaceQuery:btTriangleCallback {
     }
 };
 struct Entry {
-    bool ragdoll=false;float ragdollScale=1,ragdollRadius=0,ragdollThinRadius=0;
+    uint32_t ragdollActor=0;float ragdollScale=1,ragdollRadius=0,ragdollThinRadius=0;
     btTransform principal=btTransform::getIdentity();
     std::unique_ptr<btTriangleMesh> mesh,visualMesh;
     std::unique_ptr<btBvhTriangleMeshShape> visualShape;
@@ -65,6 +65,90 @@ struct World::Impl {
         world.setGravity({0,-9.80665f,0});
         world.getSolverInfo().m_numIterations=20;
         world.getSolverInfo().m_splitImpulse=true;
+    }
+    // Predict bounds over the entire tick, including rotation. An incoming loose
+    // object or another moving corpse can reach us from outside its current AABB.
+    void TravelBounds(const btRigidBody& body,float dt,btVector3& lo,btVector3& hi) const {
+        body.getCollisionShape()->calculateTemporalAabb(body.getWorldTransform(),
+            body.getLinearVelocity(),body.getAngularVelocity(),dt,lo,hi);
+        const auto padding=world.getGravity().absolute()*(dt*dt)
+            + btVector3(gContactBreakingThreshold,gContactBreakingThreshold,gContactBreakingThreshold);
+        lo-=padding;
+        hi+=padding;
+    }
+
+    bool MayHitExternal(uint32_t actor,const Ragdoll& rag,float dt) {
+        btVector3 lo(BT_LARGE_FLOAT,BT_LARGE_FLOAT,BT_LARGE_FLOAT),hi=-lo;
+        for(auto id:rag.bodies){
+            btVector3 a,b;
+            TravelBounds(*bodies.at(id).body,dt,a,b);
+            lo.setMin(a);
+            hi.setMax(b);
+        }
+        struct Scenery : btBroadphaseAabbCallback, btTriangleCallback {
+            btVector3 lo,hi;
+            bool hit=false;
+            Scenery(btVector3 a,btVector3 b):lo(a),hi(b){}
+            void processTriangle(btVector3*,int,int) override {hit=true;}
+            bool process(const btBroadphaseProxy* proxy) override {
+                if(hit||proxy->m_collisionFilterGroup!=1)return !hit;
+                // Static() publishes identity-transformed world-space triangle meshes.
+                // One terrain chunk can span a valley: check its triangle BVH too.
+                const auto* obj=static_cast<const btCollisionObject*>(proxy->m_clientObject);
+                const auto* mesh=static_cast<const btBvhTriangleMeshShape*>(obj->getCollisionShape());
+                mesh->processAllTriangles(this,lo,hi);
+                return !hit;
+            }
+        } scenery(lo,hi);
+        broad.aabbTest(lo,hi,scenery);
+        if(scenery.hit)return true;
+        for(const auto& row:bodies){
+            if(row.second.ragdollActor==actor)continue;
+            btVector3 a,b;
+            TravelBounds(*row.second.body,dt,a,b);
+            if(TestAabbAgainstAabb2(lo,hi,a,b))return true;
+        }
+        return false;
+    }
+
+    int RagdollSubsteps(uint32_t actor,float dt) {
+        const auto& rag=ragdolls.at(actor);
+        const auto common=bodies.at(rag.bodies.front()).body->getLinearVelocity();
+        int requested=1,internal=1;
+        unsigned requestedBone=0,internalBone=0;
+        for(unsigned i=0;i<rag.bodies.size();++i){
+            const auto& limb=bodies.at(rag.bodies[i]);
+            const auto& body=*limb.body;
+            if(!body.isActive())continue;
+            const float angular=body.getAngularVelocity().length()*limb.ragdollRadius;
+            const float distance=std::max(.002f,limb.ragdollThinRadius*.5f);
+            const auto steps=[&](float speed){
+                return int(std::ceil(std::min(8.f,speed*dt/distance)));
+            };
+            const auto velocity=body.getLinearVelocity();
+            const int absoluteSteps=steps(velocity.length()+angular);
+            if(absoluteSteps>requested){requested=absoluteSteps;requestedBone=i;}
+            const int relativeSteps=steps((velocity-common).length()+angular);
+            if(relativeSteps>internal){internal=relativeSteps;internalBone=i;}
+        }
+        // Common translation cannot change joint separation or cause self contact.
+        // Keep the existing absolute-speed budget whenever another collider is in reach.
+        int applied=requested;
+        unsigned appliedBone=requestedBone;
+        if(internal<requested&&!MayHitExternal(actor,rag,dt)){
+            applied=internal;
+            appliedBone=internalBone;
+        }
+        if(fqperf::capture.recording){
+            auto& frame=fqperf::capture.current;
+            if(unsigned(requested)>frame.ragdollRequested){
+                frame.ragdollRequested=requested;frame.ragdollRequestActor=actor;frame.ragdollRequestBone=requestedBone;
+            }
+            if(unsigned(applied)>frame.ragdollApplied){
+                frame.ragdollApplied=applied;frame.ragdollApplyActor=actor;frame.ragdollApplyBone=appliedBone;
+            }
+        }
+        return applied;
     }
     void ClipMotion(Entry& entry,const btTransform& from,const btTransform& to,const btCollisionObject* carriedCompanion=nullptr){
         auto& body=*entry.body;
@@ -318,12 +402,16 @@ bool World::AddRagdoll(uint32_t actor,const fo3rag::Definition& asset,const std:
   const auto& d=asset.bodies[n];const uint64_t id=(uint64_t{1}<<62)|(uint64_t(actor)<<8)|n;
   if(Has(id)||d.mass<=0||!std::isfinite(d.mass)||!Finite(d.a)||!Finite(d.b)||!Finite(d.center)||!std::isfinite(d.radius)||d.radius<=0){RemoveRagdoll(actor);return false;}
   const float bodyScale=bodyScales.empty()?scale:bodyScales[n];
-  Entry e;e.ragdoll=true;e.ragdollScale=bodyScale;e.ragdollRadius=(B(d.b)-B(d.a)).length()*.5f*bodyScale+d.radius*bodyScale;e.principal.setOrigin(B(d.center)*bodyScale);
+  Entry e;e.ragdollActor=actor;e.ragdollScale=bodyScale;e.ragdollThinRadius=d.radius*bodyScale;e.principal.setOrigin(B(d.center)*bodyScale);
   btVector3 inertia(d.inertia[0]*bodyScale*bodyScale,d.inertia[4]*bodyScale*bodyScale,d.inertia[8]*bodyScale*bodyScale);
   if(inertia.x()>0&&inertia.y()>0&&inertia.z()>0){btMatrix3x3 tensor(d.inertia[0],d.inertia[1],d.inertia[2],d.inertia[3],d.inertia[4],d.inertia[5],d.inertia[6],d.inertia[7],d.inertia[8]),axes;for(int r=0;r<3;++r)tensor[r]*=bodyScale*bodyScale;tensor.diagonalize(axes,1e-6f,32);if(tensor[0][0]>0&&tensor[1][1]>0&&tensor[2][2]>0){e.principal.setBasis(axes);inertia={tensor[0][0],tensor[1][1],tensor[2][2]};}}
   auto compound=std::make_unique<btCompoundShape>();
   const auto addCapsule=[&](const fo3rag::Capsule& shape){
    const auto a=B(shape.a)*bodyScale,b=B(shape.b)*bodyScale,axis=b-a;
+   const float radius=shape.radius*bodyScale;
+   const auto center=e.principal.getOrigin();
+   e.ragdollRadius=std::max(e.ragdollRadius,std::max((a-center).length(),(b-center).length())+radius);
+   e.ragdollThinRadius=std::min(e.ragdollThinRadius,radius);
    auto capsule=std::make_unique<btCapsuleShape>(shape.radius*bodyScale,axis.length());capsule->setMargin(.001f);
    auto local=btTransform::getIdentity();local.setOrigin((a+b)*.5f);
    if(axis.length2()>1e-10f)local.setRotation(shortestArcQuat(btVector3(0,1,0),axis.normalized()));
@@ -335,7 +423,7 @@ bool World::AddRagdoll(uint32_t actor,const fo3rag::Definition& asset,const std:
    if(!Finite(shape.a)||!Finite(shape.b)||!std::isfinite(shape.radius)||shape.radius<=0){RemoveRagdoll(actor);return false;}
    addCapsule(shape);
   }
-  e.shape=std::move(compound);e.ragdollThinRadius=d.radius*bodyScale;
+  e.shape=std::move(compound);
   // Authored full inertia is rotated into its principal frame above.
   if(inertia.x()<=0||inertia.y()<=0||inertia.z()<=0)e.shape->calculateLocalInertia(d.mass,inertia);
   btRigidBody::btRigidBodyConstructionInfo info(d.mass,nullptr,e.shape.get(),inertia);
@@ -379,7 +467,7 @@ void World::Step(float seconds){
         FQ_PERF_SCOPE(RigidTick);
         impl->accumulated-=dt;
         auto& previous=impl->previous;previous.clear();
-        for(auto& entry:impl->bodies)if(!entry.second.ragdoll&&entry.second.body->isActive())previous.push_back({&entry.second,entry.second.body->getWorldTransform()});
+        for(auto& entry:impl->bodies)if(!entry.second.ragdollActor&&entry.second.body->isActive())previous.push_back({&entry.second,entry.second.body->getWorldTransform()});
         for(auto& grip:impl->grips)if(grip.constraint)grip.constraint->setFrames(grip.target,grip.anchor);
         // Keep linked capsules in one constraint solve. Independent per-bone
         // post-step casts can tear joints on stair edges. Bound active ragdoll
@@ -387,7 +475,10 @@ void World::Step(float seconds){
         auto& active=impl->activeRagdolls;active.clear();
         for(const auto& row:impl->ragdolls)if(!RagdollSleeping(row.first))active.push_back(row.first);
         int substeps=1;
-        for(auto actor:active)for(auto id:impl->ragdolls.at(actor).bodies){const auto& e=impl->bodies.at(id);const auto& b=*e.body;if(!b.isActive())continue;const float speed=b.getLinearVelocity().length()+b.getAngularVelocity().length()*e.ragdollRadius;substeps=std::max(substeps,std::min(8,int(std::ceil(speed*dt/std::max(.002f,e.ragdollThinRadius*.5f)))));}
+        for(auto actor:active){
+            substeps=std::max(substeps,impl->RagdollSubsteps(actor,dt));
+            if(substeps==8)break;
+        }
         for (int i=0; i<substeps; ++i) {
             FQ_PERF_SCOPE(RigidSolve);
             impl->world.stepSimulation(dt/substeps, 0);

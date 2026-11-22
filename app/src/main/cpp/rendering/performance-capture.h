@@ -55,6 +55,9 @@ struct Frame {
     std::array<double,Count> maxUs{};
     double threadCpuUs=-1,elapsedUs=0,slowObjectUs=0;
     uint32_t slowObjectRef=0,slowObjectMetric=0;
+    // Per-frame peak subdivision requests; bone indices refer to the actor's ragdoll definition.
+    uint32_t ragdollRequested=0,ragdollRequestActor=0,ragdollRequestBone=0;
+    uint32_t ragdollApplied=0,ragdollApplyActor=0,ragdollApplyBone=0;
     bool spacewarp=false,focused=false;
     double vkWorldUs=0,vkUiUs=0;
     std::array<double,VkPassCount> vkPassUs{};
@@ -128,7 +131,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fputc('\n',f);
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -151,7 +154,8 @@ struct Session {
             const bool vkCpuComplete=v.vkExpected>0&&v.vkCpuTimed==v.vkExpected;
             std::fprintf(f,",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",v.vkExpected?v.vkRecordUs:-1,vkCpuComplete?v.vkUploadUs:-1,vkCpuComplete?v.vkDrawUs:-1,vkCpuComplete?v.vkQueueUs:-1,v.vkExpected?v.vkReuseWaitUs:-1,v.vkExpected?v.vkFinishWaitUs:-1,vkComplete?v.vkXrWaitUs:-1);
             for(unsigned m=0;m<Count;++m)std::fprintf(f,",%u,%.3f",v.calls[m],v.maxUs[m]);
-            std::fputc('\n',f);
+            std::fprintf(f,",%u,%u,%u,%u,%u,%u\n",v.ragdollRequested,v.ragdollRequestActor,v.ragdollRequestBone,
+                v.ragdollApplied,v.ragdollApplyActor,v.ragdollApplyBone);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

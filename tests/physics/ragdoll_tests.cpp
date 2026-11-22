@@ -1,4 +1,5 @@
 #include "physics/fo3-rigid-world.h"
+#include "rendering/performance-capture.h"
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp"
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*){return false;}
 #include "npc/fo3-ragdoll-pose.h"
@@ -16,9 +17,51 @@ static void Verify(World& w,uint32_t id,const fo3rag::Definition& d,float scale,
   float distance=0;for(int k=0;k<3;++k)distance+=(pa[k]-pb[k])*(pa[k]-pb[k]);if(distance>=(initial?.035f*.035f:.025f*.025f))std::cerr<<"joint drift actor="<<id<<" a="<<d.bodies[j.a].bone<<" b="<<d.bodies[j.b].bone<<" metres="<<std::sqrt(distance)<<std::endl;assert(distance<(initial?.035f*.035f:.025f*.025f));
  }
 }
+static void VerifySubsteps(const fo3rag::Definition& rig){
+ constexpr float tick=1.f/120.f;
+ constexpr uint32_t actor=200;
+ World w;
+ w.Static(1,Floor());
+ auto spawn=[&](float height,V velocity){
+  w.ClearBodies();
+  assert(w.AddRagdoll(actor,rig,{At(0,height,0),At(0,height+.4f,0)},1,velocity));
+ };
+ auto& capture=fqperf::capture;
+ auto step=[&](float seconds){
+  capture.BeginFrame();
+  w.Step(seconds);
+  capture.FinishFrame();
+  return capture.frames[capture.size-1];
+ };
+ capture.Start(1);
+ spawn(50,{0,-45,0});
+ for(int i=0;i<2;++i){
+  const auto f=step(.064f);
+  assert(f.calls[fqperf::RigidTick]==unsigned(7+i));
+  assert(f.calls[fqperf::RigidSolve]==f.calls[fqperf::RigidTick]);
+  assert(f.ragdollRequested==8&&f.ragdollRequestActor==actor&&f.ragdollApplied==1);
+ }
+ // The next fast fall starts within one tick of a single-sided floor.
+ spawn(.5f,{0,-45,0});
+ const auto impact=step(tick);
+ assert(impact.ragdollApplied==8&&impact.calls[fqperf::RigidSolve]==8);
+ for(int i=0;i<180;++i){w.Step(tick);Verify(w,actor,rig,1);}
+ // Two approaching rigs are separated at the start. Both swept bounds matter.
+ spawn(20,{18,0,0});
+ assert(w.AddRagdoll(201,rig,{At(.43f,20,0),At(.43f,20.4f,0)},1,{-18,0,0}));
+ const auto approaching=step(tick);
+ assert(approaching.ragdollApplied>=4&&approaching.calls[fqperf::RigidSolve]>=4);
+ // Articulation still subdivides the solve in midair, with the driving bone recorded.
+ spawn(20,{});
+ assert(w.SetRagdollMotion(actor,{{},{}},{{},{0,100,0}}));
+ const auto turning=step(tick);
+ assert(turning.ragdollApplied>1&&turning.ragdollApplyActor==actor&&turning.ragdollApplyBone==1);
+ capture.active=false;
+}
 int main(int argc,char** argv){
  fo3rag::Definition d;for(int i=0;i<2;++i){fo3rag::Body b;b.bone=std::to_string(i);b.a={0,-.15f,0};b.b={0,.15f,0};b.radius=.08f;b.mass=3;b.friction=.5f;b.linearDamping=.1f;b.angularDamping=.05f;d.bodies.push_back(b);}
  fo3rag::Joint joint;joint.a=0;joint.b=1;joint.frameA=At(0,.2f,0);joint.frameB=At(0,-.2f,0);joint.minimum={-.5f,-.5f,-.5f};joint.maximum={.5f,.5f,.5f};d.joints.push_back(joint);
+ VerifySubsteps(d);
  World w;w.Static(1,Floor());assert(w.AddRagdoll(50,d,{At(0,1,0),At(0,1.4f,0)},1));
  for(int i=0;i<1800;++i){w.Step(1.f/120);Verify(w,50,d,1);}
  std::vector<M> settled;bool sleeping=false;assert(w.RagdollPose(50,settled,&sleeping)&&sleeping);

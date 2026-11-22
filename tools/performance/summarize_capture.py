@@ -4,6 +4,7 @@ import argparse
 import csv
 import math
 import statistics
+from collections import Counter
 from pathlib import Path
 
 
@@ -69,6 +70,16 @@ def diagnostic_summary(rows):
         print(f'{key} | {statistics.median(values)/1000:.3f} | {p95/1000:.3f} | '
               f'{max(values)/1000:.3f} | {statistics.mean(calls) if calls and max(calls) else "unavailable"} | '
               f'{longest/1000 if longest >= 0 else "unavailable"}')
+    if 'ragdollApplied' in rows[0]:
+        ticks = sum(int(r['rigidTickUsCalls']) for r in selected)
+        solves = sum(int(r['rigidSolveUsCalls']) for r in selected)
+        if ticks:
+            print(f'Rigid physics: {solves} solves over {ticks} fixed ticks ({solves/ticks:.2f} solves/tick).')
+        for kind, actor, bone in [('ragdollRequested', 'ragdollRequestActor', 'ragdollRequestBone'),
+                                  ('ragdollApplied', 'ragdollApplyActor', 'ragdollApplyBone')]:
+            drivers = Counter((int(r[actor]), int(r[bone]), int(r[kind])) for r in selected if int(r[kind]) > 1)
+            for (ref, index, steps), count in drivers.most_common(3):
+                print(f'{kind} frame peak: actor {ref:08X}, bone {index}, {steps} substeps ({count} frames).')
     if 'vkSubmissions' in rows[0]:
         expected = sum(int(r['vkSubmissions']) for r in selected)
         completed = sum(int(r['vkCompleted']) for r in selected)
