@@ -42,6 +42,7 @@ def main():
     harness = r'''
 #include "world/fo3-cell-traversal.h"
 #include <unordered_map>
+#include "rendering/performance-capture.h"
 #include <mutex>
 #include <cassert>
 #include <cstring>
