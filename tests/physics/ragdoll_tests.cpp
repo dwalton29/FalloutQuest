@@ -41,6 +41,10 @@ static void VerifySubsteps(const fo3rag::Definition& rig){
   assert(f.calls[fqperf::RigidSolve]==f.calls[fqperf::RigidTick]);
   assert(f.ragdollRequested==8&&f.ragdollRequestActor==actor&&f.ragdollApplied==1);
  }
+ // Preserve the approach to impact even before the floor is within one tick.
+ spawn(2,{0,-45,0});
+ const auto approach=step(tick);
+ assert(approach.ragdollApplied==8);
  // The next fast fall starts within one tick of a single-sided floor.
  spawn(.5f,{0,-45,0});
  const auto impact=step(tick);

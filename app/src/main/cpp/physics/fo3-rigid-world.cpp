@@ -10,6 +10,7 @@
 #include <unordered_map>
 namespace fo3rigid {
 namespace {
+constexpr float MaxFrameSeconds=.064f;
 btVector3 B(const V& v){return {v[0],v[1],v[2]};}
 V A(const btVector3& v){return {float(v.x()),float(v.y()),float(v.z())};}
 btTransform B(const M& m){btTransform t;t.setFromOpenGLMatrix(m.data());return t;}
@@ -66,7 +67,7 @@ struct World::Impl {
         world.getSolverInfo().m_numIterations=20;
         world.getSolverInfo().m_splitImpulse=true;
     }
-    // Predict bounds over the entire tick, including rotation. An incoming loose
+    // Predict bounds over the look-ahead interval, including rotation. An incoming loose
     // object or another moving corpse can reach us from outside its current AABB.
     void TravelBounds(const btRigidBody& body,float dt,btVector3& lo,btVector3& hi) const {
         body.getCollisionShape()->calculateTemporalAabb(body.getWorldTransform(),
@@ -132,10 +133,13 @@ struct World::Impl {
             if(relativeSteps>internal){internal=relativeSteps;internalBone=i;}
         }
         // Common translation cannot change joint separation or cause self contact.
-        // Keep the existing absolute-speed budget whenever another collider is in reach.
+        // For fast impacts that reach the subdivision limit, keep the fine
+        // integrator for the entire approach frame. Changing the step size just
+        // before landing can disturb the contact pose of the jointed body.
+        const float lookAhead=requested==8?MaxFrameSeconds:dt;
         int applied=requested;
         unsigned appliedBone=requestedBone;
-        if(internal<requested&&!MayHitExternal(actor,rag,dt)){
+        if(internal<requested&&!MayHitExternal(actor,rag,lookAhead)){
             applied=internal;
             appliedBone=internalBone;
         }
@@ -462,7 +466,7 @@ void World::Step(float seconds){
         impl->accumulated = 0;
         return;
     }
-    impl->accumulated+=std::min(seconds,.064f);constexpr float dt=1.f/120.f;
+    impl->accumulated+=std::min(seconds,MaxFrameSeconds);constexpr float dt=1.f/120.f;
     while(impl->accumulated+1e-7f>=dt){
         FQ_PERF_SCOPE(RigidTick);
         impl->accumulated-=dt;
