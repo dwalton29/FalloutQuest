@@ -11,6 +11,7 @@
 #include "scripting/fo3-script-actions.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "world/fo3-reference-state.h"
+#include "world/fo3-cell-traversal.h"
 #include "weapons/fo3-weapon-data.h"
 #include <array>
 #include <cstdint>
@@ -289,6 +290,8 @@ struct BarterSession {
   std::vector<BarterSelection> selections;
 };
 struct Catalog {
+  // Complete XTEL records, keyed by placed source door.
+  std::unordered_map<uint32_t, Fo3DoorTeleport> doorTeleports;
   fo3weapon::Definitions weapons;
   std::unordered_map<uint32_t,uint32_t> merchantContainers,merchantServices;
   std::unordered_map<std::string,float> barterSettings;

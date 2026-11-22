@@ -2333,10 +2333,13 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     return !outs.empty();
 }
 
+bool LookupCatalogDoor(uint32_t reference, Fo3DoorTeleport& out);
+
 bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
                                       bool wastelandExterior,
                                       Fo3DoorTeleport& out) {
     fqperf::Scope doorScope(fqperf::DoorResolve,refFormId);
+    if (LookupCatalogDoor(refFormId, out)) return out.valid;
     static std::mutex cacheMutex;
     std::lock_guard<std::mutex> cacheLock(cacheMutex);
     static std::unordered_map<uint32_t, Fo3DoorTeleport> cache;
@@ -3683,6 +3686,20 @@ uint64_t gSceneLoadFrame = 0u;
 fqopaque::GpuTimer gLoadingGpuTimer;
 GLsync gLoadingUploadFence=nullptr;
 std::unique_ptr<fo3player::Session> gPlayerSession;
+
+// GPU upload runs on the render thread, where the active session is owned.
+// A known source without XTEL is a local door even during a world transition.
+bool LookupCatalogDoor(uint32_t reference, Fo3DoorTeleport& out) {
+    if (!gPlayerSession) return false;
+    const auto& catalog = gPlayerSession->player.Definitions();
+    const auto teleport = catalog.doorTeleports.find(reference);
+    if (teleport != catalog.doorTeleports.end()) {
+        out = teleport->second;
+        return true;
+    }
+    out = {};
+    return catalog.references.count(reference) != 0;
+}
 bool Fo3PlayerDead(){return gPlayerSession&&gPlayerSession->player.Health()<=0;}
 uint32_t Fo3AudioCell(){return gFo3Title.open?fo3audio::TitleCell:Fo3PlayerDead()?fo3audio::DeathCell:gCurrentCellFormId;}
 float Fo3PlayerTrackingScale(){return gPlayerSession?std::clamp(gPlayerSession->player.PlayerTrackingScale(),.1f,10.f):1.f;}

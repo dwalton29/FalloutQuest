@@ -1,4 +1,5 @@
 #include "fo3-rigid-world.h"
+#include "rendering/performance-capture.h"
 #include <btBulletDynamicsCommon.h>
 #include <BulletDynamics/ConstraintSolver/btGeneric6DofSpring2Constraint.h>
 #include <BulletCollision/NarrowPhaseCollision/btGjkPairDetector.h>
@@ -58,7 +59,7 @@ struct World::Impl {
     Grip grips[2];
     float accumulated=0;
     std::vector<std::pair<Entry*,btTransform>> previous;
-    Impl(){world.setGravity({0,-9.80665f,0});world.getSolverInfo().m_numIterations=20;world.getSolverInfo().m_splitImpulse=true;}
+    Impl(){world.setForceUpdateAllAabbs(false);world.setGravity({0,-9.80665f,0});world.getSolverInfo().m_numIterations=20;world.getSolverInfo().m_splitImpulse=true;}
     void ClipMotion(Entry& entry,const btTransform& from,const btTransform& to,const btCollisionObject* carriedCompanion=nullptr){
         auto& body=*entry.body;
         const float rotation=from.getRotation().angleShortestPath(to.getRotation());
@@ -125,7 +126,11 @@ void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     for(const auto& t:triangles)e.mesh->addTriangle(B(t.a),B(t.b),B(t.c),true);
     e.shape.reset(new btBvhTriangleMeshShape(e.mesh.get(),true));e.shape->setMargin(.001f);
     btRigidBody::btRigidBodyConstructionInfo info(0,nullptr,e.shape.get());e.body.reset(new btRigidBody(info));
-    e.body->setFriction(.5f);impl->world.addRigidBody(e.body.get(),1,short(-1));impl->statics.emplace(id,std::move(e));
+    e.body->setFriction(.5f);
+    // Scenery is immutable until removed or replaced. Only loose objects (2)
+    // and ragdolls / capsule sweeps (4) need to collide with it.
+    impl->world.addRigidBody(e.body.get(),1,2|4);
+    impl->statics.emplace(id,std::move(e));
     // Newly published/moving support must wake resting nearby bodies.
     btVector3 lo,hi;impl->statics.at(id).body->getAabb(lo,hi);impl->WakeBounds(lo,hi);
 }
@@ -359,8 +364,13 @@ bool World::AddRagdoll(uint32_t actor,const fo3rag::Definition& asset,const std:
 }
 void World::Step(float seconds){
     if(!(seconds>0)||!std::isfinite(seconds))return;
+    if (impl->bodies.empty()) {
+        impl->accumulated = 0;
+        return;
+    }
     impl->accumulated+=std::min(seconds,.064f);constexpr float dt=1.f/120.f;
     while(impl->accumulated+1e-7f>=dt){
+        FQ_PERF_SCOPE(RigidTick);
         impl->accumulated-=dt;
         auto& previous=impl->previous;previous.clear();
         for(auto& entry:impl->bodies)if(!entry.second.ragdoll&&entry.second.body->isActive())previous.push_back({&entry.second,entry.second.body->getWorldTransform()});
@@ -372,12 +382,16 @@ void World::Step(float seconds){
         for(const auto& row:impl->ragdolls)if(!RagdollSleeping(row.first))active.push_back(row.first);
         int substeps=1;
         for(auto actor:active)for(auto id:impl->ragdolls.at(actor).bodies){const auto& e=impl->bodies.at(id);const auto& b=*e.body;if(!b.isActive())continue;const float speed=b.getLinearVelocity().length()+b.getAngularVelocity().length()*e.ragdollRadius;substeps=std::max(substeps,std::min(8,int(std::ceil(speed*dt/std::max(.002f,e.ragdollThinRadius*.5f)))));}
-        for(int i=0;i<substeps;++i)impl->world.stepSimulation(dt/substeps,0);
+        for (int i=0; i<substeps; ++i) {
+            FQ_PERF_SCOPE(RigidSolve);
+            impl->world.stepSimulation(dt/substeps, 0);
+        }
         // Bullet's swept sphere protects linear COM motion. Sweep each authored
         // convex child as well so a fast-spinning thin plate/weapon cannot rotate
         // through a floor between ticks, including compound bodies.
         for(const auto& state:previous){
             auto& body=*state.first->body;const auto from=state.second,to=body.getWorldTransform();
+            FQ_PERF_SCOPE(RigidBodySweep);
             impl->ClipMotion(*state.first,from,to);
         }
         // Malleable/motor constraints can keep individual Bullet bodies awake

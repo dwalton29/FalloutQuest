@@ -688,6 +688,13 @@ void Original(const std::string &path) {
   std::string error;
   Check(fo3player::LoadCatalog(path, c, error), error.c_str());
   fo3player::Player p(c);
+  const auto& capitolDoor = c.doorTeleports.at(0x23260);
+  const auto& secondDoor = c.doorTeleports.at(0x2325b);
+  Check(capitolDoor.valid && capitolDoor.destinationDoorRefFormId == 0x2325f &&
+        capitolDoor.destinationCellFormId == 0x23226 && capitolDoor.z == 960 &&
+        secondDoor.valid && secondDoor.destinationDoorRefFormId == 0x7d75f &&
+        secondDoor.destinationCellFormId == 0x74eb2 && secondDoor.y == -8480,
+        "streamed Capitol doors retain authored destinations and arrival positions");
   Check(p.MaxHealth() == 200 && p.MaxActionPoints() == 75 &&
             p.CarryCapacity() == 200,
         "original player derived stats");

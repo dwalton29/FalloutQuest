@@ -50,6 +50,10 @@ def main():
 #define Q6H_LOGI(...) ((void)0)
 #define Q6H_LOGW(...) ((void)0)
 std::unordered_map<uint32_t,Fo3DoorTeleport> original;
+bool LookupCatalogDoor(uint32_t id,Fo3DoorTeleport& out){
+ if(id!=30&&id!=31)return false;
+ out={};if(id==30){out.valid=true;out.destinationDoorRefFormId=22;}return true;
+}
 int genericCalls=0;
 bool LookupFo3WastelandDoorTeleportQ1920(uint32_t id,Fo3DoorTeleport* out,bool* ready){
  *ready=true;*out={};if(id!=1)return false;out->valid=true;out->destinationDoorRefFormId=11;return true;
@@ -60,6 +64,8 @@ bool ResolveFo3DoorTeleportQ1700(uint32_t id,Fo3DoorTeleport* out){
 ''' + production + r'''
 int main(){
  Fo3DoorTeleport door;original[2].valid=true;original[2].destinationDoorRefFormId=22;
+ assert(ResolveDoorTeleportCachedQ1698(30,false,door)&&door.destinationDoorRefFormId==22&&genericCalls==0);
+ assert(!ResolveDoorTeleportCachedQ1698(31,true,door)&&!door.valid&&genericCalls==0);
  assert(ResolveDoorTeleportCachedQ1698(1,true,door)&&door.destinationDoorRefFormId==11&&genericCalls==0);
  assert(ResolveDoorTeleportCachedQ1698(2,true,door)&&door.destinationDoorRefFormId==22&&genericCalls==1);
  assert(ResolveDoorTeleportCachedQ1698(2,false,door)&&door.destinationDoorRefFormId==22&&genericCalls==1);

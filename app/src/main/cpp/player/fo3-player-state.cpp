@@ -515,7 +515,19 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           return fail("Invalid reference base");
         ref.base = fo3esm::ReadU32(base->data);
         for (const auto &sub : subs) {
-          if (sub.type == "XCNT") {
+          if (sub.type == "XTEL" && sub.size >= 28 && fo3esm::ReadU32(sub.data)) {
+            Fo3DoorTeleport door;
+            door.destinationDoorRefFormId = fo3esm::ReadU32(sub.data);
+            door.x = fo3esm::ReadF32(sub.data + 4);
+            door.y = fo3esm::ReadF32(sub.data + 8);
+            door.z = fo3esm::ReadF32(sub.data + 12);
+            door.rx = fo3esm::ReadF32(sub.data + 16);
+            door.ry = fo3esm::ReadF32(sub.data + 20);
+            door.rz = fo3esm::ReadF32(sub.data + 24);
+            if (sub.size >= 32) door.flags = fo3esm::ReadU32(sub.data + 28);
+            door.valid = true;
+            next.doorTeleports.emplace(form, door);
+          } else if (sub.type == "XCNT") {
             if (sub.size != 4)
               ref.valid = false;
             else
@@ -701,6 +713,11 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const auto setting=settings.find(name);
     if(setting!=settings.end()&&std::isfinite(setting->second)&&setting->second>=0)
       next.npcCombatSettings.emplace(name,setting->second);
+  }
+  for (auto& entry : next.doorTeleports) {
+    auto& door = entry.second;
+    const auto destination = next.references.find(door.destinationDoorRefFormId);
+    if (destination != next.references.end()) door.destinationCellFormId = destination->second.cell;
   }
   fo3weapon::FinalizeStatistics(next.weapons);
   fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
