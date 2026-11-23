@@ -5,7 +5,7 @@ namespace fqmotion {
 // Commands contain values and GL resource names, never scene-vector pointers.
 // The scene cannot publish/delete resources between an eye draw and its replay.
 struct Draw {
-    uint64_t identity=0;
+    fqspacewarp::MotionIdentity identity{};
     uint32_t mesh=0,vbo=0,indexBuffer=0,skinAttributes=0,paletteTexture=0,diffuse=0;
     int count=0,vertices=0,skinMode=0;
     bool indexed=false,cull=true,clockwise=false,decal=false,alphaTest=false,vertexAlpha=false;
@@ -17,7 +17,7 @@ inline bool separatedComposition=false;
 struct Capture {
     fqspacewarp::History* history=nullptr;
     std::vector<Draw> draws;
-    std::unordered_set<uint64_t> identities;
+    std::unordered_set<fqspacewarp::MotionIdentity,fqspacewarp::MotionIdentityHash> identities;
     uint32_t reasons=0;
     bool collecting=false,mainDrawn=false;
     void Begin(fqspacewarp::History& h){history=h.Active()?&h:nullptr;draws.clear();identities.clear();reasons=0;collecting=false;mainDrawn=false;}
@@ -26,12 +26,12 @@ struct Capture {
         if(separatedComposition)reason&=~uint32_t(Transparency|Water|Ui);
         if(history)reasons|=reason;
     }
-    bool Record(const Draw& draw,const fqspacewarp::Drawable& shape,uint32_t reference=0){
+    bool Record(const Draw& draw,const fqspacewarp::Drawable& shape,uint32_t reference=0,const char* model=""){
         if(!collecting||!history)return false;
-        if(!history->Record(draw.identity,shape,reference,draw.mesh)){Block(Capacity);return false;}
+        if(!history->Record(draw.identity,shape,reference,draw.mesh,model)){Block(Capacity);return false;}
         if(!identities.insert(draw.identity).second)return true;
         if(draws.size()>=fqspacewarp::History::MaxDrawables){
-            history->NoteRejection("draw-list-limit",draw.identity,reference,draw.mesh,shape.Bytes());
+            history->NoteRejection("draw-list-limit",draw.identity,reference,draw.mesh,shape.Bytes(),model);
             Block(Capacity);return false;
         }
         draws.push_back(draw);

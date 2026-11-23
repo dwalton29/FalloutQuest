@@ -61,7 +61,7 @@ class Gles {
         size_t positionBytes=0,paletteRows=0;
         uint64_t uploaded=0,used=0;
     };
-    std::unordered_map<uint64_t,PreviousGpu> previousGpu_;
+    std::unordered_map<fqspacewarp::MotionIdentity,PreviousGpu,fqspacewarp::MotionIdentityHash> previousGpu_;
     size_t previousBytes_=0;
     uint64_t uploadedBytes_=0,allocations_=0;
     bool failed_=false;

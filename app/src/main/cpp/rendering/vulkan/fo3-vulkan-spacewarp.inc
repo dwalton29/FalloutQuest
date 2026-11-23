@@ -20,7 +20,7 @@ VkFramebuffer dynamicMotionFrame{};
 VkShaderModule motionModules[2][2]{};
 std::unordered_map<unsigned,VkPipeline> motionPipelines;
 struct MotionPose {Image palette;uint64_t used=0;};
-std::unordered_map<uint64_t,MotionPose> motionPoses;
+std::unordered_map<fqspacewarp::MotionIdentity,MotionPose,fqspacewarp::MotionIdentityHash> motionPoses;
 size_t motionPoseBytes=0;
 const fqmotion::Capture* motionCapture=nullptr;
 std::array<fqspacewarp::Coverage,2>* motionCoverage=nullptr;

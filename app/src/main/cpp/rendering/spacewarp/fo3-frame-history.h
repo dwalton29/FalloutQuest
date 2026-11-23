@@ -3,6 +3,8 @@
 // frames. It is independent of physics ticks, eye draws and asset publications.
 #include "rendering/actor-skinning.h"
 #include "fo3-history-rejection.h"
+#include "fo3-motion-identity.h"
+#include <string>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -51,7 +53,9 @@ struct Coverage {
 class History {
   Frame previous_{},current_{};
   HistoryRejection rejection_{};
-  std::unordered_map<uint64_t,Drawable> committed_,pending_;
+  std::string rejectedModel_;
+  Placement rejectedPlacement_{};
+  std::unordered_map<MotionIdentity,Drawable,MotionIdentityHash> committed_,pending_;
   std::array<bool,2> eyes_{};
   size_t pendingBytes_=0;
   unsigned submitted_=0;
@@ -67,17 +71,22 @@ public:
     rejection_={};current_=f;pending_.clear();pendingBytes_=0;eyes_={};consistent_=true;candidate_=true;return true;
   }
   const HistoryRejection& FirstRejection()const{return rejection_;}
-  void NoteRejection(const char* reason,uint64_t identity,uint32_t reference,uint32_t mesh,size_t recordBytes){
-    if(!rejection_.reason)rejection_={reason,identity,reference,mesh,pending_.size(),pendingBytes_,recordBytes};
+  const std::string& RejectedModel()const{return rejectedModel_;}
+  Placement RejectedPlacement()const{return rejectedPlacement_;}
+  void NoteRejection(const char* reason,MotionIdentity identity,uint32_t reference,uint32_t mesh,size_t recordBytes,const char* model){
+    if(rejection_.reason)return;
+    rejection_={reason,identity.shape,reference,mesh,pending_.size(),pendingBytes_,recordBytes};
+    rejectedModel_=model;
+    rejectedPlacement_=identity.placement;
   }
-  bool Record(uint64_t identity,const Drawable& d,uint32_t reference=0,uint32_t mesh=0){
+  bool Record(MotionIdentity identity,const Drawable& d,uint32_t reference=0,uint32_t mesh=0,const char* model=""){
     if(!candidate_)return false;
     auto reject=[&](const char* reason){
-      NoteRejection(reason,identity,reference,mesh,d.Bytes());
+      NoteRejection(reason,identity,reference,mesh,d.Bytes(),model);
       consistent_=false;
       return false;
     };
-    if(!identity)return reject("missing-identity");
+    if(!identity.shape)return reject("missing-identity");
     if(!d.geometry)return reject("missing-geometry");
     if(!Finite(d.model))return reject("nonfinite-model");
     for(const auto& row:d.palette)for(float f:row)if(!std::isfinite(f))return reject("nonfinite-palette");
@@ -95,7 +104,7 @@ public:
     if(d.Bytes()>MaxHistoryBytes-pendingBytes_)return reject("byte-limit");
     pendingBytes_+=d.Bytes();pending_.emplace(identity,d);return true;
   }
-  const Drawable* Previous(uint64_t identity,uint64_t geometry)const{
+  const Drawable* Previous(MotionIdentity identity,uint64_t geometry)const{
     const auto it=committed_.find(identity);
     return it==committed_.end()||it->second.geometry!=geometry?nullptr:&it->second;
   }
@@ -103,7 +112,7 @@ public:
   bool Ready()const{return candidate_&&consistent_&&submitted_>=2;}
   bool Active()const{return candidate_;}
   const Frame& CurrentFrame()const{return current_;}
-  const Drawable* Current(uint64_t identity)const{const auto it=pending_.find(identity);return it==pending_.end()?nullptr:&it->second;}
+  const Drawable* Current(MotionIdentity identity)const{const auto it=pending_.find(identity);return it==pending_.end()?nullptr:&it->second;}
   bool CanSynthesize(const std::array<Coverage,2>& coverage)const{return Ready()&&eyes_[0]&&eyes_[1]&&coverage[0].Complete(current_.serial)&&coverage[1].Complete(current_.serial)&&pending_.size()>=std::max(coverage[0].dynamicExpected,coverage[1].dynamicExpected);}
   bool Finish(bool submitted){
     if(!submitted){Reset();return false;}

@@ -65,7 +65,56 @@ void CheckRejectionDiagnostics() {
     history.Reset();
     assert(!history.Record(0,base)&&!history.FirstRejection().reason);
 }
+void CheckSharedPlacements() {
+    History history;
+    constexpr uint64_t owner=0x100000007ULL;
+    const std::array<MotionIdentity,5> keys{{
+        {707,{PlacementKind::Weapon,owner}}, {707,{PlacementKind::Weapon,7}},
+        {707,{PlacementKind::SpareMagazine,owner}}, {707,{PlacementKind::EjectedMagazine,owner}},
+        {708,{PlacementKind::Weapon,owner}}
+    }};
+    for(unsigned frame=1;frame<=3;++frame){
+        assert(history.Begin(Input(frame)));
+        std::array<Coverage,2> coverage{};
+        for(unsigned eye=0;eye<2;++eye){
+            fqmotion::Capture capture;
+            capture.Begin(history);
+            capture.Main();
+            for(size_t n=0;n<keys.size();++n){
+                const bool reverse=(frame+eye)%2==0;
+                const size_t i=reverse?keys.size()-1-n:n;
+                fqmotion::Draw draw;
+                draw.identity=keys[i];
+                draw.mesh=(i==4)?7208:7207;
+                Drawable shape;
+                shape.geometry=keys[i].shape;
+                shape.model[12]=float(i*10+frame);
+                assert(capture.Record(draw,shape)&&capture.Record(draw,shape));
+                if(frame>1){
+                    const auto* prior=history.Previous(draw.identity,shape.geometry);
+                    assert(prior&&prior->model[12]==shape.model[12]-1);
+                }
+            }
+            assert(capture.draws.size()==keys.size());
+            coverage[eye]=capture.Coverage(true);
+            history.EyeRendered(eye);
+        }
+        assert(!history.FirstRejection().reason);
+        assert(history.CanSynthesize(coverage)==(frame==3));
+        assert(history.Finish(true));
+    }
+    // Two different transforms for the *same* placement are still an error.
+    assert(history.Begin(Input(4)));
+    Drawable conflicting;
+    conflicting.geometry=keys[0].shape;
+    assert(history.Record(keys[0],conflicting));
+    ++conflicting.model[12];
+    assert(!history.Record(keys[0],conflicting,0,7207,"mesh.nif"));
+    assert(std::string_view(history.FirstRejection().reason)=="conflicting-model");
+    assert(history.RejectedPlacement().id==owner&&history.RejectedModel()=="mesh.nif");
+}
 int main(){
+ CheckSharedPlacements();
  CheckRejectionDiagnostics();
  Matrix reproject;auto unchanged=fqskin::Identity();unchanged[12]=157.12f;unchanged[13]=-31.88f;assert(ClipReprojection(unchanged,unchanged,reproject)&&reproject==fqskin::Identity());
  Matrix inverse;auto translated=fqskin::Identity();translated[12]=.2f;

@@ -7680,7 +7680,7 @@ bool gQ230DetailedObjectPrevalidated=false;
 bool Q241Hidden(const GpuObject& object);
 GLuint gFo3AppearanceTexture=0;
 uint32_t gFo3AppearanceScreenRef=0;
-void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
+void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false, fqspacewarp::Placement placement = {}) {
     if(object.nonvisualResident||!object.scriptVisible)return;
     if (!gQ230DetailedObjectPrevalidated &&
         Fo3WorldReferenceHidden(object.refFormId)) return;
@@ -7917,13 +7917,13 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                         (object.q2400SwingDoor||object.scriptAnimated)?object.q2400DoorTransform:object.q2017RelativeMatrix;
                     std::copy_n(transform,16,shape.model.begin());
                 }
-                fqmotion::Draw draw;draw.identity=object.motionIdentity;draw.vbo=object.vbo;draw.indexBuffer=object.q236IndexBuffer;
+                fqmotion::Draw draw;draw.identity={object.motionIdentity,placement};draw.vbo=object.vbo;draw.indexBuffer=object.q236IndexBuffer;
                 draw.mesh=object.vao;
                 draw.skinAttributes=object.skinAttributes;draw.paletteTexture=object.skinPalette;draw.diffuse=object.diffuse;
                 draw.count=object.vertexCount;draw.vertices=object.q236Indexed?object.q236UniqueVertices:object.vertexCount;draw.skinMode=object.skinMode;draw.indexed=object.q236Indexed;
                 draw.cull=cull;draw.clockwise=front==GL_CW;draw.decal=object.decalQ1170;draw.alphaTest=object.alphaTest;
                 draw.vertexAlpha=q2025ApplyVertexAlpha;draw.alpha=object.materialAlpha;draw.threshold=object.alphaThreshold;
-                fqmotion::eye.Record(draw,shape,object.refFormId);
+                fqmotion::eye.Record(draw,shape,object.refFormId,object.modelPath.c_str());
             }
         }
     }

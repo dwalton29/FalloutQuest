@@ -43,10 +43,26 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         if(skinned){auto bone=fqskin::Identity();bone[12]=-.1f;fqskin::PaletteRow row;fqskin::Pack(row,bone,fqskin::Identity());prior.palette={row};}
         if(deformed)for(unsigned i=0;i<4;++i){prior.deformedPositions.push_back(quad[i*18]-.2f);prior.deformedPositions.push_back(quad[i*18+1]);prior.deformedPositions.push_back(0);}
         fqspacewarp::Frame f;f.scene=1;f.world=mode%2?0u:0x3cu;f.sceneReady=f.focused=true;f.viewProjection[0][12]=.25f;f.viewProjection[1][12]=-.4f;
-        for(unsigned s=1;s<=2;++s){f.serial=s;f.displayTime=s*10000000;assert(history.Begin(f));assert(history.Record(1,prior));history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));}
+        const fqspacewarp::MotionIdentity first=mode==0
+            ?fqspacewarp::MotionIdentity{1,{fqspacewarp::PlacementKind::Weapon,4}}:fqspacewarp::MotionIdentity{1};
+        const fqspacewarp::MotionIdentity second{1,{fqspacewarp::PlacementKind::Weapon,5}};
+        auto other=prior;
+        other.model[0]=.2f;
+        other.model[12]=-.55f;
+        for(unsigned s=1;s<=2;++s){
+            f.serial=s;f.displayTime=s*10000000;assert(history.Begin(f));
+            if(mode==0)assert(history.Record(second,other));
+            assert(history.Record(first,prior));
+            history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));
+        }
         auto current=prior;current.model[12]=.1f;current.model[13]=.2f;if(skinned)current.palette={identity};if(deformed)for(unsigned i=0;i<4;++i)current.deformedPositions[i*3]+=.2f;
         f.serial=3;f.displayTime=30000000;f.viewProjection={matrix,matrix};assert(history.Begin(f));
-        fqmotion::Capture capture;capture.Begin(history);capture.Main();fqmotion::Draw d;d.identity=1;d.mesh=mode==7?999:20;d.vbo=1;d.vertices=4;d.count=6;d.indexed=true;d.cull=false;d.skinMode=skinned?(mode==6?2:1):0;d.paletteTexture=21;d.alphaTest=cutout;d.diffuse=22;assert(capture.Record(d,current));
+        fqmotion::Capture capture;capture.Begin(history);capture.Main();fqmotion::Draw d;d.identity=first;d.mesh=mode==7?999:20;d.vbo=1;d.vertices=4;d.count=6;d.indexed=true;d.cull=false;d.skinMode=skinned?(mode==6?2:1):0;d.paletteTexture=21;d.alphaTest=cutout;d.diffuse=22;assert(capture.Record(d,current));
+        if(mode==0){
+            d.identity=second;
+            other.model[12]=-.75f;
+            assert(capture.Record(d,other));
+        }
         uint8_t white[4]{255,255,255,uint8_t(cutout?0:255)};assert(fqvk::Texture(22,1,1,white));
         assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye));
         VkClearAttachment clear{};clear.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;clear.clearValue.depthStencil={occluded?.2f:.5f,0};VkClearRect rect{{{0,0},{64,64}},0,1};vkCmdClearAttachments(r.command,1,&clear,1,&rect);
@@ -57,7 +73,7 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
         assert(output[0].next&&output[1].next&&r.finishWaitUs==0);
         assert(coverage[0].Complete(3)==(mode!=7)&&coverage[1].Complete(3)==(mode!=7));
-        assert(r.motionDraws-priorDraws==(mode==7?0u:1u)); // One submission covers both eyes.
+        assert(r.motionDraws-priorDraws==(mode==7?0u:mode==0?2u:1u)); // One submission covers both eyes.
         if(skinned)assert(r.motionUploads-uploads==sizeof(fqskin::PaletteRow));
         if(mode==5||mode==6)assert(r.paletteAllocations==allocations); // Reuse the previous-pose image across frames.
         if(deformed)assert(r.motionUploads-uploads==4*3*sizeof(float));
@@ -65,6 +81,7 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         for(unsigned e=0;e<2;++e){auto& t=r.motionTargets[e];assert(t.motionIndex==motionCycles%2&&t.depthIndex==(motionCycles+1)%3);
             auto pixels=read(motionImages[e][t.motionIndex],false);auto depths=read(depthImages[e][t.depthIndex],true);
             const float camera=e?.4f:-.25f;Near(pixels[0],camera);Near(pixels[1],0);
+            if(mode==0)Near(pixels[(16*32+4)*4],camera-.2f); // Second placement moves left.
             const size_t centre=(16*32+16)*4;Near(pixels[centre],camera+((cutout||occluded||mode==7)?0:.1f+(skinned?.1f:deformed?.2f:0)));Near(pixels[centre+1],cutout||occluded||mode==7?0:-.2f);Near(pixels[centre+2],0);Near(depths[16*32+16],occluded?.2f:.5f);
         }
         ++motionCycles;
