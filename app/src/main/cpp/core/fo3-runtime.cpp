@@ -982,6 +982,9 @@ struct Q230ActorVisual {
     bool renderBoundsReady=false, renderVisible=true;
     std::unordered_map<std::string,Fo3RgbaTexture> generatedTextures;
     std::chrono::steady_clock::time_point animationStart{};
+    bool skinUploadPending=false;
+    unsigned liveBoundsAxes=0;
+    std::array<float,3> liveMin{},liveMax{};
     uint64_t lastFrame = UINT64_MAX;
     uint64_t profiledAnimationFrame=UINT64_MAX;
 };
@@ -13506,7 +13509,7 @@ void QActorPrepareStereoFrame() {
             fqperf::capture.current.visible+=actor.renderVisible;
             fqperf::capture.current.combat+=actor.runtime.activity==fo3npc::Activity::Combat;
         }
-        if(actor.renderVisible) Q230UpdateActor(actor);
+        if(actor.renderVisible) Q230PrepareVisibleActor(actor);
     }
     gPlayerSneakIndicator=fo3sneak::Indicator::Hidden;
     for(const auto& actor:gQ230NpcActors)if(!actor.runtime.offScene&&actor.runtime.Alive())gPlayerSneakIndicator=fo3sneak::Strongest(gPlayerSneakIndicator,actor.playerDetection.Hud());

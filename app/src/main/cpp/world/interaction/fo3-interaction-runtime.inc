@@ -131,8 +131,8 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         if(actor.source.fullName.empty())continue;
         const bool corpse=player.ActorHealth(actor.source.refFormId)==0&&player.CanLootContainer(actor.source.refFormId);
         if(player.ActorHealth(actor.source.refFormId)<=0&&!corpse)continue;
-        std::array<float,3> lo,hi;float distance=0;
-        if(Q230LiveBounds(actor,lo,hi)&&fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,fo3npc::DialoguePolicy::TalkRange,distance)&&distance<best&&(corpse||DialogueCanStart(actor))) {
+        float distance=0;
+        if(Q230PointerHitsActor(actor,{ox,oy,oz},{dx,dy,dz},std::min(best,fo3npc::DialoguePolicy::TalkRange),distance)&&distance<best&&(corpse||DialogueCanStart(actor))) {
             best=distance;target={};target.reference=actor.source.refFormId;target.talk=!corpse;target.container=corpse;target.allowed=true;
             target.anchor={ox+dx*distance,oy+dy*distance+.22f,oz+dz*distance};
             std::snprintf(target.prompt.data(),target.prompt.size(),corpse?"%s":"Talk %s",actor.source.fullName.c_str());

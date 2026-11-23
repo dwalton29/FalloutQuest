@@ -25,7 +25,8 @@ enum Metric : unsigned {
     Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Scripts,Motion,Interaction,NpcGround,NpcPortal,NpcObstruction,NpcCrowd,NpcArrivalPart,
     VrInteractionUpdate,PlayerRigUpdate,VatsUpdate,MenuUpdate,PipboyUpdate,DialogueUpdate,
     WeaponUpdate,RigidWorldUpdate,RigidSync,RigidStep,RagdollUpdate,LooseGrab,UnarmedUpdate,ScriptSounds,
-    ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,UploadFenceWait,Count
+    ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,UploadFenceWait,
+    NpcPointerBounds,PlayerPlanar,PlayerGravity,PlayerStance,RigidFullRefresh,RigidPartialRefresh,RigidTerrainSync,CollisionSnapshotPublish,Count
 };
 inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","gameplayUs",
     "streamingUs","actorPrepUs","npcSimulationUs","npcPackagesUs","npcPersistenceUs",
@@ -37,7 +38,9 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "npcGroundUs","npcPortalUs","npcObstructionUs","npcCrowdUs","npcArrivalPartUs",
     "vrInteractionUpdateUs","playerRigUpdateUs","vatsUpdateUs","menuUpdateUs","pipboyUpdateUs","dialogueUpdateUs",
     "weaponUpdateUs","rigidWorldUpdateUs","rigidSyncUs","rigidStepUs","ragdollUpdateUs","looseGrabUs",
-    "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs","vkUploadFenceWaitUs"};
+    "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs","vkUploadFenceWaitUs",
+    "npcPointerBoundsUs","playerPlanarUs","playerGravityUs","playerStanceUs",
+    "rigidFullRefreshUs","rigidPartialRefreshUs","rigidTerrainSyncUs","collisionSnapshotPublishUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
 enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
     GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,

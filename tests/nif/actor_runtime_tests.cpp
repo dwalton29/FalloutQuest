@@ -1,5 +1,6 @@
 #define FO3_NPC_SLEEP_HOST_TEST 1
 #include "npc/fo3-ragdoll-pose.h"
+#include "world/interaction/fo3-interaction-ray.h"
 #include "../../app/src/main/cpp/rendering/actor-skinning.h"
 #include <memory>
 #include <fstream>
@@ -98,7 +99,10 @@ struct Q230ActorVisual {
   bool renderBoundsReady=false,renderVisible=true;
   std::unordered_map<std::string, Fo3RgbaTexture> generatedTextures;
   std::chrono::steady_clock::time_point animationStart{};
-  uint64_t lastFrame = UINT64_MAX;
+  bool skinUploadPending=false;
+    unsigned liveBoundsAxes=0;
+    std::array<float,3> liveMin{},liveMax{};
+    uint64_t lastFrame = UINT64_MAX;
 };
 std::vector<Q230ActorVisual> gQ230NpcActors;
 uint64_t gStereoFrame = 1;
@@ -387,24 +391,73 @@ int main(int argc,char** argv) {
   part.tangentsGame = {{1, 0, 0}};
   part.bitangentsGame = {{0, 1, 0}};
   assert(Q230UploadActorPart(actor, part, 20, 30, 40));
-  Q230UpdateActor(actor);
+  float pointerDistance=0;
+  assert(!Q230PointerHitsActor(actor,{100,0,0},{0,0,1},3,pointerDistance));
+  assert(actor.liveBoundsAxes==1 && uploads==0);
+  std::array<float,3> lower{},upper{};
+  assert(Q230LiveBounds(actor,lower,upper) && uploads==0);
+  {
+    // Exercise a non-degenerate box under rotation, reflection and shear.
+    auto tilted=actor;
+    auto& rig=tilted.rigs.front();
+    rig.interactionBounds.assign(1,{{-2,-3,-4},{1,5,6}});
+    auto& m=rig.skin.palette[0];
+    m[0]=-.5f;m[4]=.75f;m[8]=2;m[1]=0;m[5]=-1;m[9]=.5f;
+    m[2]=1.5f;m[6]=0;m[10]=-1.25f;
+    tilted.liveBoundsAxes=0;
+    std::array<float,3> actualLo{},actualHi{},wantedLo{INFINITY,INFINITY,INFINITY},wantedHi{-INFINITY,-INFINITY,-INFINITY};
+    assert(Q230LiveBounds(tilted,actualLo,actualHi));
+    for(unsigned corner=0;corner<8;++corner){
+      std::array<float,3> p;
+      for(unsigned axis=0;axis<3;++axis)p[axis]=(corner&(1u<<axis))?rig.interactionBounds[0].second[axis]:rig.interactionBounds[0].first[axis];
+      auto world=fqskin::Transform(m.data(),p.data(),false);
+      for(unsigned axis=0;axis<3;++axis){
+        wantedLo[axis]=std::min(wantedLo[axis],world[axis]);
+        wantedHi[axis]=std::max(wantedHi[axis],world[axis]);
+      }
+    }
+    assert(actualLo==wantedLo && actualHi==wantedHi);
+  }
+  auto rayOrigin=lower;
+  rayOrigin[2]-=1;
+  assert(Q230PointerHitsActor(actor,rayOrigin,{0,0,1},3,pointerDistance));
+  assert(std::fabs(pointerDistance-1)<1e-5f);
+  Q230PrepareVisibleActor(actor);
   assert(uploads == 1);
   for (size_t i = 0; i < 3; ++i) {
     assert(std::fabs(recorded[i * 18] - 0.02f) < 1e-5f);
     assert(std::fabs(recorded[i * 18 + 1] - 0.1f) < 1e-5f);
     assert(recorded[i * 18 + 12] == 0.25f);
   }
-  Q230UpdateActor(actor);
+  Q230PrepareVisibleActor(actor);
   assert(uploads == 1);
   ++gStereoFrame;
-  Q230UpdateActor(actor);
+  Q230PrepareVisibleActor(actor);
   assert(uploads == 2);
+  // Same-frame MoveTo invalidation must replace cached bounds immediately.
+  const float initialX=actor.runtime.position[0];
+  actor.runtime.position[0]+=8;
+  actor.lastFrame=UINT64_MAX;
+  assert(!Q230PointerHitsActor(actor,rayOrigin,{0,0,1},3,pointerDistance));
+  assert(actor.liveBoundsAxes==1 && uploads==2);
+  actor.runtime.position[0]=initialX;
+  actor.lastFrame=UINT64_MAX;
+  assert(Q230PointerHitsActor(actor,rayOrigin,{0,0,1},3,pointerDistance));
+  assert(uploads==2);
+  // The restored CPU pose is pending, even if the corpse settles next frame.
+  Q230PrepareVisibleActor(actor);
+  assert(uploads==3);
   auto sleeping=std::make_shared<fo3player::CorpsePose>();sleeping->sleeping=true;actor.ragdollStarted=true;actor.corpsePose=sleeping;
-  for(int frame=0;frame<180;++frame){++gStereoFrame;Q230UpdateActor(actor);assert(uploads==2);}
+  for(int frame=0;frame<180;++frame){++gStereoFrame;Q230PrepareVisibleActor(actor);assert(uploads==3);}
   // A dirty appearance/transform still gets one palette publication.
-  actor.lastFrame=UINT64_MAX;++gStereoFrame;Q230UpdateActor(actor);assert(uploads==3);
-  for(int frame=0;frame<30;++frame){++gStereoFrame;Q230UpdateActor(actor);assert(uploads==3);}
-  sleeping=std::make_shared<fo3player::CorpsePose>();actor.corpsePose=sleeping;actor.lastFrame=UINT64_MAX;++gStereoFrame;Q230UpdateActor(actor);assert(uploads==4);
+  actor.lastFrame=UINT64_MAX;++gStereoFrame;
+  Q230UpdateActor(actor);
+  assert(actor.liveBoundsAxes==0 && uploads==3);
+  ++gStereoFrame; // Sleeping off-screen, then visible with its pending pose.
+  Q230PrepareVisibleActor(actor);
+  assert(uploads==4);
+  for(int frame=0;frame<30;++frame){++gStereoFrame;Q230PrepareVisibleActor(actor);assert(uploads==4);}
+  sleeping=std::make_shared<fo3player::CorpsePose>();actor.corpsePose=sleeping;actor.lastFrame=UINT64_MAX;++gStereoFrame;Q230PrepareVisibleActor(actor);assert(uploads==5);
   actor.ragdollStarted=false;actor.corpsePose.reset();
 
   // A rigid mouth/eye follows the same head deformation and captured origin.
@@ -413,7 +466,7 @@ int main(int argc,char** argv) {
   actor.source.raceHeadModels = {"mouth.nif"};
   assert(Q230UploadActorPart(actor, part, 10, 30, 40));
   ++gStereoFrame;
-  Q230UpdateActor(actor);
+  Q230PrepareVisibleActor(actor);
   assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
   // Worn rigid headgear is animated through the same production head path.
   Fo3NpcVisualItemQ230 hat;
@@ -424,7 +477,7 @@ int main(int argc,char** argv) {
   assert(Q230UploadActorPart(actor, part, 10, 30, 40));
   assert(actor.rigs.back().rigidBone == 0);
   ++gStereoFrame;
-  Q230UpdateActor(actor);
+  Q230PrepareVisibleActor(actor);
   assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
   std::array<float,3> lo{},hi{},anchor{};
   assert(Q230LiveBounds(actor,lo,hi));
@@ -433,7 +486,7 @@ int main(int argc,char** argv) {
   assert(Q230LiveBone(actor,0,anchor));
   const auto oldAnchor=anchor;
   actor.runtime.BeginDialogue();actor.runtime.Face(actor.runtime.yaw+1.5f,.1f);
-  ++gStereoFrame;Q230UpdateActor(actor);
+  ++gStereoFrame;Q230PrepareVisibleActor(actor);
   assert(Q230LiveBounds(actor,lo,hi)&&Q230LiveBone(actor,0,anchor));
   assert(std::isfinite(anchor[0])&&std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.authoredYaw))<.12f);
   assert(!Q230LiveBone(actor,-1,anchor));
@@ -536,7 +589,7 @@ int main(int argc,char** argv) {
     assert(Q230UploadActorPart(creature,part,0,0,0));
   }
   assert(originalTriangles>0&&!creature.rigs.empty()&&!creature.objects.empty());
-  ++gStereoFrame;Q230UpdateActor(creature);
+  ++gStereoFrame;Q230PrepareVisibleActor(creature);
   assert(!recorded.empty());for(float value:recorded)assert(std::isfinite(value));
   std::array<float,3> clo{},chi{};assert(Q230LiveBounds(creature,clo,chi));
   for(size_t i=0;i<3;++i)assert(chi[i]>=clo[i]&&chi[i]-clo[i]<10);

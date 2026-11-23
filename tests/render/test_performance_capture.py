@@ -57,6 +57,8 @@ class CaptureTests(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             summary.diagnostic_summary(sample)
+        self.assertIn('Slowest player movement: frame', out.getvalue())
+        self.assertIn('rigidFullRefreshUs: 0.000 ms, 0 calls', out.getvalue())
         self.assertIn('1/2 gameplay frames', out.getvalue())
         self.assertIn('object 4294967297, ref 00001234, mesh 7', out.getvalue())
         self.assertEqual(float(rows[0]['gpuEyesUs']), 250)

@@ -107,7 +107,10 @@ struct ActorTarget {
   bool eligible=true;
 };
 std::vector<ActorTarget> gQ230NpcActors;
-bool Q230LiveBounds(const ActorTarget& actor,std::array<float,3>& lo,std::array<float,3>& hi){lo=actor.lo;hi=actor.hi;return true;}
+bool Q230PointerHitsActor(const ActorTarget& actor,const fo3interaction::Point& origin,
+                         const fo3interaction::Point& direction,float limit,float& distance) {
+  return fo3interaction::Box(origin,direction,actor.lo,actor.hi,limit,distance);
+}
 bool DialogueCanStart(ActorTarget& actor){return actor.eligible;}
 bool StartFo3Dialogue(uint32_t actor){talked=actor;dialogueFocus=true;return true;}
 bool lockpickFocus=false,lockpickLatch=false;

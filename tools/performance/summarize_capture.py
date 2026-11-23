@@ -70,6 +70,13 @@ def diagnostic_summary(rows):
         print(f'{key} | {statistics.median(values)/1000:.3f} | {p95/1000:.3f} | '
               f'{max(values)/1000:.3f} | {statistics.mean(calls) if calls and max(calls) else "unavailable"} | '
               f'{longest/1000 if longest >= 0 else "unavailable"}')
+    if 'rigidFullRefreshUs' in rows[0]:
+        movement = max(selected, key=lambda r: float(r['playerMotionUs']))
+        print(f"Slowest player movement: frame {movement['serial']}, "
+              f"{float(movement['playerMotionUs'])/1000:.3f} ms. Frame-wide breakdown (inclusive):")
+        for key in ('playerStanceUs', 'playerPlanarUs', 'playerGravityUs', 'rigidFullRefreshUs',
+                    'rigidPartialRefreshUs', 'rigidTerrainSyncUs', 'collisionSnapshotPublishUs'):
+            print(f"  {key}: {float(movement[key])/1000:.3f} ms, {movement[key+'Calls']} calls")
     if 'motionRejectReason' in rows[0]:
         rejected = [r for r in selected if r['motionRejectReason'] != 'none']
         print(f'SpaceWarp history rejected records on {len(rejected)}/{len(selected)} gameplay frames.')

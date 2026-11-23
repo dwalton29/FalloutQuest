@@ -472,7 +472,8 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))return false;
     gpu.q230NpcActor=true;gpu.physicalWeapon=true;
     actor.combatWeapons.at(part.placement.baseFormId).gpu.push_back(actor.objects.size());
-    actor.objects.push_back(std::move(gpu));return true;
+    actor.liveBoundsAxes=0;
+  actor.objects.push_back(std::move(gpu));return true;
   }
 #endif
   Q230RigPart rig;
@@ -785,9 +786,6 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   fqactor::npc.clip+=timings.clipUs;fqactor::npc.pose+=timings.skeletonUs;
   for(auto& rig:actor.rigs) {
     const auto started=fqopaque::Clock::now();
-#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-    Q230UpdateFacialPart(actor,rig);
-#endif
     { FQ_PERF_SCOPE(Palette);
     fqskin::Pack(rig.skin.palette[0],actor.dialogueRoot,actor.dialogueRoot);
     // Q229: the root/scene transform is invariant for all bones in this rig.
@@ -805,22 +803,71 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     }
     }
     fqactor::npc.bones+=fqopaque::Micros(started);
-    { FQ_PERF_SCOPE(Upload);QActorUploadSkin(actor.objects[rig.gpuIndex],rig.skin,fqactor::npc,false); }
   }
+  actor.liveBoundsAxes=0;
+  actor.skinUploadPending=true;
+}
+
+// A gameplay query needs the posed bones. GPU skin and facial data are
+// published once the actor is admitted to the stereo render list.
+void Q230PrepareVisibleActor(Q230ActorVisual& actor) {
+  Q230UpdateActor(actor);
+  if(!actor.skinUploadPending)return;
+  FQ_PERF_SCOPE(Animation);
+  for(auto& rig:actor.rigs) {
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+    Q230UpdateFacialPart(actor,rig);
+#endif
+    FQ_PERF_SCOPE(Upload);
+    QActorUploadSkin(actor.objects[rig.gpuIndex],rig.skin,fqactor::npc,false);
+  }
+  actor.skinUploadPending=false;
+}
+
+// Each axis extremum is attained at the corner selected by the signs
+// of that matrix row. Reuse the interval until the CPU pose changes.
+void Q230LiveBoundsAxis(Q230ActorVisual& actor,unsigned axis) {
+  const unsigned bit=1u<<axis;
+  if(actor.liveBoundsAxes&bit)return;
+  float lo=INFINITY,hi=-INFINITY;
+  for(const auto& rig:actor.rigs)for(size_t slot=0;slot<rig.interactionBounds.size();++slot) {
+    const auto& [lower,upper]=rig.interactionBounds[slot];
+    if(!std::isfinite(lower[0]))continue;
+    const auto* m=rig.skin.palette[slot].data()+axis;
+    const float x0=m[0]*lower[0],x1=m[0]*upper[0];
+    const float y0=m[4]*lower[1],y1=m[4]*upper[1];
+    const float z0=m[8]*lower[2],z1=m[8]*upper[2];
+    lo=std::min(lo,std::min(x0,x1)+std::min(y0,y1)+std::min(z0,z1)+m[12]);
+    hi=std::max(hi,std::max(x0,x1)+std::max(y0,y1)+std::max(z0,z1)+m[12]);
+  }
+  actor.liveMin[axis]=lo;
+  actor.liveMax[axis]=hi;
+  actor.liveBoundsAxes|=bit;
 }
 
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi) {
   if(actor.runtime.offScene)return false;
-  Q230UpdateActor(actor);lo={INFINITY,INFINITY,INFINITY};hi={-INFINITY,-INFINITY,-INFINITY};
-  for(const auto& rig:actor.rigs)for(size_t slot=0;slot<rig.interactionBounds.size();++slot) {
-    const auto& b=rig.interactionBounds[slot];if(!std::isfinite(b.first[0]))continue;
-    for(int corner=0;corner<8;++corner) {
-      const std::array<float,3> p{corner&1?b.second[0]:b.first[0],corner&2?b.second[1]:b.first[1],corner&4?b.second[2]:b.first[2]};
-      const auto point=fqskin::Transform(rig.skin.palette[slot].data(),p.data(),false);
-      for(size_t c=0;c<3;++c){lo[c]=std::min(lo[c],point[c]);hi[c]=std::max(hi[c],point[c]);}
-    }
-  }
+  Q230UpdateActor(actor);
+  for(unsigned axis=0;axis<3;++axis)Q230LiveBoundsAxis(actor,axis);
+  lo=actor.liveMin;hi=actor.liveMax;
   return std::isfinite(lo[0]);
+}
+
+bool Q230PointerHitsActor(Q230ActorVisual& actor,const fo3interaction::Point& origin,
+                         const fo3interaction::Point& direction,float limit,float& distance) {
+  if(actor.runtime.offScene)return false;
+  FQ_PERF_SCOPE(NpcPointerBounds);
+  Q230UpdateActor(actor);
+  float entry=0,exit=limit;
+  // Most distant residents miss a horizontal slab. Compute the remaining
+  // intervals only for candidates still within reach along the ray.
+  for(unsigned axis:{0u,2u,1u}) {
+    Q230LiveBoundsAxis(actor,axis);
+    if(!fo3interaction::ClipBoxAxis(origin[axis],direction[axis],actor.liveMin[axis],
+                                    actor.liveMax[axis],entry,exit))return false;
+  }
+  distance=entry;
+  return exit>=0 && entry<=limit;
 }
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
