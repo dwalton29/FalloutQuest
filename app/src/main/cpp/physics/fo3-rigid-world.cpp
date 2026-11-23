@@ -61,9 +61,8 @@ struct World::Impl {
     float accumulated=0;
     std::vector<std::pair<Entry*,btTransform>> previous;
     Impl() {
-        // Active bodies update each tick. Static() sets the bounds for scenery
-        // once, since its mesh and transform stay fixed until replacement.
-        world.setForceUpdateAllAabbs(false);
+        // Keep Bullet's contact-expanded broadphase bounds for thin walls.
+        // The scenery filter below prunes fixed/fixed pairs independently.
         world.setGravity({0,-9.80665f,0});
         world.getSolverInfo().m_numIterations=20;
         world.getSolverInfo().m_splitImpulse=true;
@@ -225,9 +224,6 @@ void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     // Scenery is immutable until removed or replaced. Only loose objects (2)
     // and ragdolls / capsule sweeps (4) need to collide with it.
     impl->world.addRigidBody(e.body.get(),1,2|4);
-    // addRigidBody inserts the raw shape bounds. Publish Bullet's usual
-    // contact-expanded bounds immediately, including for thin walls.
-    impl->world.updateSingleAabb(e.body.get());
     impl->statics.emplace(id,std::move(e));
     // Newly published/moving support must wake resting nearby bodies.
     btVector3 lo,hi;impl->statics.at(id).body->getAabb(lo,hi);impl->WakeBounds(lo,hi);

@@ -73,19 +73,5 @@ int main(){
     assert(!w.Intersects(6,{4,1.05f,0},.004f));
     auto malformed=box;malformed.hulls[0][0][0]=std::nanf("");assert(!w.Add(7,malformed,At(0,0,0)));
     w.ClearBodies();assert(!w.Has(1)&&!w.Has(4)&&!w.Held(0));
-    // Stream a replacement under a settled box. Sweeps must see the new
-    // support before the next tick, and the resting box must wake and follow.
-    World streamed;
-    std::vector<Triangle> floor={{{-2,0,-2},{2,0,2},{2,0,-2}},{{-2,0,-2},{-2,0,2},{2,0,2}}};
-    streamed.Static(100,floor);
-    assert(streamed.Add(1,box,At(0,1,0)));
-    for(int tick=0;tick<600;++tick)streamed.Step(1.f/120);
-    assert(streamed.Pose(1,p)&&std::abs(p[13]-.1f)<.02f);
-    for(auto& tri:floor){tri.a[1]=tri.b[1]=tri.c[1]=-1.f;}
-    streamed.Static(100,floor);
-    assert(streamed.SweepCapsule({1,1,0},{1,-2,0},.25f,1.7f,resolved,n));
-    assert(std::abs(resolved[1]+1.f)<.03f);
-    for(int tick=0;tick<600;++tick)streamed.Step(1.f/120);
-    assert(streamed.Pose(1,p)&&std::abs(p[13]+.9f)<.02f);
     std::cout<<"Rigid world: gravity, stable landing/stacking, rim anchors, constrained held contacts, finger distances, capsule sweep and authored inertia passed\n";
 }

@@ -3,7 +3,28 @@
 // is supplied by this test; it does not claim headset/compositor validation.
 #include "rendering/gl-state-cache.h"
 #include "vulkan_density_driver.h"
+namespace {
+unsigned pipelineBinds=0,viewportSets=0,scissorSets=0;
+void CountBindPipeline(VkCommandBuffer cmd,VkPipelineBindPoint point,VkPipeline pipeline){
+    ++pipelineBinds;
+    vkCmdBindPipeline(cmd,point,pipeline);
+}
+void CountSetViewport(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkViewport* viewports){
+    ++viewportSets;
+    vkCmdSetViewport(cmd,first,count,viewports);
+}
+void CountSetScissor(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkRect2D* scissors){
+    ++scissorSets;
+    vkCmdSetScissor(cmd,first,count,scissors);
+}
+}
+#define vkCmdBindPipeline CountBindPipeline
+#define vkCmdSetViewport CountSetViewport
+#define vkCmdSetScissor CountSetScissor
 #include "rendering/vulkan/fo3-vulkan-renderer.cpp"
+#undef vkCmdBindPipeline
+#undef vkCmdSetViewport
+#undef vkCmdSetScissor
 #undef vkCreateRenderPass
 #undef vkCreateFramebuffer
 #undef vkDestroyRenderPass
@@ -596,8 +617,14 @@ void HeadlessSceneSubmission() {
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
     glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
     assert(fqvk::renderer->pending.size()==1&&fqvk::renderer->draws==0);
+    for(int i=1;i<64;++i)glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
     // Mutating live uniforms and CPU state after queueing cannot alter the draw.
     scalar("uMaterialAlpha",0);glDisable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,0);
+    pipelineBinds=viewportSets=scissorSets=0;
+    const auto hits=fqvk::renderer->descriptorHits;
+    fqvk::renderer->DrainDraws();
+    assert(fqvk::renderer->draws==64&&fqvk::renderer->descriptorHits>=hits+63);
+    assert(pipelineBinds==1&&viewportSets==1&&scissorSets==1);
     fqvk::EndWorldProbe();assert(fqvk::renderer->pending.empty());
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,1,32,32,0),1);

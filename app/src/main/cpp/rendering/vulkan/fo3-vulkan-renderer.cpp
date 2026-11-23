@@ -230,6 +230,7 @@ public:
         return hash;
     }};
     std::unordered_map<DescriptorKey,VkDescriptorSet,DescriptorHash> descriptorCache;
+    DescriptorKey descriptorLookup;
     static constexpr uint32_t DescriptorCapacity=16384,FrameDescriptorReserve=8192;
     uint64_t descriptorAllocations=0,descriptorHits=0,descriptorResets=0;
     uint64_t viewRevision=0,descriptorRevision=0;
@@ -242,7 +243,14 @@ public:
         }
     }
     VkDescriptorSet Descriptor(int kind,uint32_t uniformBytes,const std::vector<VkDescriptorImageInfo>& images) {
-        DescriptorKey key{kind,uniformBytes,images};
+        descriptorLookup.images=images;
+        return Descriptor(kind,uniformBytes);
+    }
+    VkDescriptorSet Descriptor(int kind,uint32_t uniformBytes) {
+        descriptorLookup.kind=kind;
+        descriptorLookup.uniformBytes=uniformBytes;
+        const auto& key=descriptorLookup;
+        const auto& images=key.images;
         const auto cached=descriptorCache.find(key);
         if(cached!=descriptorCache.end()){++descriptorHits;return cached->second;}
         VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
@@ -253,7 +261,7 @@ public:
             w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             if(i<2)w.pBufferInfo=&buffers[i];else w.pImageInfo=&images[i-2];}
         vkUpdateDescriptorSets(device,uint32_t(writes.size()),writes.data(),0,nullptr);
-        descriptorCache.emplace(std::move(key),set);++descriptorAllocations;return set;
+        descriptorCache.emplace(key,set);++descriptorAllocations;return set;
     }
     struct FrameSample {
         uint64_t captureId=0,captureFrame=0;
@@ -958,10 +966,11 @@ public:
         if(passTiming)queueCpuUs+=NowUs()-started;
     }
     void DrainDraws() {
-        for(const auto& item:pending)Draw(item);
+        VkPipeline boundPipeline=VK_NULL_HANDLE;
+        for(const auto& item:pending)Draw(item,boundPipeline);
         pending.clear();
     }
-    void Draw(const PendingDraw& item) {
+    void Draw(const PendingDraw& item,VkPipeline& boundPipeline) {
         const auto& draw=item.command;
         const auto program=draw.program,vao=draw.mesh,mode=draw.topology,type=draw.indexType;
         const auto first=draw.first,count=draw.count,instances=draw.instances;const auto offset=draw.indexOffset;
@@ -985,8 +994,13 @@ public:
         const auto drawStarted=passTiming?NowUs():0;
         const auto& s=draw.state;
         if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
-        if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady)))FullRateScene();
-        else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone)ResumeSidecar();
+        if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady))){
+            FullRateScene();
+            boundPipeline=VK_NULL_HANDLE;
+        }else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone){
+            ResumeSidecar();
+            boundPipeline=VK_NULL_HANDLE;
+        }
         PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.fused=fused;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.split=sidecarPass&&!offscreen&&!postDone;key.foveated=densityActive&&!offscreen&&!postDone;
         if(!genericShaders&&(kind<2||p.fused)){
@@ -1021,7 +1035,8 @@ public:
         if(fused&&!offscreen&&!postDone&&p.roundOffset!=UINT32_MAX){
             const int mode=1;std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor+p.roundOffset,&mode,4);
         }
-        std::vector<VkDescriptorImageInfo> imageInfo(shaders::programs[kind].samplerCount);
+        auto& imageInfo=descriptorLookup.images;
+        imageInfo.resize(shaders::programs[kind].samplerCount);
         const auto* samplerMeta=shaders::programs[kind].samplers;
         for(size_t i=0;i<imageInfo.size();++i){
             VkImageView view=samplerMeta[i].cube?cube.view:white.view;
@@ -1043,13 +1058,23 @@ public:
             }
             imageInfo[i]={chosenSampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        const auto set=Descriptor(kind,uint32_t(uniformBytes),imageInfo);
+        const auto set=Descriptor(kind,uint32_t(uniformBytes));
         const uint32_t dynamic=uint32_t(cursor);cursor+=uniformBytes;
         const VkDeviceSize instanceOffset=cursor;
         if(key.instanced){std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,draw.transforms.data(),instanceBytes);cursor+=instanceBytes;}
-        const VkViewport viewport{0,0,float(targetWidth),float(targetHeight),0,1};const VkRect2D scissor{{0,0},{targetWidth,targetHeight}};
-        vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
-        vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,Pipeline(key));
+        // Every scene pipeline uses dynamic viewport and scissor. Target size
+        // is constant within a pass, and a new drain starts with unknown state.
+        if(!boundPipeline){
+            const VkViewport viewport{0,0,float(targetWidth),float(targetHeight),0,1};
+            const VkRect2D scissor{{0,0},{targetWidth,targetHeight}};
+            vkCmdSetViewport(command,0,1,&viewport);
+            vkCmdSetScissor(command,0,1,&scissor);
+        }
+        const VkPipeline pipeline=Pipeline(key);
+        if(boundPipeline!=pipeline){
+            vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
+            boundPipeline=pipeline;
+        }
         vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[kind],0,1,&set,1,&dynamic);
         if(key.offset)vkCmdSetDepthBias(command,s.offsetUnits,0,s.offsetFactor);
         const VkDeviceSize zero=0;vkCmdBindVertexBuffers(command,0,1,&m.vertices.buffer,&zero);
