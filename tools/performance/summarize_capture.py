@@ -70,6 +70,16 @@ def diagnostic_summary(rows):
         print(f'{key} | {statistics.median(values)/1000:.3f} | {p95/1000:.3f} | '
               f'{max(values)/1000:.3f} | {statistics.mean(calls) if calls and max(calls) else "unavailable"} | '
               f'{longest/1000 if longest >= 0 else "unavailable"}')
+    if 'motionRejectReason' in rows[0]:
+        rejected = [r for r in selected if r['motionRejectReason'] != 'none']
+        print(f'SpaceWarp history rejected records on {len(rejected)}/{len(selected)} gameplay frames.')
+        counts = Counter(r['motionRejectReason'] for r in rejected)
+        for reason, count in counts.most_common():
+            first = next(r for r in rejected if r['motionRejectReason'] == reason)
+            print(f'  {reason} on {count} frames. First example: object {first["motionRejectObject"]}, '
+                  f'ref {int(first["motionRejectRef"]):08X}, mesh {first["motionRejectMesh"]}, '
+                  f'{first["motionRejectObjects"]} objects, {first["motionRejectUsedBytes"]} bytes in use, '
+                  f'{first["motionRejectRecordBytes"]} bytes for this record.')
     if 'paletteStagingPages' in rows[0]:
         copies = sum(int(r['paletteStagedCopies']) for r in selected)
         pages = sum(int(r['paletteStagingPages']) for r in selected)

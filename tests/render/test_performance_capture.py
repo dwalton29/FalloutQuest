@@ -48,6 +48,17 @@ class CaptureTests(unittest.TestCase):
             rows = list(reader)
         self.assertEqual(len(rows), 4096)
         self.assertNotIn(None, rows[0])
+        fields = ('motionRejectReason', 'motionRejectObject', 'motionRejectRef', 'motionRejectMesh',
+                  'motionRejectObjects', 'motionRejectUsedBytes', 'motionRejectRecordBytes')
+        self.assertEqual([rows[0][key] for key in fields],
+                         ['byte-limit', '4294967297', '4660', '7', '12', '8000000', '400000'])
+        self.assertEqual([rows[1][key] for key in fields], ['none'] + ['0'] * 6)
+        sample = [dict(r, focused='1', submitted='1') for r in rows[:2]]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            summary.diagnostic_summary(sample)
+        self.assertIn('1/2 gameplay frames', out.getvalue())
+        self.assertIn('object 4294967297, ref 00001234, mesh 7', out.getvalue())
         self.assertEqual(float(rows[0]['gpuEyesUs']), 250)
         self.assertEqual(float(rows[0]['gpuEye0Us']), 100)
         self.assertEqual(float(rows[0]['gpu0_terrainUs']), 150)

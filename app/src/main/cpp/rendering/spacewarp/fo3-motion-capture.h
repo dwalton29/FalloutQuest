@@ -26,11 +26,14 @@ struct Capture {
         if(separatedComposition)reason&=~uint32_t(Transparency|Water|Ui);
         if(history)reasons|=reason;
     }
-    bool Record(const Draw& draw,const fqspacewarp::Drawable& shape){
+    bool Record(const Draw& draw,const fqspacewarp::Drawable& shape,uint32_t reference=0){
         if(!collecting||!history)return false;
-        if(!history->Record(draw.identity,shape)){Block(Capacity);return false;}
+        if(!history->Record(draw.identity,shape,reference,draw.mesh)){Block(Capacity);return false;}
         if(!identities.insert(draw.identity).second)return true;
-        if(draws.size()>=fqspacewarp::History::MaxDrawables){Block(Capacity);return false;}
+        if(draws.size()>=fqspacewarp::History::MaxDrawables){
+            history->NoteRejection("draw-list-limit",draw.identity,reference,draw.mesh,shape.Bytes());
+            Block(Capacity);return false;
+        }
         draws.push_back(draw);
         const auto* previous=history->Previous(draw.identity,shape.geometry);
         if(!previous)Block(MissingHistory);

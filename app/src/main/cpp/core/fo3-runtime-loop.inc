@@ -2572,6 +2572,17 @@ private:
             FQ_LOGE("FQ SPACEWARP synthesis disabled after failed submission; restart required to retry");
         }
         if(spacewarp_.Requested()){
+            const auto& rejection=spacewarpHistory_.FirstRejection();
+            if(spacewarpHistory_.Active()&&rejection.reason){
+                if(fqperf::capture.recording)fqperf::capture.current.motionRejection=rejection;
+                if(!lastHistoryRejectLog_||spacewarpSerial_-lastHistoryRejectLog_>=180){
+                    lastHistoryRejectLog_=spacewarpSerial_;
+                    FQ_LOGI("FQ SPACEWARP history rejection frame=%llu reason=%s object=%llu ref=%08X mesh=%u objects=%zu/%zu usedBytes=%zu/%zu recordBytes=%zu",
+                        (unsigned long long)spacewarpSerial_,rejection.reason,(unsigned long long)rejection.identity,
+                        rejection.reference,rejection.mesh,rejection.objects,fqspacewarp::History::MaxDrawables,
+                        rejection.usedBytes,fqspacewarp::History::MaxHistoryBytes,rejection.recordBytes);
+                }
+            }
             if(spacewarpProducerReady_)spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount>=1);
             else spacewarpHistory_.Reset();
             if(spacewarpProducerReady_&&(spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X cell=%08X trackingScale=%.3f history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d nativeEffectsLayer=%d layers=%u periodUs=%lld",
@@ -3145,7 +3156,7 @@ private:
     float displayRefreshRate_=0;
     fqspacewarp::Session spacewarp_;
     fqspacewarp::History spacewarpHistory_;
-    uint64_t spacewarpSerial_=0;
+    uint64_t spacewarpSerial_=0,lastHistoryRejectLog_=0;
     fqmotion::Gles spacewarpGles_;
     bool spacewarpProducerReady_=false;
     bool spacewarpVisualize_=false;

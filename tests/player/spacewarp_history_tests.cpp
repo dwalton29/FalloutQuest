@@ -4,10 +4,69 @@
 #include "rendering/spacewarp/fo3-motion-capture.h"
 #include "rendering/spacewarp/fo3-mode.h"
 #include <iostream>
+#include <limits>
+#include <string_view>
 using namespace fqspacewarp;
 Frame Input(uint64_t serial){Frame f;f.serial=serial;f.displayTime=int64_t(serial)*13888889;f.scene=10;f.world=0x3c;f.sceneReady=f.focused=true;return f;}
 void Submit(History& h,const Frame& f){assert(h.Begin(f));h.EyeRendered(0);h.EyeRendered(1);assert(h.Finish(true));}
+void CheckRejectionDiagnostics() {
+    History history;
+    Drawable base;
+    base.geometry=99;
+    base.palette.resize(1);
+    base.deformedPositions={1,2,3};
+    const float nan=std::numeric_limits<float>::quiet_NaN();
+    auto check=[&](const char* reason,uint64_t id,auto modify) {
+        assert(history.Begin(Input(1))&&!history.FirstRejection().reason);
+        assert(history.Record(1,base)&&history.Record(1,base));
+        auto candidate=base;
+        modify(candidate);
+        fqmotion::Capture capture;
+        capture.Begin(history);
+        capture.Main();
+        fqmotion::Draw draw;
+        draw.identity=id;
+        draw.mesh=7;
+        assert(!capture.Record(draw,candidate,0x1234));
+        assert(capture.reasons&fqmotion::Capacity);
+        assert(!history.Record(0,base)); // A later error must preserve the first.
+        const auto& r=history.FirstRejection();
+        assert(r.reason&&std::string_view(r.reason)==reason);
+        assert(r.identity==id&&r.reference==0x1234&&r.mesh==7);
+        assert(r.objects==1&&r.usedBytes==base.Bytes()&&r.recordBytes==candidate.Bytes());
+    };
+    check("missing-identity",0,[](Drawable&){});
+    check("missing-geometry",2,[](Drawable& d){d.geometry=0;});
+    check("nonfinite-model",2,[&](Drawable& d){d.model[0]=nan;});
+    check("nonfinite-palette",2,[&](Drawable& d){d.palette[0][0]=nan;});
+    check("nonfinite-position",2,[&](Drawable& d){d.deformedPositions[0]=nan;});
+    check("conflicting-geometry",1,[](Drawable& d){++d.geometry;});
+    check("conflicting-model",1,[](Drawable& d){++d.model[0];});
+    check("conflicting-palette",1,[](Drawable& d){++d.palette[0][0];});
+    check("conflicting-positions",1,[](Drawable& d){++d.deformedPositions[0];});
+    check("byte-limit",2,[](Drawable& d){d.deformedPositions.resize(History::MaxHistoryBytes/sizeof(float));});
+
+    assert(history.Begin(Input(2)));
+    for(size_t id=1;id<=History::MaxDrawables;++id)assert(history.Record(id,base));
+    assert(!history.Record(History::MaxDrawables+1,base));
+    const auto& r=history.FirstRejection();
+    assert(std::string_view(r.reason)=="object-limit"&&r.objects==History::MaxDrawables);
+    assert(r.usedBytes==History::MaxDrawables*base.Bytes());
+
+    assert(history.Begin(Input(3)));
+    fqmotion::Capture capture;
+    capture.Begin(history);
+    capture.Main();
+    capture.draws.resize(History::MaxDrawables);
+    fqmotion::Draw draw;
+    draw.identity=2;
+    assert(!capture.Record(draw,base));
+    assert(std::string_view(history.FirstRejection().reason)=="draw-list-limit");
+    history.Reset();
+    assert(!history.Record(0,base)&&!history.FirstRejection().reason);
+}
 int main(){
+ CheckRejectionDiagnostics();
  Matrix reproject;auto unchanged=fqskin::Identity();unchanged[12]=157.12f;unchanged[13]=-31.88f;assert(ClipReprojection(unchanged,unchanged,reproject)&&reproject==fqskin::Identity());
  Matrix inverse;auto translated=fqskin::Identity();translated[12]=.2f;
  assert(Inverse(translated,inverse));auto world=Transform(inverse,{.2f,0,0,1});assert(std::abs(world[0])<1e-6f);

@@ -30,6 +30,7 @@ int main() {
     s.frames[0].hdrRttEyes=2;s.frames[0].implicitColorResolvePixels=123456;
     s.frames[0].us[VrInteractionUpdate]=48000;
     s.frames[0].us[RigidStep]=29000;
+    s.frames[0].motionRejection={"byte-limit",0x100000001ULL,0x1234,7,12,8000000,400000};
     assert(s.Write("/tmp/fq-perf-test.csv"));
     std::ifstream in("/tmp/fq-perf-test.csv");std::string line;
     unsigned lines=0;while(std::getline(in,line)){

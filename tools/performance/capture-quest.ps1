@@ -62,6 +62,14 @@ function Write-CaptureSummary($Csv, [string]$Path) {
     $report.Add("GPU passes are sampled every 8 frames. -1 means unavailable or pending. The final in-flight GPU submissions can be missing. App cadence is not a compositor dropped-frame counter.")
     $report.Add("Performance summary: metric | samples | median ms | p95 ms | max ms")
     if ($gameplay.Count) {
+        if ('motionRejectReason' -in $rows[0].PSObject.Properties.Name) {
+            $rejected = @($gameplay | Where-Object { $_.motionRejectReason -ne 'none' })
+            $report.Add("SpaceWarp history rejected records on $($rejected.Count)/$($gameplay.Count) gameplay frames.")
+            foreach ($group in $rejected | Group-Object motionRejectReason | Sort-Object Count -Descending) {
+                $row = $group.Group[0]
+                $report.Add(("{0} on {1} frames. First example: object {2}, ref {3:X8}, mesh {4}, {5} objects, {6} bytes in use, {7} bytes for this record." -f $group.Name,$group.Count,$row.motionRejectObject,([uint32]$row.motionRejectRef),$row.motionRejectMesh,$row.motionRejectObjects,$row.motionRejectUsedBytes,$row.motionRejectRecordBytes))
+            }
+        }
         $measurements = @()
         $primary = @('workUs','threadCpuUs','xrWaitUs','xrEndUs','swapchainAcquireWaitUs','vkWorldGpuUs','vkUiGpuUs','vkReuseWaitUs','vkFinishWaitUs','gpuEyesUs')
         foreach ($key in $rows[0].PSObject.Properties.Name) {

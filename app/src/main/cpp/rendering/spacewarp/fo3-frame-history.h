@@ -2,6 +2,7 @@
 // Application SpaceWarp history is owned by successfully submitted stereo
 // frames. It is independent of physics ticks, eye draws and asset publications.
 #include "rendering/actor-skinning.h"
+#include "fo3-history-rejection.h"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -40,7 +41,6 @@ struct Drawable {
   std::vector<fqskin::PaletteRow> palette;
   std::vector<float> deformedPositions;
   size_t Bytes()const{return sizeof(Drawable)+palette.size()*sizeof(fqskin::PaletteRow)+deformedPositions.size()*sizeof(float);}
-  bool operator==(const Drawable& b)const{return geometry==b.geometry&&model==b.model&&palette==b.palette&&deformedPositions==b.deformedPositions;}
 };
 struct Coverage {
   uint64_t serial=0;
@@ -50,6 +50,7 @@ struct Coverage {
 };
 class History {
   Frame previous_{},current_{};
+  HistoryRejection rejection_{};
   std::unordered_map<uint64_t,Drawable> committed_,pending_;
   std::array<bool,2> eyes_{};
   size_t pendingBytes_=0;
@@ -57,22 +58,41 @@ class History {
   bool candidate_=false,consistent_=true;
 public:
   static constexpr size_t MaxHistoryBytes=8u*1024u*1024u,MaxDrawables=2048;
-  void Reset(){committed_.clear();pending_.clear();submitted_=0;candidate_=false;eyes_={};pendingBytes_=0;consistent_=true;}
+  void Reset(){rejection_={};committed_.clear();pending_.clear();submitted_=0;candidate_=false;eyes_={};pendingBytes_=0;consistent_=true;}
   bool Begin(const Frame& f){
     if(!Eligible(f)){Reset();return false;}
     if(submitted_&&(f.world!=previous_.world||f.scene!=previous_.scene||f.origin!=previous_.origin||
                    f.trackingScale!=previous_.trackingScale||f.displayTime<=previous_.displayTime||
                    CameraCut(previous_.appToWorld,f.appToWorld,f.trackingScale)))Reset();
-    current_=f;pending_.clear();pendingBytes_=0;eyes_={};consistent_=true;candidate_=true;return true;
+    rejection_={};current_=f;pending_.clear();pendingBytes_=0;eyes_={};consistent_=true;candidate_=true;return true;
   }
-  bool Record(uint64_t identity,const Drawable& d){
+  const HistoryRejection& FirstRejection()const{return rejection_;}
+  void NoteRejection(const char* reason,uint64_t identity,uint32_t reference,uint32_t mesh,size_t recordBytes){
+    if(!rejection_.reason)rejection_={reason,identity,reference,mesh,pending_.size(),pendingBytes_,recordBytes};
+  }
+  bool Record(uint64_t identity,const Drawable& d,uint32_t reference=0,uint32_t mesh=0){
     if(!candidate_)return false;
-    if(!identity||!d.geometry||!Finite(d.model)){consistent_=false;return false;}
-    for(const auto& row:d.palette)for(float f:row)if(!std::isfinite(f)){consistent_=false;return false;}
-    for(float f:d.deformedPositions)if(!std::isfinite(f)){consistent_=false;return false;}
+    auto reject=[&](const char* reason){
+      NoteRejection(reason,identity,reference,mesh,d.Bytes());
+      consistent_=false;
+      return false;
+    };
+    if(!identity)return reject("missing-identity");
+    if(!d.geometry)return reject("missing-geometry");
+    if(!Finite(d.model))return reject("nonfinite-model");
+    for(const auto& row:d.palette)for(float f:row)if(!std::isfinite(f))return reject("nonfinite-palette");
+    for(float f:d.deformedPositions)if(!std::isfinite(f))return reject("nonfinite-position");
     auto old=pending_.find(identity);
-    if(old!=pending_.end()){if(!(old->second==d))consistent_=false;return consistent_;}
-    if(pending_.size()>=MaxDrawables||d.Bytes()>MaxHistoryBytes-pendingBytes_){consistent_=false;return false;}
+    if(old!=pending_.end()){
+      const auto& first=old->second;
+      if(first.geometry!=d.geometry)return reject("conflicting-geometry");
+      if(first.model!=d.model)return reject("conflicting-model");
+      if(first.palette!=d.palette)return reject("conflicting-palette");
+      if(first.deformedPositions!=d.deformedPositions)return reject("conflicting-positions");
+      return consistent_;
+    }
+    if(pending_.size()>=MaxDrawables)return reject("object-limit");
+    if(d.Bytes()>MaxHistoryBytes-pendingBytes_)return reject("byte-limit");
     pendingBytes_+=d.Bytes();pending_.emplace(identity,d);return true;
   }
   const Drawable* Previous(uint64_t identity,uint64_t geometry)const{
