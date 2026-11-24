@@ -2507,8 +2507,10 @@ bool PrepareExpandedVertexStreamQ1960(
 #ifdef FQ_ENABLE_VULKAN
     auto prepareDetail=[&]{
         const auto& type=cpu.placement.baseRecordType;
-        if((type=="STAT"||type=="SCOL"||type=="TREE"||type=="FURN"||type=="CONT"||
-            type=="ACTI"||type=="MSTT"||cpu.q237ImmutableNativeLod)&&
+        // Authored distant blocks already implement LOD and own the borders
+        // between neighbouring terrain tiles. Keep those original meshes.
+        if(!cpu.q237ImmutableNativeLod&&(type=="STAT"||type=="SCOL"||type=="TREE"||
+            type=="FURN"||type=="CONT"||type=="ACTI"||type=="MSTT")&&
            !cpu.mesh.skinned&&!cpu.mesh.alphaBlend&&!cpu.mesh.alphaTest)
             cpu.geometryLevels=fqdetail::Build(fqdetail::Family::Scenery,cpu.q1960ExpandedVertices.data(),
                 cpu.q1960ExpandedVertices.size()/18,18,cpu.mesh.indices,!cpu.q236IndexedPrepared);
