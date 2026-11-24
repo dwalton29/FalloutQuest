@@ -9,6 +9,8 @@
 namespace fqrender {
 using Handle=uint32_t;
 inline bool nativeOnly=false;
+enum class SceneryDraw { OutsidePass, OtherDetail, Static };
+inline SceneryDraw sceneryDraw=SceneryDraw::OutsidePass;
 inline bool synthesisOverlayDraw=false;
 struct SynthesisOverlayScope {
     bool previous;

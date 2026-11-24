@@ -47,6 +47,14 @@ def diagnostic_summary(rows):
         print('No active gameplay frames. Keep the game focused and headset awake during capture.')
         return
     print('\nActive gameplay diagnosis (inclusive scopes; never add parent and child timings):')
+    if 'scenerySampled' in selected[0]:
+        samples = [r for r in selected if r['scenerySampled'] == '1']
+        print(f'Opaque detailed scenery census on {len(samples)} gameplay frames '
+              '(sampled frames include profiling overhead).')
+        if samples:
+            for key in ('sceneryDetailedDraws', 'sceneryInstancedDraws', 'sceneryAlreadySaved',
+                        'sceneryEligibleDraws', 'sceneryAdditionalMatches'):
+                print(f'  {key}: {statistics.mean(int(r[key]) for r in samples):.1f} per sampled frame')
     cpu_pairs = [(float(r['workUs']), float(r['threadCpuUs'])) for r in selected
                  if float(r.get('threadCpuUs', -1)) >= 0 and float(r['workUs']) > 0]
     if cpu_pairs:

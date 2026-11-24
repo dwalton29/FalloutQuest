@@ -57,7 +57,14 @@ inline constexpr const char* gpuPassNames[]={"native","detailed","npc","player",
 static_assert(sizeof(gpuPassNames)/sizeof(*gpuPassNames)==GpuPassCount);
 inline constexpr const char* vkPassNames[]={"scene","sceneResume","ui","adapt","bloom","film","output","snapshot","depthCopy","overlay","motion","composition","motionGeometry"};
 inline constexpr unsigned VkPassCount=sizeof(vkPassNames)/sizeof(*vkPassNames);
+// Offset the optional census from the GPU timing frames (serial % 8 == 0).
+inline bool SampleScenery(uint64_t serial){return serial%32==4;}
+struct SceneryCounts {
+    uint32_t detailedDraws=0,instancedDraws=0,alreadySaved=0,eligibleDraws=0,additionalMatches=0;
+};
 struct Frame {
+    bool scenerySampled=false;
+    SceneryCounts scenery;
     uint64_t serial=0;
     std::array<double,Count> us{};
     std::array<uint32_t,Count> calls{};
@@ -147,7 +154,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped,scenerySampled,sceneryDetailedDraws,sceneryInstancedDraws,sceneryAlreadySaved,sceneryEligibleDraws,sceneryAdditionalMatches\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -178,9 +185,11 @@ struct Session {
             // sorting, dispatch and timing overhead inside solveConstraints.
             const double remainder=v.us[RigidConstraints]-v.us[RigidGroupSetup]
                 -v.us[RigidGroupIterations]-v.us[RigidGroupFinish];
-            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u,%u,%u,%u\n",reject.reason?reject.reason:"none",
+            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u\n",reject.reason?reject.reason:"none",
                 (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes,
-                v.staticRefsReused,v.staticRefsBuilt,remainder,v.solverVelocityIterations,v.vkSceneDraws,v.vkBufferBindsIssued,v.vkBufferBindsSkipped);
+                v.staticRefsReused,v.staticRefsBuilt,remainder,v.solverVelocityIterations,v.vkSceneDraws,v.vkBufferBindsIssued,v.vkBufferBindsSkipped,
+                v.scenerySampled,v.scenery.detailedDraws,v.scenery.instancedDraws,v.scenery.alreadySaved,
+                v.scenery.eligibleDraws,v.scenery.additionalMatches);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

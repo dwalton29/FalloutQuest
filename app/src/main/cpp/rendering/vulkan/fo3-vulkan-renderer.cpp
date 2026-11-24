@@ -11,6 +11,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <deque>
+#include <set>
+#include <tuple>
 #include <fstream>
 #include <cstdio>
 #include <thread>
@@ -955,14 +957,14 @@ public:
         int mode=0;std::memcpy(&mode,bytes.data()+p.skinOffset,4);return mode!=0;
     }
 
-    struct PendingDraw {fqrender::DrawCommand command;std::vector<uint8_t> uniforms;std::vector<int> units;};
+    struct PendingDraw {fqrender::DrawCommand command;std::vector<uint8_t> uniforms;std::vector<int> units;fqrender::SceneryDraw scenery;};
     std::vector<PendingDraw> pending;
     void Queue(const fqrender::DrawCommand& command) {
         if(!begun||!passOpen||failed)return;
         const auto p=programs.find(command.program);
         if(p==programs.end()){++skipped;++skipReasons[0];if(!firstSkippedProgram)firstSkippedProgram=command.program;return;}
         const auto started=passTiming?NowUs():0;
-        pending.push_back({command,p->second.bytes,p->second.units});
+        pending.push_back({command,p->second.bytes,p->second.units,fqrender::sceneryDraw});
         if(passTiming)queueCpuUs+=NowUs()-started;
     }
     struct VertexBinding {
@@ -987,9 +989,56 @@ public:
         ++bufferBindsIssued;
     }
 
+    // Compare actual submitted draws, within the same drain and uninterrupted
+    // opaque run. An existing multi-instance submission contributes one key.
+    using SceneryKey=std::tuple<uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,int,
+        VkDescriptorSet,std::array<uint32_t,33>,std::string>;
+    std::set<SceneryKey> sceneryGroups;
+    fqperf::SceneryCounts scenery;
+    bool sampleScenery=false;
+    void CountScenery(const PendingDraw& item,PipelineKey key,VkDescriptorSet set,uint32_t first) {
+        if(item.scenery!=fqrender::SceneryDraw::OutsidePass){
+            ++scenery.detailedDraws;
+            if(item.command.instances>1){
+                ++scenery.instancedDraws;
+                scenery.alreadySaved+=uint32_t(item.command.instances-1);
+            }
+        }
+        if(item.scenery!=fqrender::SceneryDraw::Static || key.ui || key.terrain || key.sky ||
+           key.water || key.skinned || key.offset || key.blend || !key.depth || !key.write ||
+           item.command.state.synthesisOverlay){
+            sceneryGroups.clear();
+            return;
+        }
+        // Only these three inputs change when converting a placement into an
+        // instance. Keep every other material byte, including local lighting.
+        static const auto placementOffsets=[]{
+            std::array<uint32_t,3> offsets{{UINT32_MAX,UINT32_MAX,UINT32_MAX}};
+            const char* names[]{"uInstancingEnabledQ2016","uObjectTransformEnabledQ2017","uObjectTransformQ2017"};
+            const auto& shader=shaders::programs[0];
+            for(size_t i=0;i<shader.fieldCount;++i)
+                for(size_t j=0;j<offsets.size();++j)
+                    if(!std::strcmp(shader.fields[i].name,names[j]))offsets[j]=shader.fields[i].offset;
+            return offsets;
+        }();
+        std::string material(item.uniforms.begin(),item.uniforms.end());
+        for(size_t i=0;i<placementOffsets.size();++i){
+            const size_t offset=placementOffsets[i],bytes=i==2?64:4;
+            if(offset>material.size() || bytes>material.size()-offset){sceneryGroups.clear();return;}
+            std::memset(material.data()+offset,0,bytes);
+        }
+        key.instanced=true;
+        key.Normalize();
+        ++scenery.eligibleDraws;
+        const auto& draw=item.command;
+        const bool inserted=sceneryGroups.emplace(draw.mesh,draw.program,draw.topology,draw.indexType,
+            first,draw.count,set,key.Words(),std::move(material)).second;
+        if(!inserted)++scenery.additionalMatches;
+    }
     void DrainDraws() {
         DrawBindings bound{};
         for(const auto& item:pending)Draw(item,bound);
+        if(sampleScenery)sceneryGroups.clear();
         pending.clear();
     }
     void Draw(const PendingDraw& item,DrawBindings& bound) {
@@ -1018,9 +1067,11 @@ public:
         if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
         if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady))){
             FullRateScene();
+            if(sampleScenery)sceneryGroups.clear();
             bound={};
         }else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone){
             ResumeSidecar();
+            if(sampleScenery)sceneryGroups.clear();
             bound={};
         }
         PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.fused=fused;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
@@ -1113,6 +1164,7 @@ public:
             vkCmdDrawIndexed(command,count,instances,indexFirst,0,0);
         }else vkCmdDraw(command,count,instances,first,0);
         ++draws;vertices+=uint64_t(count)*instances;
+        if(sampleScenery)CountScenery(item,key,set,indexFirst);
         if(key.foveated)++foveatedDraws;
         if((kind<2||p.fused)&&(key.lighting||key.noLocal))++specializedDraws;
         if(kind<2||kind==TerrainFusionKind){if(key.noDiscard)++solidDraws;else ++guardedDraws;if(p.terrain){++landDraws;if(key.fused&&key.stride==15)++fusedLandDraws;}else ++worldDraws;}
@@ -1400,6 +1452,8 @@ public:
         captureFrame=fqperf::capture.recording?fqperf::capture.serial:0;
         // Whole submission timestamps already exist. Sample detailed passes to
         // limit instrumentation overhead, without restarting the application.
+        sampleScenery=captureId && !offscreen && fqperf::SampleScenery(captureFrame);
+        scenery={};
         passTiming=configuredPassTiming||(captureId&&captureFrame%8==0);
         if(captureId&&!fqperf::capture.graphics[0])std::snprintf(fqperf::capture.graphics,sizeof(fqperf::capture.graphics),
             "vkDevice=%s vkVendor=%u vkDeviceId=%u vkDriver=%u vkTimestampBits=%u vkTimestampPeriodNs=%.6f vkBuffered=%d vkTimingForced=%d vkBufferBindReuse=%d",
@@ -1504,6 +1558,14 @@ public:
         sample.direct=directOutput&&!(visualDiagnostics&2u);sample.buffered=Buffered();sample.logFrame=!offscreen&&((frames-1)%120)==0;
         if(passTiming)sample.spans=gpuSpans;
         if(auto* frame=fqperf::capture.Find(captureId,captureFrame)){
+            if(sampleScenery){
+                frame->scenerySampled=true;
+                frame->scenery.detailedDraws+=scenery.detailedDraws;
+                frame->scenery.instancedDraws+=scenery.instancedDraws;
+                frame->scenery.alreadySaved+=scenery.alreadySaved;
+                frame->scenery.eligibleDraws+=scenery.eligibleDraws;
+                frame->scenery.additionalMatches+=scenery.additionalMatches;
+            }
             ++frame->vkExpected;
             frame->vkSceneDraws+=uint32_t(draws);
             frame->vkBufferBindsIssued+=bufferBindsIssued;

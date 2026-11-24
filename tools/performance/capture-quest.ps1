@@ -78,6 +78,17 @@ function Write-CaptureSummary($Csv, [string]$Path) {
             $draws = ($gameplay | Measure-Object -Property vkSceneDraws -Sum).Sum
             $report.Add("Vulkan scene draws: $draws. Vertex and index buffer binds issued: $issued. Skipped: $skipped.")
         }
+        if ('scenerySampled' -in $rows[0].PSObject.Properties.Name) {
+            $samples = @($gameplay | Where-Object { $_.scenerySampled -eq '1' })
+            $report.Add("Opaque detailed scenery census: $($samples.Count) sampled gameplay frames.")
+            if ($samples.Count) {
+                foreach ($field in @('sceneryDetailedDraws','sceneryInstancedDraws','sceneryAlreadySaved','sceneryEligibleDraws','sceneryAdditionalMatches')) {
+                    $mean = ($samples | Measure-Object -Property $field -Average).Average
+                    $report.Add(("{0}: {1:F1} per sampled frame" -f $field,$mean))
+                }
+                $report.Add("Additional matches are current draws with the same mesh, material and state within an uninterrupted eligible run. Sampled frames include profiling overhead.")
+            }
+        }
         $measurements = @()
         $primary = @('workUs','threadCpuUs','xrWaitUs','xrEndUs','swapchainAcquireWaitUs','vkWorldGpuUs','vkUiGpuUs','vkReuseWaitUs','vkFinishWaitUs','gpuEyesUs')
         foreach ($key in $rows[0].PSObject.Properties.Name) {

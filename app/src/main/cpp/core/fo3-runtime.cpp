@@ -8137,6 +8137,21 @@ void Q2017RenderOpaqueDetailedInstanced() {
     const auto instancedObjects = cache.instancedObjects;
     const auto largestBatch = cache.largestBatch;
 
+    const bool sampleScenery=fqperf::capture.recording && !gWaterReflectionPassQ2090 &&
+        fqperf::SampleScenery(fqperf::capture.serial);
+    auto submitDetailed=[&](const GpuObject& object){
+        if(sampleScenery){
+            const bool authoredStatic=object.baseRecordType=="STAT" || object.baseRecordType=="SCOL" ||
+                object.baseRecordType=="TREE";
+            const bool fixed=authoredStatic && !object.q1990NativeLod && !object.q230NpcActor &&
+                !object.q210PlayerBody && !object.physicalWeapon && !object.q220LooseObject &&
+                !object.scriptAnimated && !object.q2400SwingDoor && !object.decalQ1170 &&
+                !object.pipScreen && !object.geneScreen && !object.skinMode;
+            fqrender::sceneryDraw=fixed?fqrender::SceneryDraw::Static:fqrender::SceneryDraw::OtherDetail;
+        }
+        DrawSceneObject(object);
+        if(sampleScenery)fqrender::sceneryDraw=fqrender::SceneryDraw::OutsidePass;
+    };
     size_t fallbackDraws = 0u;
     const bool previousPrevalidation=gQ230DetailedObjectPrevalidated;
     gQ230DetailedObjectPrevalidated=true;
@@ -8146,7 +8161,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
         else glDisable(GL_DEPTH_TEST);
         glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
         const auto before=fqgl::counters.draws;
-        DrawSceneObject(*object);
+        submitDetailed(*object);
         fallbackDraws += fqgl::counters.draws-before;
     }
     for (const GpuObject* object : groupFallbacks) {
@@ -8155,7 +8170,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
         else glDisable(GL_DEPTH_TEST);
         glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
         const auto before=fqgl::counters.draws;
-        DrawSceneObject(*object);
+        submitDetailed(*object);
         fallbackDraws += fqgl::counters.draws-before;
     }
 
@@ -8178,7 +8193,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
         fqvk::instanceMatrices=cache.matrices.data()+batch.matrixBaseFloat;
         fqvk::instanceMatrixCount=batch.count;
 #endif
-        DrawSceneObject(*batch.representative);
+        submitDetailed(*batch.representative);
 #ifdef FQ_ENABLE_VULKAN
         fqvk::instanceMatrices=nullptr;fqvk::instanceMatrixCount=0;
 #endif

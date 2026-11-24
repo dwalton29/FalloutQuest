@@ -309,6 +309,10 @@ void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=f
     const float left[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     const float right[]{1,0,0,0, 0,1,0,0, 0,0,1,0, .8f,0,0,1};
     const float eye[]{0,0,2};assert(fqvk::BeginWorldProbe(left,right,eye,eye));
+    if(instanced){
+        fqvk::renderer->sampleScenery=true;
+        fqrender::sceneryDraw=fqrender::SceneryDraw::Static;
+    }
     // Terrain's GL EBO points past vertex bytes; native EBO has its own buffer.
     Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,instanced?2:1);
     if(instanced){fqvk::instanceMatrices=nullptr;fqvk::instanceMatrixCount=0;} // queued transforms own their data
@@ -323,6 +327,11 @@ void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=f
         Submit(1,10,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,paint.size()*4,1);
     }
     fqvk::EndWorldProbe();assert(fqvk::WorldProbeActive());
+    if(instanced){
+        assert(fqvk::renderer->scenery.instancedDraws==1&&fqvk::renderer->scenery.alreadySaved==1);
+        assert(fqvk::renderer->scenery.additionalMatches==0);
+        fqrender::sceneryDraw=fqrender::SceneryDraw::OutsidePass;
+    }
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),terrain?.5f:1);Near(Pixel(pixels,0,32,32,1),terrain?.5f:0);
     Near(Pixel(pixels,1,32,32,0),0); // gl_ViewIndex really selected the right camera.
@@ -629,9 +638,17 @@ void HeadlessSceneSubmission(bool reuse) {
     glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_TRUE);
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    auto& renderer=*fqvk::renderer;
+    renderer.sampleScenery=true;
+    fqrender::sceneryDraw=fqrender::SceneryDraw::Static;
     glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
     assert(fqvk::renderer->pending.size()==1&&fqvk::renderer->draws==0);
-    for(int i=1;i<64;++i)glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    for(int i=1;i<64;++i){
+        if(i==8)glUniformMatrix4fv(glGetUniformLocation(program,"uObjectTransformQ2017"),1,GL_FALSE,identity);
+        if(i==16)scalar("uGlossiness",15); // different material, same pipeline and texture
+        fqrender::sceneryDraw=i==32?fqrender::SceneryDraw::OtherDetail:fqrender::SceneryDraw::Static;
+        glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    }
     // Mutating live uniforms and CPU state after queueing cannot alter the draw.
     scalar("uMaterialAlpha",0);glDisable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,0);
     pipelineBinds=viewportSets=scissorSets=vertexBinds=indexBinds=0;
@@ -649,6 +666,9 @@ void HeadlessSceneSubmission(bool reuse) {
     fqvk::renderer->DrainDraws();
     assert(vertexBinds==(reuse?2u:65u)&&indexBinds==vertexBinds);
     assert(fqvk::renderer->draws==65);
+    assert(renderer.scenery.detailedDraws==65&&renderer.scenery.eligibleDraws==64);
+    assert(renderer.scenery.additionalMatches==60&&renderer.scenery.alreadySaved==0);
+    fqrender::sceneryDraw=fqrender::SceneryDraw::OutsidePass;
     fqvk::EndWorldProbe();assert(fqvk::renderer->pending.empty());
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,1,32,32,0),1);
