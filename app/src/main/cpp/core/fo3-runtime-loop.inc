@@ -2474,7 +2474,12 @@ private:
                     const Fo3Environment& clearEnvironment=GetFo3Environment();
                     static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
                     const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||(!Fo3PlayerDead()&&Fo3MovieFocus()),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
+                    const bool qualityEligible=sessionState_==XR_SESSION_STATE_FOCUSED&&gSceneReady&&!gSceneLoad.active&&
+                        !Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&!gFo3PauseOpen;
+                    const bool synthesizing=spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready();
+                    const double nativePeriodMs=displayRefreshRate_>1.f?1000.0/displayRefreshRate_:double(frameState.predictedDisplayPeriod)*1e-6;
+                    const double worldBudgetMs=qualityEligible?nativePeriodMs*(synthesizing?2.0:1.0):0;
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||(!Fo3PlayerDead()&&Fo3MovieFocus()),clearHorizon,synthesizing,worldBudgetMs);
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif

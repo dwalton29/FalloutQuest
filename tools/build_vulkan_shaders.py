@@ -49,6 +49,11 @@ def sources():
     return result
 
 def port(pair,kind="world"):
+    if kind in ('terrain','terrain_fused'):
+        vertex=pair[0].replace('uniform mat4 uMvp;', 'uniform mat4 uMvp;\nuniform highp vec4 uCompositeRegion;')
+        vertex=vertex.replace('vTexCoord = aTexCoord;', 'vTexCoord = uCompositeRegion.w>0.5 ? aTexCoord*0.125-uCompositeRegion.xy : aTexCoord;')
+        vertex=vertex.replace('vAlpha = aAlpha;', 'vAlpha = uCompositeRegion.w>0.5 ? uCompositeRegion.z : aAlpha;')
+        pair=(vertex,pair[1])
     uniforms = {}
     for source in pair:
         for typ, name, array in UNIFORM.findall(source):
@@ -119,6 +124,9 @@ def port(pair,kind="world"):
         if stage==1 and kind in ('world','terrain','terrain_fused'):
             prefix,main=text.split('void main()',1)
             constants='layout(constant_id=1) const bool fqNoLocalLights=false;\n'
+            if kind=='world':
+                matte=(ROOT/'app/src/main/cpp/rendering/vulkan/fo3-matte-material.glsl').read_text()
+                main=main.replace('vec4 normalGloss = texture(uNormalGloss, vUv);',matte+'\n            vec4 normalGloss = texture(uNormalGloss, vUv);')
             main=re.sub(r'\buLocalLightCount\b','(fqNoLocalLights?0:uLocalLightCount)',main)
             if kind=='world':
                 constants+='layout(constant_id=0) const int fqLightingMode=0;\nlayout(constant_id=2) const bool fqNoEnvironmentPass=false;\n'
@@ -244,6 +252,9 @@ void main(){{fqOriginalMain();
  bool changed=any(greaterThan(abs(fullCode-baseCode),vec3(1)));
  {colour}=vec4(base,1);fqNativeOverlay=changed?vec4(full,1):vec4(0);
 }}'''
+    resolve=(ROOT/'app/src/main/cpp/rendering/vulkan/fo3-world-resolve.frag').read_text()
+    variants['world_resolve']=resolve
+    variants['world_resolve_split']=resolve.replace('#version 450','#version 450\n#define FQ_SPLIT')
     for name,text in variants.items():
         path=output/f'{name}.frag';path.write_text(text);spv=path.with_suffix('.frag.spv')
         command=([compiler,'-V','--target-env','vulkan1.1',str(path),'-o',str(spv)] if 'glslang' in Path(compiler).name else [compiler,'--target-env=vulkan1.1',str(path),'-o',str(spv)])

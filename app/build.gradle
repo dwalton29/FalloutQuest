@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 368
-        versionName '0.213.0-integrated-geometry-detail'
+        versionCode 369
+        versionName '0.214.0-adaptive-world-materials'
 
         ndk {
             abiFilters 'arm64-v8a'

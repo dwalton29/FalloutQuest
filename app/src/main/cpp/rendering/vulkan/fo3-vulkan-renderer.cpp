@@ -5,6 +5,7 @@
 #include "rendering/spacewarp/fo3-motion-vectors.h"
 #include "rendering/performance-capture.h"
 #include "fo3-vulkan-foveation.h"
+#include "fo3-world-resolution.h"
 #include <GLES3/gl3.h> // Legacy numeric material enums only; no GLES calls.
 #include <algorithm>
 #include <array>
@@ -64,11 +65,11 @@ struct ProgramData {
     std::vector<int> units;
     struct Binding { uint32_t offset=0,components=0,count=0;int unit=-1; };
     std::unordered_map<int,Binding> bindings;bool bindingsReady=false;
-    uint32_t lightingOffset=UINT32_MAX,localOffset=UINT32_MAX,environmentOffset=UINT32_MAX,paintOffset=UINT32_MAX,skinOffset=UINT32_MAX,roundOffset=UINT32_MAX;
+    uint32_t lightingOffset=UINT32_MAX,localOffset=UINT32_MAX,environmentOffset=UINT32_MAX,paintOffset=UINT32_MAX,skinOffset=UINT32_MAX,roundOffset=UINT32_MAX,compositeOffset=UINT32_MAX;
     std::array<uint32_t,3> discardOffsets{{UINT32_MAX,UINT32_MAX,UINT32_MAX}};
 };
 void ConfigureDiscardGuards(ProgramData& p,const shaders::Program& shader) {
-    for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];if(!std::strcmp(f.name,"uNoLighting"))p.lightingOffset=f.offset;if(!std::strcmp(f.name,"uLocalLightCount"))p.localOffset=f.offset;if(!std::strcmp(f.name,"uEnvironmentPassQ2050"))p.environmentOffset=f.offset;if(!std::strcmp(f.name,"uPaintCount"))p.paintOffset=f.offset;if(!std::strcmp(f.name,"uActorSkinMode"))p.skinOffset=f.offset;if(!std::strcmp(f.name,"uRoundMode"))p.roundOffset=f.offset;}
+    for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];if(!std::strcmp(f.name,"uNoLighting"))p.lightingOffset=f.offset;if(!std::strcmp(f.name,"uLocalLightCount"))p.localOffset=f.offset;if(!std::strcmp(f.name,"uEnvironmentPassQ2050"))p.environmentOffset=f.offset;if(!std::strcmp(f.name,"uPaintCount"))p.paintOffset=f.offset;if(!std::strcmp(f.name,"uActorSkinMode"))p.skinOffset=f.offset;if(!std::strcmp(f.name,"uRoundMode"))p.roundOffset=f.offset;if(!std::strcmp(f.name,"uCompositeRegion"))p.compositeOffset=f.offset;}
     const char* guards[]{"uWaterReflectionClipEnabledQ2090","uNativeLodClipEnabledQ1810","uAlphaTest"};
     for(size_t i=0;i<shader.fieldCount;++i)for(size_t j=0;j<3;++j)
         if(!std::strcmp(shader.fields[i].name,guards[j]))p.discardOffsets[j]=shader.fields[i].offset;
@@ -137,6 +138,7 @@ public:
     VkPipelineCache pipelineCache{};
     VkShaderModule modules[13][2]{};VkDescriptorPool descriptors{};
     VkShaderModule solidModules[3]{};bool genericShaders=false;
+    uint32_t matteDraws=0,compositeDraws=0;
     uint64_t foveatedDraws=0,specializedDraws=0;
     uint64_t solidDraws=0,guardedDraws=0,worldDraws=0,landDraws=0,fusedLandDraws=0;
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
@@ -268,6 +270,7 @@ public:
     }
     struct FrameSample {
         uint64_t captureId=0,captureFrame=0;
+        double worldBudgetMs=0; int worldStep=0;
         uint64_t solid=0,guarded=0,world=0,land=0,fusedLand=0,foveated=0,specialized=0;bool compact=false;
         uint64_t serial=0,frame=0,copies=0,record=0,queueCpu=0,drawCpu=0,reuse=0,finish=0,xrWait=0,uploadCpu=0;
         uint64_t drawCount=0,vertexCount=0,skipCount=0;std::array<uint64_t,6> reasons{};uint32_t firstSkip=0,diagnostic=0,dropped=0;
@@ -783,6 +786,7 @@ public:
         VKLOG("FQVK CAP fragmentDensityMap=%d nonSubsampledImages=%d elapsedTimerExtension=%d foveationEnabled=%d",densityFeatures.fragmentDensityMap,densityFeatures.fragmentDensityMapNonSubsampledImages,elapsed,bool(densityMain.clear));
 #ifdef __ANDROID__
         char visualProp[PROP_VALUE_MAX]{};
+        __system_property_get("debug.falloutquest.dynamic_resolution",visualProp);adaptive=std::strcmp(visualProp,"0")!=0;
         __system_property_get("debug.falloutquest.vulkan_diag",visualProp);
         visualDiagnostics=uint32_t(std::strtoul(visualProp,nullptr,0))&7u;
         __system_property_get("debug.falloutquest.vulkan_present_copy",visualProp);
@@ -807,8 +811,8 @@ public:
         if((format.optimalTilingFeatures&depthRequired)!=depthRequired)throw std::runtime_error("sampled D32 depth unavailable");
         color=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
         depth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
-        sceneColor=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
-        sceneDepth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+        sceneColor=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+        sceneDepth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
         std::array<VkAttachmentDescription,2> attachments{};
         attachments[0].format=VK_FORMAT_R16G16B16A16_SFLOAT;attachments[1].format=VK_FORMAT_D32_SFLOAT;
         for(auto& a:attachments){a.samples=VK_SAMPLE_COUNT_1_BIT;a.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;a.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;a.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;a.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;}
@@ -1066,12 +1070,17 @@ public:
         if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto drawStarted=passTiming?NowUs():0;
         const auto& s=draw.state;
+        // Physical displays sample an offscreen UI texture through a world material.
+        // The Pip-Boy also remains sharp when its mesh is visible outside menu focus.
+        if(reduced&&(p.ui||p.water||(!uiTargets.empty()&&uiTargets.count(s.textures[0])))){
+            ExpandWorld();bound={};
+        }
         if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
         if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady))){
             FullRateScene();
             if(sampleScenery)sceneryGroups.clear();
             bound={};
-        }else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone){
+        }else if(!p.ui&&!reduced&&splitFrame&&!sidecarPass&&!offscreen&&!postDone){
             ResumeSidecar();
             if(sampleScenery)sceneryGroups.clear();
             bound={};
@@ -1083,6 +1092,7 @@ public:
             if(p.environmentOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.environmentOffset,4);key.noEnvironment=value<=.5f;}
             if(p.localOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.localOffset,4);key.noLocal=count<=0;}
         }
+        if(kind==0&&draw.matte&&!offscreen&&!postDone&&!genericShaders)key.lighting=3;
         if(fused&&p.paintOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.paintOffset,4);key.paintCount=uint32_t(std::clamp(count,0,3));}
         key.depth=s.depth;key.write=s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
         key.depthFunc=s.depthFunc;key.src=s.src;key.dst=s.dst;key.srcA=s.srcAlpha;key.dstA=s.dstAlpha;
@@ -1140,8 +1150,8 @@ public:
         // Every scene pipeline uses dynamic viewport and scissor. Target size
         // is constant within a pass, and a new drain starts with unknown state.
         if(!bound.pipeline){
-            const VkViewport viewport{0,0,float(targetWidth),float(targetHeight),0,1};
-            const VkRect2D scissor{{0,0},{targetWidth,targetHeight}};
+            const VkRect2D scissor=reduced?worldRect:VkRect2D{{0,0},{targetWidth,targetHeight}};
+            const VkViewport viewport{float(scissor.offset.x),float(scissor.offset.y),float(scissor.extent.width),float(scissor.extent.height),0,1};
             vkCmdSetViewport(command,0,1,&viewport);
             vkCmdSetScissor(command,0,1,&scissor);
         }
@@ -1177,6 +1187,11 @@ public:
         if(detail.count)savedCorners[size_t(m.family)]+=uint64_t(count-detail.count)*instances;
         ++draws;vertices+=uint64_t(submittedCount)*instances;
         if(sampleScenery)CountScenery(item,key,set,firstIndex,submittedCount,detail.count!=0);
+        if(key.lighting==3)++matteDraws;
+        if(p.terrain&&p.compositeOffset!=UINT32_MAX){
+            float selected;std::memcpy(&selected,item.uniforms.data()+p.compositeOffset+12,4);
+            if(selected>.5f)++compositeDraws;
+        }
         if(key.foveated)++foveatedDraws;
         if((kind<2||p.fused)&&(key.lighting||key.noLocal))++specializedDraws;
         if(kind<2||kind==TerrainFusionKind){if(key.noDiscard)++solidDraws;else ++guardedDraws;if(p.terrain){++landDraws;if(key.fused&&key.stride==15)++fusedLandDraws;}else ++worldDraws;}
@@ -1191,6 +1206,7 @@ public:
     void WaterSnapshot() {
         if(!begun||!passOpen||snapshotReady||failed)return;
         DrainDraws();
+        ExpandWorld();
         // Refraction requires arbitrary displaced screen taps, so retain an
         // immutable opaque image rather than sampling an active attachment.
         // Copy both views once, before any water CELL modifies the color target.
@@ -1299,9 +1315,10 @@ public:
         overlay.width=width;overlay.height=height;overlay.layers=1;
         Check(vkCreateFramebuffer(device,&overlay,nullptr,&postOverlayFramebuffer),"post overlay framebuffer");
     }
-    VkPipeline MakePostPipeline(int kind,VkRenderPass targetPass) {
+    VkPipeline MakePostPipeline(int kind,VkRenderPass targetPass,VkShaderModule resolve={},bool duplicate=false) {
         std::array<VkPipelineShaderStageCreateInfo,2> stages{};
         for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
+        if(resolve)stages[1].module=resolve;
         VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=vp.scissorCount=1;
@@ -1313,6 +1330,11 @@ public:
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dynamic.dynamicStateCount=2;dynamic.pDynamicStates=states;
         VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;
         ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&bs;ci.pDynamicState=&dynamic;
+        VkPipelineDepthStencilStateCreateInfo depthState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        depthState.depthTestEnable=depthState.depthWriteEnable=VK_TRUE;depthState.depthCompareOp=VK_COMPARE_OP_ALWAYS;
+        if(resolve)ci.pDepthStencilState=&depthState;
+        const VkPipelineColorBlendAttachmentState attachments[]{colorBlend,colorBlend};
+        if(duplicate){bs.attachmentCount=2;bs.pAttachments=attachments;}
         ci.layout=layouts[kind];ci.renderPass=targetPass;
         VkPipeline result{};
         Check(vkCreateGraphicsPipelines(device,pipelineCache,1,&ci,nullptr,&result),"native fullscreen pipeline");
@@ -1349,7 +1371,7 @@ public:
     }
     void PostProcess(const PostSettings& settings) {
         if(!begun||!passOpen||failed||postDone)return;
-        DrainDraws();CreatePost();EndPass();RetainWorldDepth();
+        DrainDraws();ExpandWorld();CreatePost();EndPass();RetainWorldDepth();
         PostBarrier(color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         directOutput=gameplay&&xrSwapchain&&xrSrgb&&!legacyPresentation&&!splitFrame;
@@ -1498,7 +1520,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        savedCorners={};
+        savedCorners={};matteDraws=compositeDraws=0;
         bufferBindsIssued=bufferBindsSkipped=0;
         pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=fusedLandDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1512,7 +1534,7 @@ public:
         if(timestamps){vkCmdResetQueryPool(command,timestamps,0,passTiming?QueryCount:4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
         begun=true;
     }
-    void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false,const float* horizon=nullptr,bool split=false) {
+    void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false,const float* horizon=nullptr,bool split=false,double budgetMs=0) {
         splitFrame=split&&splitPass&&compositionChain&&!loading&&!(visualDiagnostics&2u);
         fqmotion::separatedComposition=splitFrame;compositionPresented=false;
         worldDepthReady=lateWorldDepthWrite=false;sidecarPass=splitFrame;compactFrame=splitFrame&&xrSrgb;
@@ -1529,14 +1551,30 @@ public:
                           gameplay&&!loading&&horizon?horizon[2]:0.0f,1.0f}};
         clears[1].depthStencil={1,0};clears[2].color=clears[0].color;
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=densityActive?(splitFrame?densitySplit.clear:densityMain.clear):splitFrame?splitPass:pass;ri.framebuffer=densityActive?(splitFrame?densitySplit.framebuffer:densityMain.framebuffer):splitFrame?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=splitFrame?3:2;ri.pClearValues=clears.data();
+        qualitySample=adaptive&&timestampSupported&&budgetMs>0&&!loading&&gameplay&&!visualDiagnostics;
+        frameBudgetMs=qualitySample?budgetMs:0;
+        renderedStep=qualitySample?resolution.step:0;
+        reduced=renderedStep>0;
+        worldRect={{0,0},{width,height}};
+        if(reduced){
+            const auto extent=[&](uint32_t n){return std::max(1u,uint32_t(std::lround(n*resolution.Ratio())));};
+            worldRect.extent={extent(width),extent(height)};
+            worldRect.offset={int32_t((width-worldRect.extent.width)/2),int32_t((height-worldRect.extent.height)/2)};
+            // Before the first HUD draw, both split outputs have identical contents.
+            // The full-resolution resolve publishes the same colour to both.
+            sidecarPass=false;
+            ri.renderPass=densityActive?densityMain.clear:pass;
+            ri.framebuffer=LowFramebuffer(densityActive);ri.renderArea=worldRect;ri.clearValueCount=2;
+        }
         BeginPass(Scene,ri);begun=true;
     }
+    #include "fo3-world-resolution.inc"
     #include "fo3-vulkan-foveation.inc"
     #include "fo3-vulkan-composition.inc"
     #include "fo3-vulkan-spacewarp.inc"
     void End(PostTarget* output=nullptr,VkImage depthOutput=VK_NULL_HANDLE) {
         if(!begun)return;
-        DrainDraws();begun=false;
+        DrainDraws();ExpandWorld();begun=false;
         if(passOpen)EndPass();
         if(postDone&&!directOutput)PostBarrier(Finished().image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
@@ -1561,6 +1599,7 @@ public:
         auto& slot=frameSlots[activeSlot];slot.pending=true;slot.serial=++submissionSerial;
         if(!offscreen)++frames;
         auto& sample=slot.sample;sample.finish=0;sample.spans.clear();
+        sample.worldBudgetMs=offscreen?0:frameBudgetMs;sample.worldStep=offscreen?0:renderedStep;
         sample.copies=presentationCopies;sample.serial=submissionSerial;sample.frame=offscreen?frames+1:frames;
         sample.captureId=captureId;sample.captureFrame=captureFrame;
         sample.foveated=foveatedDraws;sample.specialized=specializedDraws;sample.compact=compactFrame&&!offscreen;sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;sample.fusedLand=fusedLandDraws;
@@ -1582,6 +1621,8 @@ public:
                 frame->scenery.eligibleDraws+=scenery.eligibleDraws;
                 frame->scenery.additionalMatches+=scenery.additionalMatches;
             }
+            if(!offscreen){frame->worldRenderWidth=worldRect.extent.width;frame->worldRenderHeight=worldRect.extent.height;
+                frame->matteDraws+=matteDraws;frame->compositeLandDraws+=compositeDraws;}
             frame->vkActualCorners+=vertices;
             for(size_t i=0;i<savedCorners.size();++i)frame->geometrySaved[i]+=savedCorners[i];
             ++frame->vkExpected;
@@ -1624,6 +1665,8 @@ public:
                 gpuMs=double((t[1]-t[0])&mask)*properties.limits.timestampPeriod/1e6;
             }
         }
+        if(sample.worldBudgetMs>0)resolution.Observe(gpuMs,sample.worldBudgetMs,sample.worldStep);
+        if(sample.logFrame)VKLOG("FQVK WORLD QUALITY step=%d budgetMs=%.2f",sample.worldStep,sample.worldBudgetMs);
         if(auto* frame=fqperf::capture.Find(sample.captureId,sample.captureFrame)){
             if(timestampSupported&&gpuMs>=0){
                 ++frame->vkReceived;
@@ -1863,7 +1906,10 @@ public:
         SavePipelineCache(true);
         DestroyMotion();
         DestroySwapchain();
-        if(device){CancelUploads();begun=false;DestroyDensityPasses(densityMain);Destroy(densityMap);
+        if(device){CancelUploads();begun=false;
+            for(auto fb:lowFramebuffers)if(fb)vkDestroyFramebuffer(device,fb,nullptr);
+            for(auto pipeline:resolvePipelines)if(pipeline)vkDestroyPipeline(device,pipeline,nullptr);
+            DestroyDensityPasses(densityMain);Destroy(densityMap);
             SwapSlot(frameSlots[activeSlot]);
             for(auto& e:pipelines)vkDestroyPipeline(device,e.second,nullptr);
             for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);Destroy(e.second.detail);}
@@ -1983,9 +2029,9 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
 }
 void ShutdownWorldProbe(){hooks={};recording=false;gameplayPresentation=fqmotion::separatedComposition=false;renderer.reset();}
 bool WorldProbeActive(){return renderer&&!renderer->failed;}
-bool BeginWorldProbe(const float* l,const float* r,const float* le,const float* re,bool loading,const float* horizon,bool splitComposition){
+bool BeginWorldProbe(const float* l,const float* r,const float* le,const float* re,bool loading,const float* horizon,bool splitComposition,double budgetMs){
     if(!WorldProbeActive())return false;
-    try{renderer->Begin(l,r,le,re,loading,horizon,splitComposition);recording=true;return true;}catch(const std::exception& e){Failure(e);return false;}
+    try{renderer->Begin(l,r,le,re,loading,horizon,splitComposition,budgetMs);recording=true;return true;}catch(const std::exception& e){Failure(e);return false;}
 }
 bool StereoBoundsVisible(const float* vertices,size_t count,size_t stride){return !renderer||renderer->StereoBoundsVisible(vertices,count,stride);}
 void PrewarmPipelines(){if(renderer)renderer->PrewarmPipelines();}

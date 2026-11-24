@@ -2,6 +2,8 @@
 float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
+#include "rendering/terrain/terrain-composite.h"
+#include "rendering/world-material-policy.h"
 #include "rendering/terrain/fo3-terrain-bounds.h"
 #include "rendering/terrain/terrain-depth-scope.h"
 #include "rendering/exact-indexed-mesh.h"
@@ -242,6 +244,7 @@ uint64_t Q711GridKey(int32_t x, int32_t y) {
 
 
 #ifdef FQ_ENABLE_VULKAN
+#include "fo3-terrain-composite.inc"
 // Legacy paint draws re-use the base surface at equal depth. Coarsen only
 // fused surfaces and base cells whose final layout has no overlapping passes.
 void MarkTerrainDetail(std::vector<Q711CpuBatch>& batches) {
@@ -663,6 +666,12 @@ GLuint Q711UploadTexture(const std::string& path,
         return 0;
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    if(fqrender::nativeOnly&&fqquality::WorldMaterials()&&!compositeSources.count(path)){
+        auto source=fo3terrain::composite::Downsample(image.rgba,image.width,image.height);
+        if(source)compositeSources.emplace(path,std::move(source));
+    }
+#endif
     Q76B_LOGI("Q7.20 TERRAIN DDS READY: path=%s resolved=%s size=%dx%d format=%s",
               path.c_str(), image.sourcePath.c_str(), image.width, image.height,
               image.format.c_str());
@@ -687,6 +696,9 @@ void ShutdownFo3TerrainRenderQ76() {
     // Q20 may own a worker or partially staged incoming strip. Stop that work
     // before deleting the legacy/cell-owned terrain GL objects.
     ResetFo3TerrainStreamingQ2000();
+#ifdef FQ_ENABLE_VULKAN
+    while(!terrainComposites.empty())RemoveTerrainComposite(terrainComposites.begin()->first);
+#endif
     for (Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.vbo) glDeleteBuffers(1, &batch.vbo);
         if (batch.vao) glDeleteVertexArrays(1, &batch.vao);
@@ -744,6 +756,9 @@ void ShutdownFo3TerrainRenderQ76() {
 }
 
 void ShutdownFo3TerrainGpuSession() {
+#ifdef FQ_ENABLE_VULKAN
+    compositeSources.clear();
+#endif
     ShutdownFo3TerrainRenderQ76();
     for (auto* cache : {&q1910TerrainTextureCache, &q1810TerrainNormalTextureCache}) {
         for (const auto& entry : *cache) if (entry.second) glDeleteTextures(1, &entry.second);
@@ -1178,6 +1193,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=shader-program");
         return false;
     }
+#ifdef FQ_ENABLE_VULKAN
+    terrainCompositeRegion=glGetUniformLocation(q76bProgram,"uCompositeRegion");
+#endif
     q76bMvpLocation = glGetUniformLocation(q76bProgram, "uMvp");
     q76bSamplerLocation = glGetUniformLocation(q76bProgram, "uDiffuse");
     q238PaintCountLocation=glGetUniformLocation(q76bProgram,"uPaintCount");
@@ -1304,6 +1322,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         if (gpu.alphaLayer) ++q718AlphaBatches;
 
     }
+#ifdef FQ_ENABLE_VULKAN
+    PrepareColdComposites(cpuBatches);
+#endif
     const size_t q237Covered = fo3terrain::RemoveCoveredPaint(cpuBatches, [&](const Q711CpuBatch& batch) {
         const auto texture = uploadedByPath.find(batch.texturePath);
         return texture != uploadedByPath.end() && texture->second != 0u;
@@ -1619,6 +1640,11 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, q1050TerrainShadowTexture);
     glActiveTexture(GL_TEXTURE0);
+#ifdef FQ_ENABLE_VULKAN
+    UpdateCompositeBlend();
+    // Mixed cells need a second colour pass only during the transition.
+    std::vector<std::pair<const Q711TerrainBatch*,const TerrainComposite*>> transitions;
+#endif
     for (const Q711TerrainBatch* batchPtr : q229TerrainBaseBatches) {
         const Q711TerrainBatch& batch=*batchPtr;
         ++q2018BaseTested;
@@ -1629,6 +1655,12 @@ void RenderFo3TerrainQ76(const float* mvp) {
         if(!fo3terrain::MayIntersectClip(batch,mvp))continue;
         ++q2018BaseDrawn;
         bindBatchLights(batch);
+#ifdef FQ_ENABLE_VULKAN
+        if(const auto* composite=CompositeFor(batch)){
+            if(composite->blend>=1.f){DrawTerrainComposite(batch,*composite);continue;}
+            transitions.emplace_back(&batch,composite);
+        }
+#endif
         glUniform1i(q76bUseTextureLocation, batch.realTexture ? 1 : 0);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
         if (q1060TerrainSpecularLocation >= 0) glUniform1f(q1060TerrainSpecularLocation, batch.specularEnabled ? 1.0f : 0.0f);
@@ -1651,6 +1683,9 @@ void RenderFo3TerrainQ76(const float* mvp) {
     for (const Q711TerrainBatch* batchPtr : q229TerrainPaintBatches) {
         const Q711TerrainBatch& batch=*batchPtr;
         ++q2018AlphaTested;
+#ifdef FQ_ENABLE_VULKAN
+        if(const auto* composite=CompositeFor(batch);composite&&composite->blend>=1.f)continue;
+#endif
         if (Q228EntireTerrainBatchBelowReflectionPlane(batch)) {
             ++q228MirrorUnderwaterSkipped;
             continue;
@@ -1670,6 +1705,12 @@ void RenderFo3TerrainQ76(const float* mvp) {
         Q237DrawTerrainBatch(batch);
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    for(const auto& [batch,composite]:transitions){
+        bindBatchLights(*batch);
+        DrawTerrainComposite(*batch,*composite);
+    }
+#endif
     glDepthMask(previousDepthMask);
     glDepthFunc(static_cast<GLenum>(previousDepthFunc));
     glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),

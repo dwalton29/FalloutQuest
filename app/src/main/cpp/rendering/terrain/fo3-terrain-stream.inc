@@ -41,6 +41,9 @@ struct Q2000CpuCell {
     size_t alphaTriangles = 0u;
     size_t alphaLayers = 0u;
     bool coveragePrepared = false;
+#ifdef FQ_ENABLE_VULKAN
+    fo3terrain::composite::Surface composite;
+#endif
 };
 
 struct Q2000WorkerTask {
@@ -58,6 +61,10 @@ struct Q2000WorkerTask {
     std::unordered_set<std::string> cachedDiffuse;
     std::unordered_set<std::string> cachedNormals;
     std::vector<Q2000CpuCell> cells;
+#ifdef FQ_ENABLE_VULKAN
+    fo3terrain::composite::Sources sources;
+    bool bakeComposites=false;
+#endif
     std::vector<Q2000PreparedTexture> textures;
     uint64_t loadUs = 0u;
     uint64_t buildUs = 0u;
@@ -571,6 +578,19 @@ void Q2000RunWorker(const std::shared_ptr<Q2000WorkerTask>& task) {
             Q2000PrepareTexture(batch.normalPath, true, task, seen);
         }
     }
+#ifdef FQ_ENABLE_VULKAN
+    if(task->bakeComposites){
+        for(const auto& texture:task->textures){
+            auto tile=fo3terrain::composite::Downsample(texture.image.rgba,texture.image.width,texture.image.height);
+            if(tile)task->sources.emplace(texture.path,std::move(tile));
+        }
+        for(auto& cell:task->cells){
+            std::vector<const Q711CpuBatch*> group;
+            for(const auto& b:cell.batches)group.push_back(&b);
+            cell.composite=fo3terrain::composite::Bake(group,task->sources);
+        }
+    }
+#endif
     task->textureUs = Q2000ElapsedUs(textureStarted);
     task->success = true;
     task->workerUs = Q2000ElapsedUs(workerStarted);
@@ -603,6 +623,9 @@ void Q2000ConsumeWorker() {
         return;
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    compositeSources.insert(task->sources.begin(),task->sources.end());
+#endif
     gQ2000TargetActive = true;
     gQ2000TargetCentreX = task->targetCentreX;
     gQ2000TargetCentreY = task->targetCentreY;
@@ -919,6 +942,9 @@ void Q2000CommitTarget() {
         Q711TerrainBatch& batch = q711TerrainBatches[read];
         const uint64_t key = Q711GridKey(batch.gridX, batch.gridY);
         if (gQ2000TargetKeys.find(key) == gQ2000TargetKeys.end()) {
+#ifdef FQ_ENABLE_VULKAN
+            RemoveTerrainComposite(key);
+#endif
             Q2000QueueBatchGeometry(batch);
             ++retiredBatches;
             continue;
@@ -1006,6 +1032,13 @@ void Q2000AdvanceGpu() {
                 if (!fqloading::Allow()) return;
                 fqloading::WorkScope operation("terrain-paint-coverage");
                 const auto started = std::chrono::steady_clock::now();
+#ifdef FQ_ENABLE_VULKAN
+                // An optional texture may have missed its GPU upload budget.
+                if(cell.composite.valid&&std::all_of(cell.batches.begin(),cell.batches.end(),[](const Q711CpuBatch& b){
+                    return b.vertices.empty()||q1910TerrainTextureCache.count(b.texturePath);
+                }))PublishTerrainComposite(Q711GridKey(cell.gridX,cell.gridY),cell.composite);
+                cell.composite={};
+#endif
                 const size_t covered = fo3terrain::RemoveCoveredPaint(cell.batches, [](const Q711CpuBatch& batch) {
                     const auto texture = q1910TerrainTextureCache.find(batch.texturePath);
                     return texture != q1910TerrainTextureCache.end() && texture->second != 0u;
@@ -1070,6 +1103,10 @@ void Q2000LaunchWorker(
         float arrivalX, float arrivalY, float arrivalZ,
         float sceneForward, float floorY, float unitsPerMetre) {
     auto task = std::make_shared<Q2000WorkerTask>();
+#ifdef FQ_ENABLE_VULKAN
+    task->bakeComposites=fqrender::nativeOnly&&fqquality::WorldMaterials();
+    if(task->bakeComposites)task->sources=compositeSources;
+#endif
     task->serial = gQ2000Serial;
     task->worldspace = worldspaceFormId;
     task->targetCentreX = targetCentreX;

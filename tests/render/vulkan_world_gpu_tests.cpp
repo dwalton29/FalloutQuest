@@ -1144,7 +1144,12 @@ void GameplayPresentation(bool withDepth) {
         const bool loading=frame<3;
         // A valid exterior/interior horizon must never colour the loading void.
         const float horizon[]{.35f,.6f,.8f};
-        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading,loading?horizon:nullptr));fqgl::state.texture2d[0].Change(5);
+        auto& renderer=*fqvk::renderer;
+        renderer.resolution.step=6;
+        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading,loading?horizon:nullptr,false,13.89));
+        assert(renderer.reduced==!loading);
+        assert(renderer.worldRect.extent.width==(loading?64u:53u));
+        fqgl::state.texture2d[0].Change(5);
         Submit(1,40,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         if(!loading)fqvk::PostProcess({});
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,125000.0f/70.0f));

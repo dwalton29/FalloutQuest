@@ -45,7 +45,14 @@ struct DetailScope {
     explicit DetailScope(int tier):previous(detailTier){detailTier=tier;}
     ~DetailScope(){detailTier=previous;}
 };
+inline bool matteSurface=false;
+struct MatteScope {
+    bool previous;
+    explicit MatteScope(bool enabled):previous(matteSurface){matteSurface=enabled;}
+    ~MatteScope(){matteSurface=previous;}
+};
 struct DrawCommand {
+    bool matte=fqrender::matteSurface;
     int detailTier=fqrender::detailTier;
     Handle program=0,mesh=0;
     uint32_t topology=0,indexType=0;

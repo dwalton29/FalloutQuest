@@ -7,6 +7,7 @@
 #include "world/interaction/fo3-world-door-anchors.h"
 #include "npc/fo3-actor-clip-path.h"
 #include "rendering/fo3-visual-admission.h"
+#include "rendering/world-material-policy.h"
 #include "rendering/spacewarp/fo3-motion-gles.h"
 #include "physics/fo3-contact-limit.h"
 #include "physics/fo3-rigid-world.h"
@@ -7741,6 +7742,13 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false,
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     if(!gInstancedDrawActiveQ2016 && Q241Hidden(object))return;
 #ifdef FQ_ENABLE_VULKAN
+    const bool matte=fqquality::WorldMaterials()&&!object.q210PlayerBody&&!object.q230NpcActor&&
+        !object.physicalWeapon&&!object.skinMode&&!object.q2024TerrainLod&&!object.pipScreen&&!object.geneScreen&&
+        !object.noLighting&&!object.noLightingFalloff&&!object.alphaBlend&&!object.alphaTest&&!object.decalQ1170&&
+        !object.environmentEnabledQ2050&&!environmentPassQ2050&&!object.realGlow&&!object.externalEmittanceEnabledQ1380&&
+        (!object.specularEnabled||!object.realNormal)&&
+        (object.emissiveMult<=0.f||(object.emissiveColor[0]==0.f&&object.emissiveColor[1]==0.f&&object.emissiveColor[2]==0.f));
+    fqrender::MatteScope matteMaterial(matte);
     const int detailTier=(object.q230NpcActor||gInstancedDrawActiveQ2016)?fqrender::detailTier:SceneryGeometryTier(object);
     fqrender::DetailScope detailDraw(object.q210PlayerBody||object.physicalWeapon||object.scriptAnimated||
         object.q2400SwingDoor||object.q220LooseObject||object.alphaTest||object.alphaBlend?-1:detailTier);
