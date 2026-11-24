@@ -1,10 +1,12 @@
 #pragma once
 #include "performance-capture.h"
 #include "gpu-timestamp-timer.h"
+#include "physics/fo3-rigid-world.h"
 #include <sys/system_properties.h>
 #include <android/log.h>
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 
 namespace fqperf {
 inline fqgpu::TimestampTimer gpu;
@@ -56,6 +58,7 @@ inline void Complete(const char* reason) {
     const int error=ok?0:errno?errno:EIO;
     Status("complete",ok,error,reason);
     capture.active=false;
+    fo3rigid::Live().UseBaselineIterations(false);
     __android_log_print(ANDROID_LOG_INFO,"FQPerf","CAPTURE_END id=%llu frames=%zu saved=%d error=%d reason=%s gpuDisjoint=%llu gpuDropped=%llu",
         (unsigned long long)capture.id,capture.size,ok,error,reason,(unsigned long long)gpu.disjoints,(unsigned long long)gpu.dropped);
 }
@@ -65,10 +68,13 @@ inline void Control() {
     nextControl=Clock::now()+std::chrono::seconds(1);
     char value[PROP_VALUE_MAX]{};
     __system_property_get("debug.falloutquest.perf_capture",value);
-    const uint64_t token=std::strtoull(value,nullptr,10);
+    char* suffix=nullptr;
+    const uint64_t token=std::strtoull(value,&suffix,10);
     if(capture.active && (!token || token!=lastToken || capture.size==Capacity || Us(capture.started)>120e6))
         Complete(capture.size==Capacity?"capacity":Us(capture.started)>120e6?"timeout":token?"replaced":"requested");
     if(token && token!=lastToken) {
+        // A plain token uses the gameplay default. The comparison applies only to this capture.
+        fo3rigid::Live().UseBaselineIterations(std::strcmp(suffix,":20")==0);
         capture.Start(token);
         gpu.Shutdown();gpu.Initialize();
         gpu.sample=[](uint64_t frame,unsigned eye,unsigned pass,double us){capture.GpuStage(frame,eye,pass,us);};

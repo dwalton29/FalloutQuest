@@ -11,6 +11,7 @@
 namespace fo3rigid {
 namespace {
 constexpr float MaxFrameSeconds=.064f;
+constexpr int DefaultSolverIterations=16;
 btVector3 B(const V& v){return {v[0],v[1],v[2]};}
 V A(const btVector3& v){return {float(v.x()),float(v.y()),float(v.z())};}
 btTransform B(const M& m){btTransform t;t.setFromOpenGLMatrix(m.data());return t;}
@@ -127,7 +128,7 @@ struct World::Impl {
         // Keep Bullet's contact-expanded broadphase bounds for thin walls.
         // The scenery filter below prunes fixed/fixed pairs independently.
         world.setGravity({0,-9.80665f,0});
-        world.getSolverInfo().m_numIterations=20;
+        world.getSolverInfo().m_numIterations=DefaultSolverIterations;
         world.getSolverInfo().m_splitImpulse=true;
     }
     // Predict bounds over the look-ahead interval, including rotation. An incoming loose
@@ -274,6 +275,10 @@ struct World::Impl {
     ~Impl(){for(auto& r:ragdolls)for(auto& j:r.second.joints)world.removeConstraint(j.get());ragdolls.clear();for(int h=0;h<2;++h)Drop(h);for(auto* map:{&bodies,&statics})for(auto& e:*map)world.removeRigidBody(e.second.body.get());}
 };
 World::World():impl(new Impl){}World::~World()=default;
+void World::UseBaselineIterations(bool baseline){
+    impl->world.getSolverInfo().m_numIterations=baseline?20:DefaultSolverIterations;
+}
+int World::SolverIterationLimit()const{return impl->world.getSolverInfo().m_numIterations;}
 World& Live(){static World instance;return instance;}
 void World::RemoveStatic(uint64_t id){auto i=impl->statics.find(id);if(i==impl->statics.end())return;btVector3 lo,hi;i->second.body->getAabb(lo,hi);impl->WakeBounds(lo,hi);impl->world.removeRigidBody(i->second.body.get());impl->statics.erase(i);}
 void World::ClearStatics(){for(auto& e:impl->statics)impl->world.removeRigidBody(e.second.body.get());impl->statics.clear();}

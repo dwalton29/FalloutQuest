@@ -2,7 +2,8 @@ param(
     [ValidateRange(10,100)][int]$Seconds = 30,
     [string]$OutputDirectory = ".",
     [ValidatePattern('^[a-zA-Z0-9_-]{1,48}$')][string]$Scene = "megaton",
-    [switch]$AllowDebug
+    [switch]$AllowDebug,
+    [ValidateSet('16','20')][string]$SolverIterations
 )
 $ErrorActionPreference = "Stop"
 $token = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
@@ -125,12 +126,18 @@ try {
     $versionName = [regex]::Match($packageText, '(?m)^\s*versionName=(\S+)').Groups[1].Value
     if (!$versionCode -or !$versionName) { throw "FalloutQuest is not installed on the connected headset." }
     $prefix = Join-Path $destination.FullName "$Scene-v$versionCode-$token"
+    $request = [string]$token
+    if ($SolverIterations) {
+        if ([int]$versionCode -lt 363) { throw "Solver iteration selection requires v363 or newer." }
+        $prefix = Join-Path $destination.FullName "$Scene-v$versionCode-i$SolverIterations-$token"
+        $request = "${token}:$SolverIterations"
+    }
     if (!$AllowDebug -and !$versionName.EndsWith("-O2")) {
         throw "Install the FalloutQuest O2 profile APK, or pass -AllowDebug to capture a debug build."
     }
 
     Add-DeviceSnapshot "before capture"
-    $null = Invoke-Adb -Arguments @("shell", "setprop", "debug.falloutquest.perf_capture", $token)
+    $null = Invoke-Adb -Arguments @("shell", "setprop", "debug.falloutquest.perf_capture", $request)
     try {
         $started = $false
         for ($i=0; $i -lt 8; $i++) {
@@ -178,6 +185,9 @@ try {
     if ($csv.Count - 2 -ne $expectedFrames) { throw "The CSV was truncated. Expected $expectedFrames frames, received $($csv.Count - 2)." }
     if (!$AllowDebug -and $header -notmatch '\bnative=profile-O2\b') {
         throw "The native library is not the O2 profile build."
+    }
+    if ($SolverIterations -and $header -notmatch "\bsolverIterationLimit=$SolverIterations\b") {
+        throw "The headset did not confirm the requested solver iteration limit of $SolverIterations."
     }
     [System.IO.File]::WriteAllLines("$prefix.csv", [string[]]$csv, $utf8)
     Write-Host $header

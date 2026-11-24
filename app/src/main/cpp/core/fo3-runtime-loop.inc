@@ -1872,10 +1872,10 @@ private:
 #endif
             char model[PROP_VALUE_MAX]{};__system_property_get("ro.product.model",model);
             std::snprintf(fqperf::capture.configuration,sizeof(fqperf::capture.configuration),
-                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=%s vulkanProbe=%d benchmarkValid=%d",
+                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=%s vulkanProbe=%d benchmarkValid=%d solverIterationLimit=%d",
                 FQ_SOURCE_COMMIT,nativeVariant,model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
                 vulkanGameplay_?1:q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
-                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan":"gles",vulkanProbe,!vulkanProbe);
+                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan":"gles",vulkanProbe,!vulkanProbe,fo3rigid::Live().SolverIterationLimit());
         }
         const auto waitStarted=fqopaque::Clock::now();
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
