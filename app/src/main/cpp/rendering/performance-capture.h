@@ -98,7 +98,7 @@ struct Session {
     std::array<Frame,Capacity> frames{};
     Frame current;
     char configuration[768]{};
-    char graphics[384]{};
+    char graphics[768]{};
     size_t size=0;
     uint64_t id=0,serial=0;
     bool active=false,recording=false;
