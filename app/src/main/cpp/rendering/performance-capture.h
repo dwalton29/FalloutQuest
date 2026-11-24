@@ -82,7 +82,7 @@ struct Frame {
     uint64_t npcGroundScannedTriangles=0;
     fqspacewarp::HistoryRejection motionRejection{};
     uint32_t worldRenderWidth=0,worldRenderHeight=0,matteDraws=0,compositeLandDraws=0;
-    uint64_t vkActualCorners=0;std::array<uint64_t,3> geometrySaved{};
+    uint64_t vkActualCorners=0;std::array<uint64_t,3> geometrySaved{},lodSource{},lodUsed{};
     uint32_t motionReplayPasses=0,motionReplayDraws=0;
     bool spacewarp=false,focused=false;
     double vkWorldUs=0,vkUiUs=0;
@@ -158,7 +158,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped,scenerySampled,sceneryDetailedDraws,sceneryInstancedDraws,sceneryAlreadySaved,sceneryEligibleDraws,sceneryAdditionalMatches,movableBoundsUpdated,staticBoundsReused,ragdollRequestHeight,ragdollRequestVelocityY,vkActualCorners,lodScenerySaved,lodTerrainSaved,lodActorsSaved,worldRenderWidth,worldRenderHeight,matteDraws,compositeLandDraws\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped,scenerySampled,sceneryDetailedDraws,sceneryInstancedDraws,sceneryAlreadySaved,sceneryEligibleDraws,sceneryAdditionalMatches,movableBoundsUpdated,staticBoundsReused,ragdollRequestHeight,ragdollRequestVelocityY,vkActualCorners,lodScenerySaved,lodTerrainSaved,lodActorsSaved,worldRenderWidth,worldRenderHeight,matteDraws,compositeLandDraws,lodCloseSourceVertices,lodCloseUsedVertices,lodMiddleSourceVertices,lodMiddleUsedVertices,lodFarSourceVertices,lodFarUsedVertices\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -195,9 +195,11 @@ struct Session {
                 v.scenerySampled,v.scenery.detailedDraws,v.scenery.instancedDraws,v.scenery.alreadySaved,
                 v.scenery.eligibleDraws,v.scenery.additionalMatches,v.movableBoundsUpdated,v.staticBoundsReused,
                 v.ragdollRequestHeight,v.ragdollRequestVelocityY);
-            std::fprintf(f,",%llu,%llu,%llu,%llu,%u,%u,%u,%u\n",(unsigned long long)v.vkActualCorners,(unsigned long long)v.geometrySaved[0],
+            std::fprintf(f,",%llu,%llu,%llu,%llu,%u,%u,%u,%u",(unsigned long long)v.vkActualCorners,(unsigned long long)v.geometrySaved[0],
                 (unsigned long long)v.geometrySaved[1],(unsigned long long)v.geometrySaved[2],
                 v.worldRenderWidth,v.worldRenderHeight,v.matteDraws,v.compositeLandDraws);
+            for(unsigned i=0;i<3;++i)std::fprintf(f,",%llu,%llu",(unsigned long long)v.lodSource[i],(unsigned long long)v.lodUsed[i]);
+            std::fputc('\n',f);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

@@ -31,6 +31,13 @@ struct Q2000PreparedTexture {
     bool normal = false;
 };
 
+#ifdef FQ_ENABLE_VULKAN
+struct TerrainDetailJob {
+    std::vector<Q711CpuBatch> batches;
+    std::atomic<bool> ready{false};
+};
+#endif
+
 struct Q2000CpuCell {
     int32_t gridX = 0;
     int32_t gridY = 0;
@@ -43,6 +50,7 @@ struct Q2000CpuCell {
     bool coveragePrepared = false;
 #ifdef FQ_ENABLE_VULKAN
     fo3terrain::composite::Surface composite;
+    std::shared_ptr<TerrainDetailJob> detailJob;
 #endif
 };
 
@@ -1020,6 +1028,13 @@ void Q2000AdvanceGpu() {
 
     while (gQ2000CellCursor < gQ2000PendingCells.size()) {
         Q2000CpuCell& cell = gQ2000PendingCells[gQ2000CellCursor];
+#ifdef FQ_ENABLE_VULKAN
+        if(cell.detailJob){
+            if(!cell.detailJob->ready.load(std::memory_order_acquire))return;
+            cell.batches=std::move(cell.detailJob->batches);
+            cell.detailJob.reset();
+        }
+#endif
         if (!cell.hasTerrain || cell.batches.empty()) {
             Q2000PublishCurrentCell(cell);
             ++gQ2000CellCursor;
@@ -1051,14 +1066,28 @@ void Q2000AdvanceGpu() {
                 for(Q711CpuBatch& batch:cell.batches)if(batch.vertexFloats==15u)Q237PrepareTerrainIndices(batch);
                 Q76B_LOGI("Q238 TERRAIN FUSION: cell=(%d,%d) baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
                           cell.gridX,cell.gridY,fused.triangles,fused.paintTriangles,fused.groups,fused.fallback,fo3terrain::LegacyLayers());
-#ifdef FQ_ENABLE_VULKAN
-                MarkTerrainDetail(cell.batches);
-#endif
                 cell.coveragePrepared = true;
                 const uint64_t elapsed = Q2000ElapsedUs(started);
                 gQ2000TargetMaxGpuStepUs = std::max(gQ2000TargetMaxGpuStepUs, elapsed);
                 Q76B_LOGI("Q237 TERRAIN COVERAGE: cell=(%d,%d) coveredPaintTriangles=%zu cpuUs=%llu baseDepth=retained",
                           cell.gridX, cell.gridY, covered, static_cast<unsigned long long>(elapsed));
+#ifdef FQ_ENABLE_VULKAN
+                if(fqvk::hooks.detail){
+                    auto job=std::make_shared<TerrainDetailJob>();
+                    job->batches.swap(cell.batches);
+                    try {
+                        // The job owns CPU geometry only, including after teleport or cancellation.
+                        std::thread([job]{
+                            try {PrepareTerrainDetail(job->batches);}
+                            catch(const std::exception&){for(auto& batch:job->batches)batch.geometryLevels={};}
+                            job->ready.store(true,std::memory_order_release);
+                        }).detach();
+                        cell.detailJob=std::move(job);
+                        gQ2000TargetGpuUs+=Q2000ElapsedUs(updateStarted);
+                        return;
+                    }catch(const std::system_error&){cell.batches.swap(job->batches);}
+                }
+#endif
                 if (Q2000ElapsedUs(updateStarted) >= Q2000_GPU_BUDGET_US) {
                     gQ2000TargetGpuUs += Q2000ElapsedUs(updateStarted);
                     return;

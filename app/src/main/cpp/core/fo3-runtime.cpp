@@ -1,3 +1,4 @@
+#include <map>
 #include "player/fo3-player-presentation.h"
 #include "player/fo3-player-death.h"
 #include "scripting/fo3-script-cell-handoff.h"
@@ -543,6 +544,7 @@ struct CpuObject {
     // Explicit loader provenance, not a fabricated ESM record type. Native
     // terrain/object LOD is immutable too, including Level8/16/32 and .High.
     bool q237ImmutableNativeLod = false;
+    bool nativeTerrainGeometry = false;
     float q1960MinX = 0.0f, q1960MaxX = 0.0f;
     float q1960MinY = 0.0f, q1960MaxY = 0.0f;
     float q1960MinZ = 0.0f, q1960MaxZ = 0.0f;
@@ -553,7 +555,6 @@ struct CpuObject {
 
 struct GpuObject {
     mutable int geometryTier=-1;
-    float geometryScale=1.f;
     std::shared_ptr<const fo3doorpick::Bounds> doorActivation;
     mutable uint64_t motionIdentity=0;
     std::shared_ptr<fqspacewarp::Drawable> motionShape;
@@ -1182,8 +1183,11 @@ bool Q2017TryReuseSharedGeometry(GpuObject& gpu) {
         return false;
     }
     std::copy(relative, relative + 16, gpu.q2017RelativeMatrix);
-    gpu.geometryScale=std::sqrt(relative[0]*relative[0]+relative[1]*relative[1]+relative[2]*relative[2]);
     gpu.vao = shared.vao;
+#ifdef FQ_ENABLE_VULKAN
+    // The owner's simplification may retain different triangles after placement.
+    if(fqvk::hooks.detail)gpu.occluders.reset();
+#endif
     gpu.vbo = shared.vbo;
     gpu.q236IndexBuffer=shared.q236IndexBuffer;
     gpu.q2017SharedGeometry = true;
@@ -1223,8 +1227,10 @@ void Q2017PublishSharedGeometry(GpuObject& gpu) {
                 glDeleteVertexArrays(1, &gpu.vao);
                 gpu.vbo = shared.vbo;
                 gpu.q236IndexBuffer=shared.q236IndexBuffer;
-                gpu.geometryScale=std::sqrt(relative[0]*relative[0]+relative[1]*relative[1]+relative[2]*relative[2]);
                 gpu.vao = shared.vao;
+#ifdef FQ_ENABLE_VULKAN
+                if(fqvk::hooks.detail)gpu.occluders.reset();
+#endif
                 std::copy(relative, relative + 16,
                           gpu.q2017RelativeMatrix);
                 gpu.q2017SharedGeometry = true;
@@ -2465,7 +2471,7 @@ void Q241PrepareOccluders(CpuObject& cpu,float cx,float cy,float cz) {
     const auto& type=cpu.placement.baseRecordType;
     if((type!="STAT"&&type!="SCOL")||cpu.mesh.skinned||cpu.mesh.alphaBlend||
        cpu.mesh.alphaTest||cpu.mesh.alpha<1.f)return;
-    struct Candidate {float size=0;fo3occ::Triangle triangle;};
+    struct Candidate {float size=0;fo3occ::Triangle triangle;size_t corner=0;};
     std::array<Candidate,16> best{};
     size_t count=0;
     for(size_t i=0;i+2<cpu.mesh.indices.size();i+=3) {
@@ -2484,14 +2490,44 @@ void Q241PrepareOccluders(CpuObject& cpu,float cx,float cy,float cz) {
         const float x=uy*vz-uz*vy,y=uz*vx-ux*vz,z=ux*vy-uy*vx;
         const float size=x*x+y*y+z*z;
         if(!std::isfinite(size)||size<16.f)continue;
-        if(count<best.size())best[count++]={size,t};
+        if(count<best.size())best[count++]={size,t,i};
         else {
             auto it=std::min_element(best.begin(),best.end(),[](const auto& l,const auto& r){return l.size<r.size;});
-            if(size>it->size)*it={size,t};
+            if(size>it->size)*it={size,t,i};
         }
     }
-    cpu.occluders.reserve(count);
     std::array<bool,16> merged{};
+#ifdef FQ_ENABLE_VULKAN
+    // An authored triangle can occlude other shapes only while its surface
+    // survives every LOD. Compare source indices before merging coplanar faces.
+    if(count && !cpu.geometryLevels.indices.empty()){
+        using Face=std::array<uint32_t,3>;
+        auto canonical=[](Face face){
+            std::rotate(face.begin(),std::min_element(face.begin(),face.end()),face.end());
+            return face;
+        };
+        std::map<Face,unsigned> retained;
+        auto original=[&](size_t i){return canonical({cpu.mesh.indices[i],cpu.mesh.indices[i+1],cpu.mesh.indices[i+2]});};
+        for(size_t j=0;j<count;++j)retained.emplace(original(best[j].corner),0);
+        unsigned required=0;
+        for(unsigned tier=0;tier<3;++tier){
+            const auto range=cpu.geometryLevels.ranges[tier];
+            if(!range.count)continue;
+            required|=1u<<tier;
+            for(size_t i=range.first;i<size_t(range.first)+range.count;i+=3){
+                Face face{};
+                for(unsigned k=0;k<3;++k){
+                    const auto v=cpu.geometryLevels.indices[i+k];
+                    face[k]=cpu.q236IndexedPrepared?v:cpu.mesh.indices[v];
+                }
+                const auto found=retained.find(canonical(face));
+                if(found!=retained.end())found->second|=1u<<tier;
+            }
+        }
+        for(size_t j=0;j<count;++j)merged[j]=retained[original(best[j].corner)]!=required;
+    }
+#endif
+    cpu.occluders.reserve(count);
     for(size_t i=0;i<count;++i) {
         if(merged[i])continue;
         fo3occ::Surface surface{{best[i].triangle.p[0],best[i].triangle.p[1],best[i].triangle.p[2],{}},3};
@@ -2507,24 +2543,19 @@ bool PrepareExpandedVertexStreamQ1960(
     constexpr size_t FLOATS_PER_VERTEX = 18u;
     if (cpu.q1960ExpandedReady && !cpu.q1960ExpandedVertices.empty())
         return true;
-    Q241PrepareOccluders(cpu,centerX,centerY,floorZ);
-#ifdef FQ_ENABLE_VULKAN
     auto prepareDetail=[&]{
+#ifdef FQ_ENABLE_VULKAN
         const auto& type=cpu.placement.baseRecordType;
-        // Authored distant blocks already implement LOD and own the borders
-        // between neighbouring terrain tiles. Keep those original meshes.
-        if(!cpu.q237ImmutableNativeLod&&(type=="STAT"||type=="SCOL"||type=="TREE"||
-            type=="FURN"||type=="CONT"||type=="ACTI"||type=="MSTT")&&
-           !cpu.mesh.skinned&&!cpu.mesh.alphaBlend&&!cpu.mesh.alphaTest)
-            cpu.geometryLevels=fqdetail::Build(fqdetail::Family::Scenery,cpu.q1960ExpandedVertices.data(),
+        if((cpu.q237ImmutableNativeLod||type=="STAT"||type=="SCOL"||type=="TREE"||
+            type=="FURN"||type=="CONT"||type=="ACTI"||type=="MSTT"||type=="DOOR")&&!cpu.mesh.skinned)
+            cpu.geometryLevels=fqdetail::Build(cpu.nativeTerrainGeometry?fqdetail::Family::Terrain:fqdetail::Family::Scenery,cpu.q1960ExpandedVertices.data(),
                 cpu.q1960ExpandedVertices.size()/18,18,cpu.mesh.indices,!cpu.q236IndexedPrepared);
-    };
 #endif
+        Q241PrepareOccluders(cpu,centerX,centerY,floorZ);
+    };
     if(Q236CanIndexStaticNif(cpu)){
         Q236PrepareIndexedStaticNif(cpu,centerX,centerY,floorZ);
-#ifdef FQ_ENABLE_VULKAN
         prepareDetail();
-#endif
         return true;
     }
     cpu.q236IndexedPrepared=false;
@@ -2575,9 +2606,7 @@ bool PrepareExpandedVertexStreamQ1960(
     if (expanded.empty()) return false;
 
     cpu.q1960ExpandedVertices = std::move(expanded);
-#ifdef FQ_ENABLE_VULKAN
     prepareDetail();
-#endif
     cpu.q1960ExpandedReady = true;
     cpu.q1960MinX = objectMinimum.x; cpu.q1960MaxX = objectMaximum.x;
     cpu.q1960MinY = objectMinimum.y; cpu.q1960MaxY = objectMaximum.y;
@@ -3019,7 +3048,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         fqvk::Mesh(gpu.vao,expanded.data(),q1960ExpandedFloatCount/FLOATS_PER_VERTEX,
                    FLOATS_PER_VERTEX,q236Indexed?cpu.mesh.indices.data():nullptr,
                    q236Indexed?cpu.mesh.indices.size():0u);
-        if(!gpu.alphaTest&&!gpu.decalQ1170)fqvk::Detail(gpu.vao,geometryLevels);
+        if(!gpu.decalQ1170)fqvk::Detail(gpu.vao,geometryLevels);
 #endif
         if (gQ1960CaptureVboQ19 && gQ1960CapturedVboVerticesQ19) {
             *gQ1960CapturedVboVerticesQ19 = std::move(expanded);
@@ -7718,8 +7747,7 @@ uint32_t gFo3AppearanceScreenRef=0;
 int SceneryGeometryTier(const GpuObject& object) {
     // These bounds belong to the placement, including when it shares its owner's VAO.
     const float d=fqdetail::Distance(gQ210Head,object.minX,object.maxX,object.minY,object.maxY,object.minZ,object.maxZ);
-    if(!std::isfinite(object.geometryScale)||object.geometryScale<=0)return -1;
-    return object.geometryTier=fqdetail::Tier(d/std::max(1.f,object.geometryScale),object.geometryTier);
+    return object.geometryTier=fqdetail::Tier(d,object.geometryTier);
 }
 #endif
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false, fqspacewarp::Placement placement = {}) {
@@ -7751,7 +7779,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false,
     fqrender::MatteScope matteMaterial(matte);
     const int detailTier=(object.q230NpcActor||gInstancedDrawActiveQ2016)?fqrender::detailTier:SceneryGeometryTier(object);
     fqrender::DetailScope detailDraw(object.q210PlayerBody||object.physicalWeapon||object.scriptAnimated||
-        object.q2400SwingDoor||object.q220LooseObject||object.alphaTest||object.alphaBlend?-1:detailTier);
+        object.q220LooseObject||object.decalQ1170?-1:detailTier);
 #endif
     if (gFo3Environment.interior) {
         float positions[FO3_SHADER_LIGHTS*4]{}, colours[FO3_SHADER_LIGHTS*4]{};
@@ -8003,7 +8031,7 @@ struct Q2017InstanceBatch {
     const GpuObject* representative = nullptr;
     size_t matrixBaseFloat = 0u;
     GLsizei count = 0;
-    int detailTier=2;
+    const int detailTier=representative->geometryTier;
 };
 
 // Frame-local pointers are valid only until the next scene preparation boundary.
@@ -8136,14 +8164,31 @@ void Q2017RenderOpaqueDetailedInstanced() {
             if (!gFo3Environment.interior && Q2017EligibleForInstancing(object)) cache.candidates.push_back(&object);
             else cache.singles.push_back(&object);
         }
+#ifdef FQ_ENABLE_VULKAN
+        // Publication already sorts by material. Split each material group by
+        // placement distance so one nearby prop cannot promote its far copies.
+        if(fqvk::hooks.detail){
+            for(auto begin=cache.candidates.begin();begin!=cache.candidates.end();){
+                auto end=begin;
+                const auto key=(*begin)->q2016BatchKey;
+                while(end!=cache.candidates.end()&&(*end)->q2016BatchKey==key){
+                    SceneryGeometryTier(**end);
+                    ++end;
+                }
+                std::sort(begin,end,[](const auto* a,const auto* b){return a->geometryTier<b->geometryTier;});
+                begin=end;
+            }
+        }
+#endif
         for (size_t first = 0; first < cache.candidates.size();) {
             const auto* representative = cache.candidates[first];
             size_t end = first+1;
             while (end < cache.candidates.size() &&
-                   cache.candidates[end]->q2016BatchKey == representative->q2016BatchKey) ++end;
+                   cache.candidates[end]->q2016BatchKey == representative->q2016BatchKey &&
+                   cache.candidates[end]->geometryTier == representative->geometryTier) ++end;
             const size_t matrixStart = cache.matrices.size();
             size_t validCount = 0;
-            int detailTier=2;
+            const int detailTier=representative->geometryTier;
             const GpuObject* onlyValid = nullptr;
             for (size_t i = first; i < end; ++i) {
                 const auto* target = cache.candidates[i];
@@ -8158,9 +8203,6 @@ void Q2017RenderOpaqueDetailedInstanced() {
                 }
                 cache.matrices.insert(cache.matrices.end(), target->q2017RelativeMatrix,
                                       target->q2017RelativeMatrix+16);
-#ifdef FQ_ENABLE_VULKAN
-                detailTier=std::min(detailTier,SceneryGeometryTier(*target));
-#endif
                 onlyValid = target; ++validCount;
             }
             if (validCount < 2) {
@@ -8550,6 +8592,7 @@ bool Q1990UploadNativeLodNif(const std::string& path,
         }
         CpuObject cpu;
         cpu.q237ImmutableNativeLod = true;
+        cpu.nativeTerrainGeometry = path.find("\\blocks\\")==std::string::npos;
         cpu.placement.refFormId = 0u;
         cpu.placement.baseFormId = 0u;
         cpu.placement.scale = 1.0f;
@@ -9095,6 +9138,7 @@ bool Q1970AppendLodNifCpuQ19(
 
         CpuObject cpu;
         cpu.q237ImmutableNativeLod = true;
+        cpu.nativeTerrainGeometry = terrain;
         cpu.placement.refFormId = 0u;
         cpu.placement.baseFormId = 0u;
         cpu.placement.scale = 1.0f;
@@ -13582,7 +13626,7 @@ void QActorPrepareStereoFrame() {
             fqperf::capture.current.combat+=actor.runtime.activity==fo3npc::Activity::Combat;
         }
 #ifdef FQ_ENABLE_VULKAN
-        actor.geometryTier=(!actor.renderBoundsReady||Fo3DialogueFocus()||Fo3VatsFocus())?-1:
+        actor.geometryTier=!actor.renderBoundsReady?0:
             fqdetail::Tier(fqdetail::Distance(gQ210Head,bounds.minX,bounds.maxX,bounds.minY,bounds.maxY,bounds.minZ,bounds.maxZ),actor.geometryTier);
 #endif
         if(actor.renderVisible) Q230PrepareVisibleActor(actor);

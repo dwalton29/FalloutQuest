@@ -13,6 +13,8 @@ struct Levels {
     std::array<Range,3> ranges{};
     std::vector<uint32_t> indices;
     Family family=Family::Scenery;
+    uint32_t sourceVertices=0;
+    std::array<uint32_t,3> tierVertices{};
 };
 
 // Distance to the nearest point, including the case where the viewer is inside.

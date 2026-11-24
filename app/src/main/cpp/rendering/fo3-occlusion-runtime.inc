@@ -67,7 +67,7 @@ void Prepare() {
     const auto start=prepareStarted;buildStarted=start;
     // Published LAND only. Two closest resident CELLs, interior quads only:
     // border heights can be stitched differently from grounding heights.
-    struct Cell {const Fo3TerrainCellQ76* land=nullptr;float distance=1e30f;};
+    struct Cell {const Fo3TerrainCellQ76* land=nullptr;float distance=1e30f,floor=0;};
     std::array<Cell,2> nearest{};
     const float gx=gExteriorOriginXQ1890+gFo3EyePosition[0]*70.f;
     const float gy=gExteriorOriginYQ1890-gFo3EyePosition[2]*70.f;
@@ -82,6 +82,15 @@ void Prepare() {
     }
     // Visit near quads first, interleaving both CELLs. Reserve the remainder
     // for authored building occluders; no previous-camera result is reused.
+#ifdef FQ_ENABLE_VULKAN
+    if(fqvk::hooks.detail)for(auto& entry:nearest)if(entry.land){
+        const auto& heights=entry.land->heights;
+        if(heights.empty()){entry.land=nullptr;continue;}
+        // All detail triangles interpolate surviving original heights. Allow
+        // for edge stitching at corners as well as the cell-wide minimum.
+        entry.floor=*std::min_element(heights.begin(),heights.end())-128.f;
+    }
+#endif
     phaseBudgetUs=BuildBudgetUs*.45;
     for(int radius=0;radius<31&&Us(start)<phaseBudgetUs;++radius)for(const auto& entry:nearest){
         if(!entry.land)continue;
@@ -93,8 +102,12 @@ void Prepare() {
             const unsigned quadrant=(y>=16?2:0)+(x>=16?1:0);
             if(cell.forceHideMask&(1u<<quadrant))return;
             auto point=[&](int px,int py)->fo3occ::Point{
+                float h=cell.heights[py*33+px];
+#ifdef FQ_ENABLE_VULKAN
+                if(fqvk::hooks.detail)h=entry.floor;
+#endif
                 return {(cell.gridX*4096.f+px*128.f-gExteriorOriginXQ1890)/70.f,
-                    FLOOR_Y+(cell.heights[py*33+px]-gExteriorOriginZQ1890)/70.f,
+                    FLOOR_Y+(h-gExteriorOriginZQ1890)/70.f,
                     SCENE_FORWARD-(cell.gridY*4096.f+py*128.f-gExteriorOriginYQ1890)/70.f};
             };
             const fo3occ::Point points[]{point(x,y),point(x+1,y),point(x+1,y+1),point(x,y+1)};Add(points,4);

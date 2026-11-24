@@ -55,7 +55,7 @@ struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDevice
 struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1,width=0,height=0;bool palette=false,clamp=false,repeatT=false,repeatS=false;};
 struct PostTarget {Image image;VkFramebuffer framebuffer{},overlay{};uint32_t width=0,height=0;bool initialized=false;};
 struct UiTarget {PostTarget target;VkImageView sampled{};};
-struct MeshData {Buffer vertices,indices,skin,detail;std::array<fqdetail::Range,3> detailRanges{};fqdetail::Family family{};uint32_t count=0,stride=0;};
+struct MeshData {Buffer vertices,indices,skin,detail;std::array<fqdetail::Range,3> detailRanges{};fqdetail::Family family{};uint32_t count=0,stride=0,sourceVertices=0;std::array<uint32_t,3> tierVertices{};};
 struct ProgramData {
     bool terrain=false,fused=false,sky=false,water=false;int ui=0;
     std::vector<uint8_t> bytes;
@@ -207,6 +207,7 @@ public:
     std::vector<Retired<Buffer>> retiredBuffers;std::vector<Retired<Image>> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;std::array<uint64_t,6> skipReasons{};uint32_t firstSkippedProgram=0,visualDiagnostics=0;bool begun=false;
     bool geometryDetail=true;std::array<uint64_t,3> savedCorners{};
+    std::array<uint64_t,3> lodSource{},lodUsed{};
     bool failed=false;
     // The OpenXR runtime owns these images. Only our views/framebuffers are destroyed.
     XrInstance xrInstance{};XrSession xrSession{};XrSwapchain xrSwapchain{};
@@ -1166,10 +1167,12 @@ public:
         if(key.skinned)BindVertex(bound,2,m.skin.buffer,0);
         if(key.instanced)BindVertex(bound,1,arena.buffer,instanceOffset);
         fqdetail::Range detail{};
+        int selectedTier=-1;
         if(geometryDetail && draw.detailTier>=0 && !offscreen && !key.ui && !key.sky && !key.water &&
-           !key.strip && !indexFirst && uint32_t(count)==m.count && m.detail.buffer) {
+           !key.strip && !indexFirst && uint32_t(count)==m.count) {
+            selectedTier=std::min(draw.detailTier,2);
             for(int tier=std::min(draw.detailTier,2);tier>=0;--tier)
-                if(m.detailRanges[tier].count){detail=m.detailRanges[tier];break;}
+                if(m.detail.buffer&&m.detailRanges[tier].count){detail=m.detailRanges[tier];break;}
         }
         const uint32_t submittedCount=detail.count?detail.count:uint32_t(count);
         const uint32_t firstIndex=detail.count?detail.first:indexFirst;
@@ -1184,6 +1187,10 @@ public:
             }
             vkCmdDrawIndexed(command,submittedCount,instances,firstIndex,0,0);
         }else vkCmdDraw(command,count,instances,first,0);
+        if(selectedTier>=0&&m.sourceVertices){
+            lodSource[selectedTier]+=uint64_t(m.sourceVertices)*instances;
+            lodUsed[selectedTier]+=uint64_t(detail.count?m.tierVertices[selectedTier]:m.sourceVertices)*instances;
+        }
         if(detail.count)savedCorners[size_t(m.family)]+=uint64_t(count-detail.count)*instances;
         ++draws;vertices+=uint64_t(submittedCount)*instances;
         if(sampleScenery)CountScenery(item,key,set,firstIndex,submittedCount,detail.count!=0);
@@ -1520,7 +1527,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        savedCorners={};matteDraws=compositeDraws=0;
+        savedCorners={};lodSource={};lodUsed={};matteDraws=compositeDraws=0;
         bufferBindsIssued=bufferBindsSkipped=0;
         pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=fusedLandDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1624,6 +1631,7 @@ public:
             if(!offscreen){frame->worldRenderWidth=worldRect.extent.width;frame->worldRenderHeight=worldRect.extent.height;
                 frame->matteDraws+=matteDraws;frame->compositeLandDraws+=compositeDraws;}
             frame->vkActualCorners+=vertices;
+            for(unsigned i=0;i<3;++i){frame->lodSource[i]+=lodSource[i];frame->lodUsed[i]+=lodUsed[i];}
             for(size_t i=0;i<savedCorners.size();++i)frame->geometrySaved[i]+=savedCorners[i];
             ++frame->vkExpected;
             frame->vkSceneDraws+=uint32_t(draws);
@@ -1982,7 +1990,7 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.uniform=[](uint32_t id,int location,int kind,int size,const void* bytes){renderer->Uniform(id,location,kind,size,bytes);};
         hooks.mesh=[](uint32_t vao,const float* vertices,size_t n,size_t stride,const uint32_t* indices,size_t indexCount){
             try {if(!vao||!vertices||!n)return;auto& r=*renderer;r.DrainDraws();
-                auto& m=r.meshes[vao];r.Retire(m.vertices);r.Retire(m.indices);r.Retire(m.detail);m.detailRanges={};
+                auto& m=r.meshes[vao];r.Retire(m.vertices);r.Retire(m.indices);r.Retire(m.detail);m.detailRanges={};m.sourceVertices=0;
                 m.stride=uint32_t(stride);m.count=uint32_t(indexCount?indexCount:n);
                 m.vertices=r.UploadBuffer(vertices,n*stride*4,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
                 if(indexCount)m.indices=r.UploadBuffer(indices,indexCount*4,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
@@ -1990,9 +1998,11 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         if(renderer->geometryDetail)hooks.detail=[](uint32_t vao,const fqdetail::Levels& levels){
             auto& r=*renderer;
             auto found=r.meshes.find(vao);
-            if(found==r.meshes.end()||levels.indices.empty())return;
+            if(found==r.meshes.end())return;
             r.DrainDraws();
             auto& mesh=found->second;
+            mesh.sourceVertices=levels.sourceVertices;mesh.tierVertices=levels.tierVertices;
+            if(levels.indices.empty())return;
             Buffer buffer{};
             try {
                 buffer=r.UploadBuffer(levels.indices.data(),levels.indices.size()*sizeof(uint32_t),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);

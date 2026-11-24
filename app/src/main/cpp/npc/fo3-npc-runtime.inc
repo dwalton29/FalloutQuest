@@ -546,8 +546,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
   if (!UploadCpuObject(part, centerX, centerY, floorZ, gpu))
     return false;
 #if defined(FQ_ENABLE_VULKAN) && !defined(FO3_ACTOR_RUNTIME_HOST_TEST)
-  if(fqvk::hooks.detail && deform&&!bindExpanded.empty()&&!gpu.alphaTest&&!gpu.alphaBlend&&
-     rig.facialBind.empty()&&!fo3appearance::HeadPart(actor.source,part.placement.modelPath)){
+  if(fqvk::hooks.detail && deform&&!bindExpanded.empty()){
     const auto levels=fqdetail::Build(fqdetail::Family::Actor,bindExpanded.data(),bindExpanded.size()/18,18,
         part.mesh.indices,true,part.mesh.skinned?&part.mesh.skinBoneIndices:nullptr,
         part.mesh.skinned?&part.mesh.skinBoneWeights:nullptr);

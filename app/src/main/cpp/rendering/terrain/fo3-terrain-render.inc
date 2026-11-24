@@ -3,6 +3,9 @@ float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
 #include "rendering/terrain/terrain-composite.h"
+#ifdef FQ_ENABLE_VULKAN
+#include "rendering/terrain/terrain-geometry-detail.h"
+#endif
 #include "rendering/world-material-policy.h"
 #include "rendering/terrain/fo3-terrain-bounds.h"
 #include "rendering/terrain/terrain-depth-scope.h"
@@ -55,7 +58,7 @@ struct Q76BV3 {
 };
 
 struct Q711TerrainBatch : fo3terrain::Bounds {
-    mutable int geometryTier=-1;
+    fo3terrain::Bounds detailBounds;
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::string texturePath;
@@ -90,7 +93,10 @@ struct Q711CpuBatch {
     std::vector<float> vertices;
     std::vector<uint32_t> indices;
     size_t vertexFloats = 12u;
-    bool allowGeometryDetail=false;
+#ifdef FQ_ENABLE_VULKAN
+    fqdetail::Levels geometryLevels;
+    fo3terrain::Bounds detailBounds;
+#endif
     std::vector<fo3terrain::PaintMaterial> paintMaterials;
     int layerOrder = -1;
     bool alphaLayer = false;
@@ -98,9 +104,11 @@ struct Q711CpuBatch {
 
 void Q237DrawTerrainBatch(const Q711TerrainBatch& batch) {
 #ifdef FQ_ENABLE_VULKAN
-    batch.geometryTier=batch.boundsValid?fqdetail::Tier(fqdetail::Distance(gFo3EyePosition,
-        batch.minX,batch.maxX,batch.minY,batch.maxY,batch.minZ,batch.maxZ),batch.geometryTier):-1;
-    fqrender::DetailScope geometryDetail(batch.geometryTier);
+    const auto& bounds=batch.detailBounds;
+    const float distance=fqdetail::Distance(gFo3EyePosition,bounds.minX,bounds.maxX,
+        bounds.minY,bounds.maxY,bounds.minZ,bounds.maxZ);
+    // Identical for every layer, even if one was outside the frustum last frame.
+    fqrender::DetailScope geometryDetail(bounds.boundsValid?fqdetail::Tier(distance,-1):-1);
 #endif
     if (batch.indexOffset)
         glDrawElements(GL_TRIANGLES, batch.vertexCount, GL_UNSIGNED_INT,
@@ -183,6 +191,9 @@ std::unordered_map<std::string, GLuint> q1810TerrainNormalTextureCache;
 Q711TerrainBatch Q238GpuMaterial(const Q711CpuBatch& cpu) {
     Q711TerrainBatch gpu;
     gpu.gridX=cpu.gridX;gpu.gridY=cpu.gridY;
+#ifdef FQ_ENABLE_VULKAN
+    gpu.detailBounds=cpu.detailBounds;
+#endif
     gpu.texturePath=cpu.texturePath;gpu.normalPath=cpu.normalPath;
     gpu.alphaLayer=cpu.alphaLayer;gpu.layerOrder=cpu.layerOrder;
     gpu.specularEnabled=cpu.specularEnabled;
@@ -245,19 +256,16 @@ uint64_t Q711GridKey(int32_t x, int32_t y) {
 
 #ifdef FQ_ENABLE_VULKAN
 #include "fo3-terrain-composite.inc"
-// Legacy paint draws re-use the base surface at equal depth. Coarsen only
-// fused surfaces and base cells whose final layout has no overlapping passes.
-void MarkTerrainDetail(std::vector<Q711CpuBatch>& batches) {
-    std::set<uint64_t> layered;
-    for(const auto& b:batches)
-        if(b.alphaLayer&&!b.vertices.empty())layered.insert(Q711GridKey(b.gridX,b.gridY));
-    for(auto& b:batches)b.allowGeometryDetail=!b.alphaLayer&&(b.vertexFloats==15u||!layered.count(Q711GridKey(b.gridX,b.gridY)));
+void PrepareTerrainDetail(std::vector<Q711CpuBatch>& batches) {
+    std::map<uint64_t,std::vector<Q711CpuBatch*>> cells;
+    for(auto& batch:batches)if(!batch.vertices.empty()){
+        Q237PrepareTerrainIndices(batch);
+        cells[Q711GridKey(batch.gridX,batch.gridY)].push_back(&batch);
+    }
+    for(const auto& cell:cells)fo3terrain::PrepareCellDetail(cell.second);
 }
-void UploadTerrainDetail(GLuint vao,const Q711CpuBatch& b) {
-    if(!fqvk::hooks.detail||!b.allowGeometryDetail||b.indices.empty())return;
-    auto levels=fqdetail::Build(fqdetail::Family::Terrain,b.vertices.data(),b.vertices.size()/b.vertexFloats,
-        b.vertexFloats,b.indices,false);
-    fqvk::Detail(vao,levels);
+void UploadTerrainDetail(GLuint vao,const Q711CpuBatch& batch) {
+    fqvk::Detail(vao,batch.geometryLevels);
 }
 #endif
 
@@ -1337,7 +1345,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     Q76B_LOGI("Q238 TERRAIN FUSION: path=cold baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
               q238Fusion.triangles,q238Fusion.paintTriangles,q238Fusion.groups,q238Fusion.fallback,fo3terrain::LegacyLayers());
 #ifdef FQ_ENABLE_VULKAN
-    MarkTerrainDetail(cpuBatches);
+    if(fqvk::hooks.detail)PrepareTerrainDetail(cpuBatches);
 #endif
     size_t q237Corners = 0u, q237Unique = 0u, q237IndexedBatches = 0u;
     q711RealTextureBatches=q711FallbackBatches=q718AlphaBatches=0u;
