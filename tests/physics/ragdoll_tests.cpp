@@ -35,12 +35,33 @@ static void VerifySubsteps(const fo3rag::Definition& rig){
  };
  capture.Start(1);
  spawn(50,{0,-45,0});
+ assert(w.SolverIterationLimit()==16);
  for(int i=0;i<2;++i){
+  w.UseBaselineIterations(i==1);
+  const unsigned limit=i==1?20:16;
+  assert(unsigned(w.SolverIterationLimit())==limit);
   const auto f=step(.064f);
   assert(f.calls[fqperf::RigidTick]==unsigned(7+i));
   assert(f.calls[fqperf::RigidSolve]==f.calls[fqperf::RigidTick]);
+  assert(f.staticBoundsReused==f.calls[fqperf::RigidSolve]); // one fixed floor
+  assert(f.movableBoundsUpdated==2*f.calls[fqperf::RigidSolve]); // two moving bones
+  assert(f.ragdollRequestHeight>40&&f.ragdollRequestVelocityY<0);
+  double phases=0;
+  for(auto phase:{fqperf::RigidPredictiveContacts,fqperf::RigidUpdateBounds,fqperf::RigidOverlapPairs,
+                  fqperf::RigidContactDispatch,fqperf::RigidIslands,fqperf::RigidConstraints,fqperf::RigidIntegrate}){
+   assert(f.calls[phase]==f.calls[fqperf::RigidSolve]);
+   phases+=f.us[phase];
+  }
+  assert(phases<=f.us[fqperf::RigidSolve]);
+  const auto groups=f.calls[fqperf::RigidGroupSetup];
+  assert(groups>0&&groups==f.calls[fqperf::RigidGroupIterations]&&groups==f.calls[fqperf::RigidGroupFinish]);
+  assert(f.solverVelocityIterations>=groups&&f.solverVelocityIterations<=limit*groups);
+  const double groupTime=f.us[fqperf::RigidGroupSetup]+f.us[fqperf::RigidGroupIterations]+f.us[fqperf::RigidGroupFinish];
+  assert(groupTime>0&&groupTime<=f.us[fqperf::RigidConstraints]);
   assert(f.ragdollRequested==8&&f.ragdollRequestActor==actor&&f.ragdollApplied==1);
  }
+ w.UseBaselineIterations(false);
+ assert(w.SolverIterationLimit()==16);
  // Preserve the approach to impact even before the floor is within one tick.
  spawn(2,{0,-45,0});
  const auto approach=step(tick);

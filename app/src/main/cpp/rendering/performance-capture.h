@@ -9,6 +9,7 @@
 #include <ctime>
 
 namespace fqperf {
+inline bool reuseVulkanBufferBinds=true;
 using Clock=std::chrono::steady_clock;
 inline double Us(Clock::time_point t) {return std::chrono::duration<double,std::micro>(Clock::now()-t).count();}
 inline double ThreadUs() {
@@ -25,7 +26,10 @@ enum Metric : unsigned {
     Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Scripts,Motion,Interaction,NpcGround,NpcPortal,NpcObstruction,NpcCrowd,NpcArrivalPart,
     VrInteractionUpdate,PlayerRigUpdate,VatsUpdate,MenuUpdate,PipboyUpdate,DialogueUpdate,
     WeaponUpdate,RigidWorldUpdate,RigidSync,RigidStep,RagdollUpdate,LooseGrab,UnarmedUpdate,ScriptSounds,
-    ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,UploadFenceWait,Count
+    ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,UploadFenceWait,
+    NpcPointerBounds,PlayerPlanar,PlayerGravity,PlayerStance,RigidFullRefresh,RigidPartialRefresh,RigidTerrainSync,CollisionSnapshotPublish,
+    RigidPredictiveContacts,RigidUpdateBounds,RigidOverlapPairs,RigidContactDispatch,RigidIslands,RigidConstraints,RigidIntegrate,
+    RigidGroupSetup,RigidGroupIterations,RigidGroupFinish,Count
 };
 inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","gameplayUs",
     "streamingUs","actorPrepUs","npcSimulationUs","npcPackagesUs","npcPersistenceUs",
@@ -37,7 +41,11 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "npcGroundUs","npcPortalUs","npcObstructionUs","npcCrowdUs","npcArrivalPartUs",
     "vrInteractionUpdateUs","playerRigUpdateUs","vatsUpdateUs","menuUpdateUs","pipboyUpdateUs","dialogueUpdateUs",
     "weaponUpdateUs","rigidWorldUpdateUs","rigidSyncUs","rigidStepUs","ragdollUpdateUs","looseGrabUs",
-    "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs","vkUploadFenceWaitUs"};
+    "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs","vkUploadFenceWaitUs",
+    "npcPointerBoundsUs","playerPlanarUs","playerGravityUs","playerStanceUs",
+    "rigidFullRefreshUs","rigidPartialRefreshUs","rigidTerrainSyncUs","collisionSnapshotPublishUs",
+    "rigidPredictiveContactsUs","rigidUpdateBoundsUs","rigidOverlapPairsUs","rigidContactDispatchUs","rigidIslandsUs","rigidConstraintsUs","rigidIntegrateUs",
+    "rigidGroupSetupUs","rigidGroupIterationsUs","rigidGroupFinishUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
 enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
     GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,
@@ -49,24 +57,37 @@ inline constexpr const char* gpuPassNames[]={"native","detailed","npc","player",
 static_assert(sizeof(gpuPassNames)/sizeof(*gpuPassNames)==GpuPassCount);
 inline constexpr const char* vkPassNames[]={"scene","sceneResume","ui","adapt","bloom","film","output","snapshot","depthCopy","overlay","motion","composition","motionGeometry"};
 inline constexpr unsigned VkPassCount=sizeof(vkPassNames)/sizeof(*vkPassNames);
+// Offset the optional census from the GPU timing frames (serial % 8 == 0).
+inline bool SampleScenery(uint64_t serial){return serial%32==4;}
+struct SceneryCounts {
+    uint32_t detailedDraws=0,instancedDraws=0,alreadySaved=0,eligibleDraws=0,additionalMatches=0;
+};
 struct Frame {
+    bool scenerySampled=false;
+    SceneryCounts scenery;
     uint64_t serial=0;
     std::array<double,Count> us{};
     std::array<uint32_t,Count> calls{};
     std::array<double,Count> maxUs{};
     double threadCpuUs=-1,elapsedUs=0,slowObjectUs=0;
     uint32_t slowObjectRef=0,slowObjectMetric=0;
+    uint32_t movableBoundsUpdated=0,staticBoundsReused=0;
+    float ragdollRequestHeight=0,ragdollRequestVelocityY=0;
+    uint32_t staticRefsReused=0,staticRefsBuilt=0;
+    uint32_t solverVelocityIterations=0;
     // Per-frame peak subdivision requests; bone indices refer to the actor's ragdoll definition.
     uint32_t ragdollRequested=0,ragdollRequestActor=0,ragdollRequestBone=0;
     uint32_t ragdollApplied=0,ragdollApplyActor=0,ragdollApplyBone=0;
     uint32_t paletteStagedCopies=0,paletteStagingPages=0,npcGroundFullScans=0;
     uint64_t npcGroundScannedTriangles=0;
     fqspacewarp::HistoryRejection motionRejection{};
-    uint64_t vkActualCorners=0;std::array<uint64_t,3> geometrySaved{};
+    uint32_t worldRenderWidth=0,worldRenderHeight=0,matteDraws=0,compositeLandDraws=0;
+    uint64_t vkActualCorners=0;std::array<uint64_t,3> geometrySaved{},lodSource{},lodUsed{};
     uint32_t motionReplayPasses=0,motionReplayDraws=0;
     bool spacewarp=false,focused=false;
     double vkWorldUs=0,vkUiUs=0;
     std::array<double,VkPassCount> vkPassUs{};
+    uint32_t vkSceneDraws=0,vkBufferBindsIssued=0,vkBufferBindsSkipped=0;
     uint32_t vkExpected=0,vkReceived=0,vkTimed=0,vkCpuTimed=0,vkTimingDropped=0;
     double vkRecordUs=0,vkUploadUs=0,vkDrawUs=0,vkQueueUs=0,vkReuseWaitUs=0,vkFinishWaitUs=0,vkXrWaitUs=0;
     double gpuEyesUs=-1,periodUs=0;
@@ -88,7 +109,7 @@ struct Session {
     std::array<Frame,Capacity> frames{};
     Frame current;
     char configuration[768]{};
-    char graphics[384]{};
+    char graphics[768]{};
     size_t size=0;
     uint64_t id=0,serial=0;
     bool active=false,recording=false;
@@ -137,7 +158,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,vkActualCorners,lodScenerySaved,lodTerrainSaved,lodActorsSaved\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped,scenerySampled,sceneryDetailedDraws,sceneryInstancedDraws,sceneryAlreadySaved,sceneryEligibleDraws,sceneryAdditionalMatches,movableBoundsUpdated,staticBoundsReused,ragdollRequestHeight,ragdollRequestVelocityY,vkActualCorners,lodScenerySaved,lodTerrainSaved,lodActorsSaved,worldRenderWidth,worldRenderHeight,matteDraws,compositeLandDraws,lodCloseSourceVertices,lodCloseUsedVertices,lodMiddleSourceVertices,lodMiddleUsedVertices,lodFarSourceVertices,lodFarUsedVertices\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -164,10 +185,21 @@ struct Session {
                 v.ragdollApplied,v.ragdollApplyActor,v.ragdollApplyBone,v.paletteStagedCopies,v.paletteStagingPages,v.npcGroundFullScans,
                 (unsigned long long)v.npcGroundScannedTriangles,v.motionReplayPasses,v.motionReplayDraws);
             const auto& reject=v.motionRejection;
-            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu",reject.reason?reject.reason:"none",
-                (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes);
-            std::fprintf(f,",%llu,%llu,%llu,%llu\n",(unsigned long long)v.vkActualCorners,(unsigned long long)v.geometrySaved[0],
-                (unsigned long long)v.geometrySaved[1],(unsigned long long)v.geometrySaved[2]);
+            // Derive this per frame before rounding. It includes island grouping,
+            // sorting, dispatch and timing overhead inside solveConstraints.
+            const double remainder=v.us[RigidConstraints]-v.us[RigidGroupSetup]
+                -v.us[RigidGroupIterations]-v.us[RigidGroupFinish];
+            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%.4f,%.4f",reject.reason?reject.reason:"none",
+                (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes,
+                v.staticRefsReused,v.staticRefsBuilt,remainder,v.solverVelocityIterations,v.vkSceneDraws,v.vkBufferBindsIssued,v.vkBufferBindsSkipped,
+                v.scenerySampled,v.scenery.detailedDraws,v.scenery.instancedDraws,v.scenery.alreadySaved,
+                v.scenery.eligibleDraws,v.scenery.additionalMatches,v.movableBoundsUpdated,v.staticBoundsReused,
+                v.ragdollRequestHeight,v.ragdollRequestVelocityY);
+            std::fprintf(f,",%llu,%llu,%llu,%llu,%u,%u,%u,%u",(unsigned long long)v.vkActualCorners,(unsigned long long)v.geometrySaved[0],
+                (unsigned long long)v.geometrySaved[1],(unsigned long long)v.geometrySaved[2],
+                v.worldRenderWidth,v.worldRenderHeight,v.matteDraws,v.compositeLandDraws);
+            for(unsigned i=0;i<3;++i)std::fprintf(f,",%llu,%llu",(unsigned long long)v.lodSource[i],(unsigned long long)v.lodUsed[i]);
+            std::fputc('\n',f);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

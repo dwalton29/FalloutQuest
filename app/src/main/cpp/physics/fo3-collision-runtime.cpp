@@ -2248,6 +2248,7 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
 
     const auto started = std::chrono::steady_clock::now();
 
+    FQ_PERF_SCOPE(CollisionSnapshotPublish);
     // Rolling windows retain the live authored pose, including an endpoint
     // whose visual animation has already settled and will not sample again.
     const bool retainPoses=snapshot->cellFormId==0u&&gLiveCollisionContext.Matches(snapshot->context);
@@ -2941,6 +2942,7 @@ void SynchronizeFo3RigidWorld(float x,float z) {
     static std::unordered_set<uint32_t> published;
     auto& world=fo3rigid::Live();
     if(gRigidFullDirty||!gRigidDirtyRefs.empty()) {
+        fqperf::Scope refresh(gRigidFullDirty ? fqperf::RigidFullRefresh : fqperf::RigidPartialRefresh);
         std::unordered_map<uint32_t,std::vector<fo3rigid::Triangle>> chunks;
         auto append=[&](uint32_t ref,const CollisionTriangle& t){
             if(!world.Has(ref))chunks[ref].push_back({{t.a.x,t.a.y,t.a.z},{t.b.x,t.b.y,t.b.z},{t.c.x,t.c.y,t.c.z}});
@@ -2957,11 +2959,29 @@ void SynchronizeFo3RigidWorld(float x,float z) {
                 if(entry!=gAnimatedReferenceTriangles.end())for(uint32_t index:entry->second)append(ref,gWorldTriangles[index]);
             }
         }
-        if(gRigidFullDirty){for(auto ref:published)world.RemoveStatic(ref);published.clear();}
-        else for(auto ref:gRigidDirtyRefs){world.RemoveStatic(ref);published.erase(ref);}
-        for(const auto& c:chunks){world.Static(c.first,c.second);published.insert(c.first);}
+        if(gRigidFullDirty){
+            for(auto it=published.begin();it!=published.end();){
+                if(chunks.count(*it)){++it;continue;}
+                world.RemoveStatic(*it);
+                it=published.erase(it);
+            }
+        }else{
+            for(auto ref:gRigidDirtyRefs)if(!chunks.count(ref)){
+                world.RemoveStatic(ref);
+                published.erase(ref);
+            }
+        }
+        for(auto& [ref,triangles]:chunks){
+            const bool built=world.SyncStatic(ref,std::move(triangles));
+            published.insert(ref);
+            if(fqperf::capture.recording){
+                auto& frame=fqperf::capture.current;
+                if(built)++frame.staticRefsBuilt;else ++frame.staticRefsReused;
+            }
+        }
         gRigidFullDirty=false;gRigidDirtyRefs.clear();
     }
+    FQ_PERF_SCOPE(RigidTerrainSync);
     SynchronizeFo3TerrainPhysics(x,z);
 }
 
@@ -2970,6 +2990,7 @@ void SetFo3PlayerScale(float scale){
  PLAYER_HEIGHT*=scale/gPlayerCollisionScale;PLAYER_RADIUS=PLAYER_BASE_RADIUS*scale;gPlayerCollisionScale=scale;
 }
 float SetFo3PlayerStanceHeight(float x,float z,float feetOffset,float height){
+ FQ_PERF_SCOPE(PlayerStance);
  if(!std::isfinite(height))return PLAYER_HEIGHT;
  height=fo3vrheight::CapsuleHeight(height,CollisionRadiusQ712(),gPlayerCollisionScale);
  if(height>PLAYER_HEIGHT+.001f){SynchronizeFo3RigidWorld(x,z);if(!fo3rigid::Live().CanExpandCapsule({x,gCollisionFloorY+feetOffset,z},CollisionRadiusQ712(),PLAYER_HEIGHT,height))return PLAYER_HEIGHT;}
@@ -2989,9 +3010,13 @@ bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desir
     if(!gPlayerCollisionReady){*outX=currentX;*outZ=currentZ;*outY=currentY;return true;}
     const bool arrival=!gSafeSpawnResolved;
     float planarY=currentY;
-    if(!ResolveFo3PlayerMotionQ6G(currentX,currentZ,desiredX,desiredZ,currentY,outX,outZ,&planarY))return false;
+    {
+        FQ_PERF_SCOPE(PlayerPlanar);
+        if(!ResolveFo3PlayerMotionQ6G(currentX,currentZ,desiredX,desiredZ,currentY,outX,outZ,&planarY))return false;
+    }
     SynchronizeFo3RigidWorld(*outX,*outZ);
     if(arrival||!gSafeSpawnResolved){gFallVelocity=0;gFallGrounded=true;*outY=planarY;return true;}
+    FQ_PERF_SCOPE(PlayerGravity);
     const float initialFeet=gCollisionFloorY+currentY;
     float feet=initialFeet;
     // Only an already grounded character can step up; never snap down a ledge.

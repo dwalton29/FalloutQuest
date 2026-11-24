@@ -20,6 +20,8 @@ jobs:
         run: |
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/geometry_detail_tests.cpp app/src/main/cpp/rendering/geometry-detail.cpp third_party/meshoptimizer/simplifier.cpp -o /tmp/fq-geometry-detail
           /tmp/fq-geometry-detail
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/world_quality_tests.cpp -o /tmp/fq-world-quality
+          /tmp/fq-world-quality
           python3 tests/render/test_vulkan_shaders.py
           python3 tests/render/test_spacewarp_shaders.py
           python3 tests/render/test_spacewarp_openxr.py

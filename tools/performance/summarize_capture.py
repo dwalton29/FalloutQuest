@@ -47,6 +47,14 @@ def diagnostic_summary(rows):
         print('No active gameplay frames. Keep the game focused and headset awake during capture.')
         return
     print('\nActive gameplay diagnosis (inclusive scopes; never add parent and child timings):')
+    if 'scenerySampled' in selected[0]:
+        samples = [r for r in selected if r['scenerySampled'] == '1']
+        print(f'Opaque detailed scenery census on {len(samples)} gameplay frames '
+              '(sampled frames include profiling overhead).')
+        if samples:
+            for key in ('sceneryDetailedDraws', 'sceneryInstancedDraws', 'sceneryAlreadySaved',
+                        'sceneryEligibleDraws', 'sceneryAdditionalMatches'):
+                print(f'  {key}: {statistics.mean(int(r[key]) for r in samples):.1f} per sampled frame')
     cpu_pairs = [(float(r['workUs']), float(r['threadCpuUs'])) for r in selected
                  if float(r.get('threadCpuUs', -1)) >= 0 and float(r['workUs']) > 0]
     if cpu_pairs:
@@ -70,6 +78,13 @@ def diagnostic_summary(rows):
         print(f'{key} | {statistics.median(values)/1000:.3f} | {p95/1000:.3f} | '
               f'{max(values)/1000:.3f} | {statistics.mean(calls) if calls and max(calls) else "unavailable"} | '
               f'{longest/1000 if longest >= 0 else "unavailable"}')
+    if 'rigidFullRefreshUs' in rows[0]:
+        movement = max(selected, key=lambda r: float(r['playerMotionUs']))
+        print(f"Slowest player movement: frame {movement['serial']}, "
+              f"{float(movement['playerMotionUs'])/1000:.3f} ms. Frame-wide breakdown (inclusive):")
+        for key in ('playerStanceUs', 'playerPlanarUs', 'playerGravityUs', 'rigidFullRefreshUs',
+                    'rigidPartialRefreshUs', 'rigidTerrainSyncUs', 'collisionSnapshotPublishUs'):
+            print(f"  {key}: {float(movement[key])/1000:.3f} ms, {movement[key+'Calls']} calls")
     if 'motionRejectReason' in rows[0]:
         rejected = [r for r in selected if r['motionRejectReason'] != 'none']
         print(f'SpaceWarp history rejected records on {len(rejected)}/{len(selected)} gameplay frames.')
@@ -94,6 +109,29 @@ def diagnostic_summary(rows):
         solves = sum(int(r['rigidSolveUsCalls']) for r in selected)
         if ticks:
             print(f'Rigid physics: {solves} solves over {ticks} fixed ticks ({solves/ticks:.2f} solves/tick).')
+        if solves and 'rigidUpdateBoundsUs' in rows[0]:
+            print('Bullet phases, mean ms per simulation substep across active gameplay:')
+            for key in ('rigidSolveUs', 'rigidPredictiveContactsUs', 'rigidUpdateBoundsUs',
+                        'rigidOverlapPairsUs', 'rigidContactDispatchUs', 'rigidIslandsUs',
+                        'rigidConstraintsUs', 'rigidIntegrateUs'):
+                ms = sum(float(r[key]) for r in selected) / (1000 * solves)
+                print(f'  {key} {ms:.3f}')
+        if solves and 'rigidGroupSetupUs' in rows[0]:
+            print('Within rigidConstraintsUs, mean ms per simulation substep:')
+            print('  Remainder includes island grouping, sorting and dispatch.')
+            for key in ('rigidGroupSetupUs', 'rigidGroupIterationsUs', 'rigidGroupFinishUs',
+                        'rigidConstraintRemainderUs'):
+                ms = sum(float(r[key]) for r in selected) / (1000 * solves)
+                print(f'  {key} {ms:.3f}')
+            groups = sum(int(r['rigidGroupIterationsUsCalls']) for r in selected)
+            iterations = sum(int(r['solverVelocityIterations']) for r in selected)
+            print(f'  {iterations} velocity iterations across {groups} solver group calls. '
+                  'Iteration time also includes split-impulse work.')
+        if 'staticRefsBuilt' in rows[0]:
+            for r in selected:
+                if int(r['rigidFullRefreshUsCalls']):
+                    print(f"Full scenery refresh on frame {r['serial']} took {float(r['rigidFullRefreshUs'])/1000:.3f} ms. "
+                          f"Frame totals: {r['staticRefsReused']} reused and {r['staticRefsBuilt']} built.")
         for kind, actor, bone in [('ragdollRequested', 'ragdollRequestActor', 'ragdollRequestBone'),
                                   ('ragdollApplied', 'ragdollApplyActor', 'ragdollApplyBone')]:
             drivers = Counter((int(r[actor]), int(r[bone]), int(r[kind])) for r in selected if int(r[kind]) > 1)

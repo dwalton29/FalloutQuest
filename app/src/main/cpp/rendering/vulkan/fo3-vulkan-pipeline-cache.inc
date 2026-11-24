@@ -61,7 +61,7 @@ void CreatePipelineCache(){
 }
 bool PrewarmCompatible(const PipelineKey& key)const{
     if(key.ui&&key.ui!=9&&key.ui!=10&&key.ui!=11)return false;
-    if(key.lighting>2||key.paintCount>3||!key.stride||key.stride>64)return false;
+    if(key.lighting>3||key.paintCount>3||!key.stride||key.stride>64)return false;
     if(key.fused&&(!key.terrain||key.stride!=15||!key.paintCount))return false;
     if(int(bool(key.ui))+int(key.sky)+int(key.water)+int(key.terrain)>1)return false;
     if(key.noDiscard&&(key.ui||key.sky||key.water))return false;

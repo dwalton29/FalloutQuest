@@ -273,11 +273,51 @@ static void OriginalWeaponTarget(const char* path){
     assert(TraceFo3WorldSurface(centre.x+4+tri.normal.x,centre.y+tri.normal.y,centre.z+tri.normal.z,-tri.normal.x,-tri.normal.y,-tri.normal.z,2,0,0,&hit)&&hit.reference==44);
     std::cout<<"Original range target BHK hit identity and animated collision pose passed\n";
 }
+static void RigidSnapshotRefresh() {
+    auto& world=fo3rigid::Live();
+    auto& capture=fqperf::capture;
+    capture.Start(361);
+    auto refresh=[&](uint32_t changed,unsigned built,unsigned reused){
+        AdvanceFo3CollisionPublicationRevision(changed);
+        capture.BeginFrame();
+        SynchronizeFo3RigidWorld(0,0);
+        assert(capture.current.staticRefsBuilt==built&&capture.current.staticRefsReused==reused);
+        capture.FinishFrame();
+    };
+    auto floor=[](float x,float y,uint32_t ref){
+        CollisionTriangle tri{};
+        assert(BuildTriangle({x-2,y,-2},{x,y,2},{x+2,y,-2},tri));
+        tri.surfaceKeyQ714=ref;
+        gSurfaceSourcesQ722[ref].refFormId=ref;
+        return tri;
+    };
+    auto hits=[&](float x,float y){
+        fo3rigid::V contact,normal;
+        return world.SweepCapsule({x,y+.4f,0},{x,y-.4f,0},.2f,1.f,contact,normal);
+    };
+    gWorldTriangles={floor(0,0,101),floor(8,0,102)};
+    refresh(0,2,0);
+    refresh(0,0,2);
+    assert(hits(0,0)&&hits(8,0));
+    gWorldTriangles[0]=floor(0,-2,101);
+    refresh(101,1,0);
+    assert(!hits(0,0)&&hits(0,-2));
+    world.RemoveStatic(101); // A formerly movable reference can return to scenery.
+    gWorldTriangles.pop_back();
+    refresh(0,1,0);
+    assert(hits(0,-2)&&!hits(8,0));
+    gWorldTriangles.clear();
+    gSurfaceSourcesQ722.clear();
+    refresh(0,0,0);
+    assert(!hits(0,-2));
+    capture.active=false;
+}
 int main(int argc,char**argv) {
     if(argc==3&&std::string(argv[1])=="--weapon-target"){OriginalWeaponTarget(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--walkway-scene"){OriginalPlacedWalkways(argv[2],argv[3]);return 0;}
     if(argc==3&&std::string(argv[1])=="--walkways"){OriginalMegatonWalkways(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--stairs"){OriginalInteriorStairs(argv[2],argv[3]);return 0;}
+    RigidSnapshotRefresh();
     WeaponSurfaceQueries();
     IndexedActorGroundParityQ226();
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";

@@ -15,7 +15,7 @@ namespace fqvk {
 bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t width,uint32_t height,const char* outputDirectory=nullptr);
 void ShutdownWorldProbe();
 bool BeginWorldProbe(const float* leftMvp,const float* rightMvp,
-                     const float* leftEye,const float* rightEye,bool loading=false,const float* horizon=nullptr,bool splitComposition=false);
+                     const float* leftEye,const float* rightEye,bool loading=false,const float* horizon=nullptr,bool splitComposition=false,double budgetMs=0);
 bool StereoBoundsVisible(const float* vertices,size_t count,size_t stride);
 void PrewarmPipelines();
 void EndWorldProbe();

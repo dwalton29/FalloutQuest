@@ -5,26 +5,22 @@
 
 namespace fo3interaction {
 using Point = std::array<float, 3>;
+inline bool ClipBoxAxis(float origin, float direction, float lo, float hi,
+                        float& entryDistance, float& exitDistance) {
+  if (!std::isfinite(origin) || !std::isfinite(direction) ||
+      !std::isfinite(lo) || !std::isfinite(hi) || lo > hi) return false;
+  if (std::fabs(direction) < 1e-6f) return origin >= lo && origin <= hi;
+  float a = (lo - origin) / direction, b = (hi - origin) / direction;
+  if (a > b) std::swap(a, b);
+  entryDistance = std::max(entryDistance, a);
+  exitDistance = std::min(exitDistance, b);
+  return entryDistance <= exitDistance;
+}
 inline bool Box(const Point &o, const Point &d, const Point &lo,
                 const Point &hi, float limit, float &distance) {
   float entryDistance = 0, exitDistance = limit;
-  for (int i = 0; i < 3; ++i) {
-    if (!std::isfinite(o[i]) || !std::isfinite(d[i]) || !std::isfinite(lo[i]) ||
-        !std::isfinite(hi[i]) || lo[i] > hi[i])
-      return false;
-    if (std::fabs(d[i]) < 1e-6f) {
-      if (o[i] < lo[i] || o[i] > hi[i])
-        return false;
-    } else {
-      float a = (lo[i] - o[i]) / d[i], b = (hi[i] - o[i]) / d[i];
-      if (a > b)
-        std::swap(a, b);
-      entryDistance = std::max(entryDistance, a);
-      exitDistance = std::min(exitDistance, b);
-      if (entryDistance > exitDistance)
-        return false;
-    }
-  }
+  for (int i = 0; i < 3; ++i)
+    if (!ClipBoxAxis(o[i], d[i], lo[i], hi[i], entryDistance, exitDistance)) return false;
   distance = entryDistance;
   return exitDistance >= 0 && entryDistance <= limit;
 }

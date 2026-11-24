@@ -1872,10 +1872,10 @@ private:
 #endif
             char model[PROP_VALUE_MAX]{};__system_property_get("ro.product.model",model);
             std::snprintf(fqperf::capture.configuration,sizeof(fqperf::capture.configuration),
-                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=%s vulkanProbe=%d benchmarkValid=%d",
+                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=%s vulkanProbe=%d benchmarkValid=%d solverIterationLimit=%d",
                 FQ_SOURCE_COMMIT,nativeVariant,model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
                 vulkanGameplay_?1:q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
-                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan":"gles",vulkanProbe,!vulkanProbe);
+                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan":"gles",vulkanProbe,!vulkanProbe,fo3rigid::Live().SolverIterationLimit());
         }
         const auto waitStarted=fqopaque::Clock::now();
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
@@ -2474,7 +2474,12 @@ private:
                     const Fo3Environment& clearEnvironment=GetFo3Environment();
                     static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
                     const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||(!Fo3PlayerDead()&&Fo3MovieFocus()),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
+                    const bool qualityEligible=sessionState_==XR_SESSION_STATE_FOCUSED&&gSceneReady&&!gSceneLoad.active&&
+                        !Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3VatsFocus()&&!Fo3DialogueFocus()&&!gFo3PauseOpen;
+                    const bool synthesizing=spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready();
+                    const double nativePeriodMs=displayRefreshRate_>1.f?1000.0/displayRefreshRate_:double(frameState.predictedDisplayPeriod)*1e-6;
+                    const double worldBudgetMs=qualityEligible?nativePeriodMs*(synthesizing?2.0:1.0):0;
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||(!Fo3PlayerDead()&&Fo3MovieFocus()),clearHorizon,synthesizing,worldBudgetMs);
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif

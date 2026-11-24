@@ -2,7 +2,9 @@ param(
     [ValidateRange(10,100)][int]$Seconds = 30,
     [string]$OutputDirectory = ".",
     [ValidatePattern('^[a-zA-Z0-9_-]{1,48}$')][string]$Scene = "megaton",
-    [switch]$AllowDebug
+    [switch]$AllowDebug,
+    [ValidateSet('16','20')][string]$SolverIterations,
+    [ValidateSet('On','Off')][string]$BufferBindReuse
 )
 $ErrorActionPreference = "Stop"
 $token = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
@@ -70,6 +72,23 @@ function Write-CaptureSummary($Csv, [string]$Path) {
                 $report.Add(("{0} on {1} frames. First example: object {2}, ref {3:X8}, mesh {4}, {5} objects, {6} bytes in use, {7} bytes for this record." -f $group.Name,$group.Count,$row.motionRejectObject,([uint32]$row.motionRejectRef),$row.motionRejectMesh,$row.motionRejectObjects,$row.motionRejectUsedBytes,$row.motionRejectRecordBytes))
             }
         }
+        if ('vkBufferBindsIssued' -in $rows[0].PSObject.Properties.Name) {
+            $issued = ($gameplay | Measure-Object -Property vkBufferBindsIssued -Sum).Sum
+            $skipped = ($gameplay | Measure-Object -Property vkBufferBindsSkipped -Sum).Sum
+            $draws = ($gameplay | Measure-Object -Property vkSceneDraws -Sum).Sum
+            $report.Add("Vulkan scene draws: $draws. Vertex and index buffer binds issued: $issued. Skipped: $skipped.")
+        }
+        if ('scenerySampled' -in $rows[0].PSObject.Properties.Name) {
+            $samples = @($gameplay | Where-Object { $_.scenerySampled -eq '1' })
+            $report.Add("Opaque detailed scenery census: $($samples.Count) sampled gameplay frames.")
+            if ($samples.Count) {
+                foreach ($field in @('sceneryDetailedDraws','sceneryInstancedDraws','sceneryAlreadySaved','sceneryEligibleDraws','sceneryAdditionalMatches')) {
+                    $mean = ($samples | Measure-Object -Property $field -Average).Average
+                    $report.Add(("{0}: {1:F1} per sampled frame" -f $field,$mean))
+                }
+                $report.Add("Additional matches are current draws with the same mesh, material and state within an uninterrupted eligible run. Sampled frames include profiling overhead.")
+            }
+        }
         $measurements = @()
         $primary = @('workUs','threadCpuUs','xrWaitUs','xrEndUs','swapchainAcquireWaitUs','vkWorldGpuUs','vkUiGpuUs','vkReuseWaitUs','vkFinishWaitUs','gpuEyesUs')
         foreach ($key in $rows[0].PSObject.Properties.Name) {
@@ -82,6 +101,20 @@ function Write-CaptureSummary($Csv, [string]$Path) {
             $measurements += [pscustomobject]@{ Key=$key; P95=$p95; Line=("{0} | {1} | {2:F3} | {3:F3} | {4:F3}" -f $key,$values.Count,($median/1000),($p95/1000),($maximum/1000)) }
         }
         foreach ($m in $measurements | Where-Object { $_.Key -in $primary }) { $report.Add($m.Line) }
+        if ('rigidUpdateBoundsUs' -in $rows[0].PSObject.Properties.Name) {
+            $report.Add("Bullet timings per gameplay frame (rigidSolveUs includes all phases)")
+            foreach ($m in $measurements | Where-Object { $_.Key -in @('rigidSolveUs','rigidPredictiveContactsUs','rigidUpdateBoundsUs','rigidOverlapPairsUs','rigidContactDispatchUs','rigidIslandsUs','rigidConstraintsUs','rigidIntegrateUs') }) { $report.Add($m.Line) }
+            if ('rigidGroupSetupUs' -in $rows[0].PSObject.Properties.Name) {
+                $report.Add("Within rigidConstraintsUs per frame (remainder includes island grouping, sorting and dispatch)")
+                foreach ($m in $measurements | Where-Object { $_.Key -in @('rigidGroupSetupUs','rigidGroupIterationsUs','rigidGroupFinishUs','rigidConstraintRemainderUs') }) { $report.Add($m.Line) }
+                $groups = ($gameplay | Measure-Object -Property rigidGroupIterationsUsCalls -Sum).Sum
+                $iterations = ($gameplay | Measure-Object -Property solverVelocityIterations -Sum).Sum
+                $report.Add("$iterations velocity iterations across $groups solver group calls. Iteration time also includes split-impulse work.")
+            }
+            foreach ($r in $gameplay | Where-Object { [int]$_.rigidFullRefreshUsCalls -gt 0 }) {
+                $report.Add("Full scenery refresh on frame $($r.serial) took $($r.rigidFullRefreshUs) us. Frame totals: $($r.staticRefsReused) reused and $($r.staticRefsBuilt) built.")
+            }
+        }
         $report.Add("Largest instrumented scopes by p95 (inclusive, may overlap):")
         foreach ($m in $measurements | Where-Object { $_.Key -notin $primary -and $_.P95 -gt 0 } | Sort-Object P95 -Descending | Select-Object -First 15) { $report.Add($m.Line) }
         $report.Add("Slowest gameplay frames: serial | cell | world | work ms | thread CPU ms | residents | draws | slow object reference (decimal)")
@@ -111,12 +144,24 @@ try {
     $versionName = [regex]::Match($packageText, '(?m)^\s*versionName=(\S+)').Groups[1].Value
     if (!$versionCode -or !$versionName) { throw "FalloutQuest is not installed on the connected headset." }
     $prefix = Join-Path $destination.FullName "$Scene-v$versionCode-$token"
+    $request = [string]$token
+    if ($SolverIterations) {
+        if ([int]$versionCode -lt 363) { throw "Solver iteration selection requires v363 or newer." }
+        $prefix = Join-Path $destination.FullName "$Scene-v$versionCode-i$SolverIterations-$token"
+        $request = "${token}:$SolverIterations"
+    }
+    if ($BufferBindReuse) {
+        if ([int]$versionCode -lt 364) { throw "Buffer bind comparison requires v364 or newer." }
+        $bindMode = [int]($BufferBindReuse -eq 'On')
+        $request = "${request}:binds$bindMode"
+        $prefix = $prefix -replace "-$token$", "-binds$bindMode-$token"
+    }
     if (!$AllowDebug -and !$versionName.EndsWith("-O2")) {
         throw "Install the FalloutQuest O2 profile APK, or pass -AllowDebug to capture a debug build."
     }
 
     Add-DeviceSnapshot "before capture"
-    $null = Invoke-Adb -Arguments @("shell", "setprop", "debug.falloutquest.perf_capture", $token)
+    $null = Invoke-Adb -Arguments @("shell", "setprop", "debug.falloutquest.perf_capture", $request)
     try {
         $started = $false
         for ($i=0; $i -lt 8; $i++) {
@@ -164,6 +209,12 @@ try {
     if ($csv.Count - 2 -ne $expectedFrames) { throw "The CSV was truncated. Expected $expectedFrames frames, received $($csv.Count - 2)." }
     if (!$AllowDebug -and $header -notmatch '\bnative=profile-O2\b') {
         throw "The native library is not the O2 profile build."
+    }
+    if ($SolverIterations -and $header -notmatch "\bsolverIterationLimit=$SolverIterations\b") {
+        throw "The headset did not confirm the requested solver iteration limit of $SolverIterations."
+    }
+    if ($BufferBindReuse -and ($header -notmatch '\brenderer=vulkan\b' -or $header -notmatch "\bvkBufferBindReuse=$bindMode\b")) {
+        throw "The Vulkan renderer did not confirm buffer bind reuse $BufferBindReuse."
     }
     [System.IO.File]::WriteAllLines("$prefix.csv", [string[]]$csv, $utf8)
     Write-Host $header

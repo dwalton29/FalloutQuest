@@ -58,7 +58,7 @@ inline void Mesh(uint32_t vao,const float* vertices,size_t count,size_t stride,
     if(hooks.mesh)hooks.mesh(vao,vertices,count,stride,indices,indexCount);
 }
 inline void Detail(uint32_t vao,const fqdetail::Levels& levels) {
-    if(hooks.detail&&!levels.indices.empty())hooks.detail(vao,levels);
+    if(hooks.detail&&(levels.sourceVertices||!levels.indices.empty()))hooks.detail(vao,levels);
 }
 inline void Skin(uint32_t vao,uint32_t texture,const float* attributes,size_t count,const float* palette,size_t rows) {
     if(hooks.skin)hooks.skin(vao,texture,attributes,count,palette,rows);

@@ -2,6 +2,11 @@
 float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
+#include "rendering/terrain/terrain-composite.h"
+#ifdef FQ_ENABLE_VULKAN
+#include "rendering/terrain/terrain-geometry-detail.h"
+#endif
+#include "rendering/world-material-policy.h"
 #include "rendering/terrain/fo3-terrain-bounds.h"
 #include "rendering/terrain/terrain-depth-scope.h"
 #include "rendering/exact-indexed-mesh.h"
@@ -21,6 +26,7 @@ float GetFo3FogPower();
 #include <algorithm>
 #include <atomic>
 #include <thread>
+#include <memory>
 #include <unordered_set>
 #include <cmath>
 #include <cstdint>
@@ -53,7 +59,10 @@ struct Q76BV3 {
 };
 
 struct Q711TerrainBatch : fo3terrain::Bounds {
-    mutable int geometryTier=-1;
+#ifdef FQ_ENABLE_VULKAN
+    fo3terrain::Bounds detailBounds;
+    std::shared_ptr<int> detailTier;
+#endif
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::string texturePath;
@@ -88,7 +97,11 @@ struct Q711CpuBatch {
     std::vector<float> vertices;
     std::vector<uint32_t> indices;
     size_t vertexFloats = 12u;
-    bool allowGeometryDetail=false;
+#ifdef FQ_ENABLE_VULKAN
+    fqdetail::Levels geometryLevels;
+    fo3terrain::Bounds detailBounds;
+    std::shared_ptr<int> detailTier;
+#endif
     std::vector<fo3terrain::PaintMaterial> paintMaterials;
     int layerOrder = -1;
     bool alphaLayer = false;
@@ -96,9 +109,13 @@ struct Q711CpuBatch {
 
 void Q237DrawTerrainBatch(const Q711TerrainBatch& batch) {
 #ifdef FQ_ENABLE_VULKAN
-    batch.geometryTier=batch.boundsValid?fqdetail::Tier(fqdetail::Distance(gFo3EyePosition,
-        batch.minX,batch.maxX,batch.minY,batch.maxY,batch.minZ,batch.maxZ),batch.geometryTier):-1;
-    fqrender::DetailScope geometryDetail(batch.geometryTier);
+    const auto& bounds=batch.detailBounds;
+    const float distance=fqdetail::Distance(gFo3EyePosition,bounds.minX,bounds.maxX,
+        bounds.minY,bounds.maxY,bounds.minZ,bounds.maxZ);
+    // All layers share hysteresis, including layers first visible this frame.
+    const int tier=bounds.boundsValid&&batch.detailTier?fqdetail::Tier(distance,*batch.detailTier):-1;
+    if(batch.detailTier)*batch.detailTier=tier;
+    fqrender::DetailScope geometryDetail(tier);
 #endif
     if (batch.indexOffset)
         glDrawElements(GL_TRIANGLES, batch.vertexCount, GL_UNSIGNED_INT,
@@ -181,6 +198,9 @@ std::unordered_map<std::string, GLuint> q1810TerrainNormalTextureCache;
 Q711TerrainBatch Q238GpuMaterial(const Q711CpuBatch& cpu) {
     Q711TerrainBatch gpu;
     gpu.gridX=cpu.gridX;gpu.gridY=cpu.gridY;
+#ifdef FQ_ENABLE_VULKAN
+    gpu.detailBounds=cpu.detailBounds;gpu.detailTier=cpu.detailTier;
+#endif
     gpu.texturePath=cpu.texturePath;gpu.normalPath=cpu.normalPath;
     gpu.alphaLayer=cpu.alphaLayer;gpu.layerOrder=cpu.layerOrder;
     gpu.specularEnabled=cpu.specularEnabled;
@@ -242,19 +262,21 @@ uint64_t Q711GridKey(int32_t x, int32_t y) {
 
 
 #ifdef FQ_ENABLE_VULKAN
-// Legacy paint draws re-use the base surface at equal depth. Coarsen only
-// fused surfaces and base cells whose final layout has no overlapping passes.
-void MarkTerrainDetail(std::vector<Q711CpuBatch>& batches) {
-    std::set<uint64_t> layered;
-    for(const auto& b:batches)
-        if(b.alphaLayer&&!b.vertices.empty())layered.insert(Q711GridKey(b.gridX,b.gridY));
-    for(auto& b:batches)b.allowGeometryDetail=!b.alphaLayer&&(b.vertexFloats==15u||!layered.count(Q711GridKey(b.gridX,b.gridY)));
+#include "fo3-terrain-composite.inc"
+void PrepareTerrainDetail(std::vector<Q711CpuBatch>& batches) {
+    std::map<uint64_t,std::vector<Q711CpuBatch*>> cells;
+    for(auto& batch:batches)if(!batch.vertices.empty()){
+        Q237PrepareTerrainIndices(batch);
+        cells[Q711GridKey(batch.gridX,batch.gridY)].push_back(&batch);
+    }
+    for(const auto& cell:cells){
+        fo3terrain::PrepareCellDetail(cell.second);
+        auto tier=std::make_shared<int>(-1);
+        for(auto* batch:cell.second)batch->detailTier=tier;
+    }
 }
-void UploadTerrainDetail(GLuint vao,const Q711CpuBatch& b) {
-    if(!fqvk::hooks.detail||!b.allowGeometryDetail||b.indices.empty())return;
-    auto levels=fqdetail::Build(fqdetail::Family::Terrain,b.vertices.data(),b.vertices.size()/b.vertexFloats,
-        b.vertexFloats,b.indices,false);
-    fqvk::Detail(vao,levels);
+void UploadTerrainDetail(GLuint vao,const Q711CpuBatch& batch) {
+    fqvk::Detail(vao,batch.geometryLevels);
 }
 #endif
 
@@ -663,6 +685,12 @@ GLuint Q711UploadTexture(const std::string& path,
         return 0;
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    if(fqrender::nativeOnly&&fqquality::WorldMaterials()&&!compositeSources.count(path)){
+        auto source=fo3terrain::composite::Downsample(image.rgba,image.width,image.height);
+        if(source)compositeSources.emplace(path,std::move(source));
+    }
+#endif
     Q76B_LOGI("Q7.20 TERRAIN DDS READY: path=%s resolved=%s size=%dx%d format=%s",
               path.c_str(), image.sourcePath.c_str(), image.width, image.height,
               image.format.c_str());
@@ -687,6 +715,9 @@ void ShutdownFo3TerrainRenderQ76() {
     // Q20 may own a worker or partially staged incoming strip. Stop that work
     // before deleting the legacy/cell-owned terrain GL objects.
     ResetFo3TerrainStreamingQ2000();
+#ifdef FQ_ENABLE_VULKAN
+    while(!terrainComposites.empty())RemoveTerrainComposite(terrainComposites.begin()->first);
+#endif
     for (Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.vbo) glDeleteBuffers(1, &batch.vbo);
         if (batch.vao) glDeleteVertexArrays(1, &batch.vao);
@@ -744,6 +775,9 @@ void ShutdownFo3TerrainRenderQ76() {
 }
 
 void ShutdownFo3TerrainGpuSession() {
+#ifdef FQ_ENABLE_VULKAN
+    compositeSources.clear();
+#endif
     ShutdownFo3TerrainRenderQ76();
     for (auto* cache : {&q1910TerrainTextureCache, &q1810TerrainNormalTextureCache}) {
         for (const auto& entry : *cache) if (entry.second) glDeleteTextures(1, &entry.second);
@@ -1178,6 +1212,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=shader-program");
         return false;
     }
+#ifdef FQ_ENABLE_VULKAN
+    terrainCompositeRegion=glGetUniformLocation(q76bProgram,"uCompositeRegion");
+#endif
     q76bMvpLocation = glGetUniformLocation(q76bProgram, "uMvp");
     q76bSamplerLocation = glGetUniformLocation(q76bProgram, "uDiffuse");
     q238PaintCountLocation=glGetUniformLocation(q76bProgram,"uPaintCount");
@@ -1304,6 +1341,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         if (gpu.alphaLayer) ++q718AlphaBatches;
 
     }
+#ifdef FQ_ENABLE_VULKAN
+    PrepareColdComposites(cpuBatches);
+#endif
     const size_t q237Covered = fo3terrain::RemoveCoveredPaint(cpuBatches, [&](const Q711CpuBatch& batch) {
         const auto texture = uploadedByPath.find(batch.texturePath);
         return texture != uploadedByPath.end() && texture->second != 0u;
@@ -1316,7 +1356,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     Q76B_LOGI("Q238 TERRAIN FUSION: path=cold baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
               q238Fusion.triangles,q238Fusion.paintTriangles,q238Fusion.groups,q238Fusion.fallback,fo3terrain::LegacyLayers());
 #ifdef FQ_ENABLE_VULKAN
-    MarkTerrainDetail(cpuBatches);
+    if(fqvk::hooks.detail)PrepareTerrainDetail(cpuBatches);
 #endif
     size_t q237Corners = 0u, q237Unique = 0u, q237IndexedBatches = 0u;
     q711RealTextureBatches=q711FallbackBatches=q718AlphaBatches=0u;
@@ -1619,6 +1659,11 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, q1050TerrainShadowTexture);
     glActiveTexture(GL_TEXTURE0);
+#ifdef FQ_ENABLE_VULKAN
+    UpdateCompositeBlend();
+    // Mixed cells need a second colour pass only during the transition.
+    std::vector<std::pair<const Q711TerrainBatch*,const TerrainComposite*>> transitions;
+#endif
     for (const Q711TerrainBatch* batchPtr : q229TerrainBaseBatches) {
         const Q711TerrainBatch& batch=*batchPtr;
         ++q2018BaseTested;
@@ -1629,6 +1674,12 @@ void RenderFo3TerrainQ76(const float* mvp) {
         if(!fo3terrain::MayIntersectClip(batch,mvp))continue;
         ++q2018BaseDrawn;
         bindBatchLights(batch);
+#ifdef FQ_ENABLE_VULKAN
+        if(const auto* composite=CompositeFor(batch)){
+            if(composite->blend>=1.f){DrawTerrainComposite(batch,*composite);continue;}
+            transitions.emplace_back(&batch,composite);
+        }
+#endif
         glUniform1i(q76bUseTextureLocation, batch.realTexture ? 1 : 0);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
         if (q1060TerrainSpecularLocation >= 0) glUniform1f(q1060TerrainSpecularLocation, batch.specularEnabled ? 1.0f : 0.0f);
@@ -1651,6 +1702,9 @@ void RenderFo3TerrainQ76(const float* mvp) {
     for (const Q711TerrainBatch* batchPtr : q229TerrainPaintBatches) {
         const Q711TerrainBatch& batch=*batchPtr;
         ++q2018AlphaTested;
+#ifdef FQ_ENABLE_VULKAN
+        if(const auto* composite=CompositeFor(batch);composite&&composite->blend>=1.f)continue;
+#endif
         if (Q228EntireTerrainBatchBelowReflectionPlane(batch)) {
             ++q228MirrorUnderwaterSkipped;
             continue;
@@ -1670,6 +1724,12 @@ void RenderFo3TerrainQ76(const float* mvp) {
         Q237DrawTerrainBatch(batch);
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    for(const auto& [batch,composite]:transitions){
+        bindBatchLights(*batch);
+        DrawTerrainComposite(*batch,*composite);
+    }
+#endif
     glDepthMask(previousDepthMask);
     glDepthFunc(static_cast<GLenum>(previousDepthFunc));
     glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),

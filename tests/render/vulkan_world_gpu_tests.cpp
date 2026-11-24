@@ -3,7 +3,41 @@
 // is supplied by this test; it does not claim headset/compositor validation.
 #include "rendering/gl-state-cache.h"
 #include "vulkan_density_driver.h"
+namespace {
+unsigned pipelineBinds=0,viewportSets=0,scissorSets=0;
+unsigned vertexBinds=0,indexBinds=0;
+void CountBindVertexBuffers(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkBuffer* buffers,const VkDeviceSize* offsets){
+    ++vertexBinds;
+    vkCmdBindVertexBuffers(cmd,first,count,buffers,offsets);
+}
+void CountBindIndexBuffer(VkCommandBuffer cmd,VkBuffer buffer,VkDeviceSize offset,VkIndexType type){
+    ++indexBinds;
+    vkCmdBindIndexBuffer(cmd,buffer,offset,type);
+}
+void CountBindPipeline(VkCommandBuffer cmd,VkPipelineBindPoint point,VkPipeline pipeline){
+    ++pipelineBinds;
+    vkCmdBindPipeline(cmd,point,pipeline);
+}
+void CountSetViewport(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkViewport* viewports){
+    ++viewportSets;
+    vkCmdSetViewport(cmd,first,count,viewports);
+}
+void CountSetScissor(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkRect2D* scissors){
+    ++scissorSets;
+    vkCmdSetScissor(cmd,first,count,scissors);
+}
+}
+#define vkCmdBindVertexBuffers CountBindVertexBuffers
+#define vkCmdBindIndexBuffer CountBindIndexBuffer
+#define vkCmdBindPipeline CountBindPipeline
+#define vkCmdSetViewport CountSetViewport
+#define vkCmdSetScissor CountSetScissor
 #include "rendering/vulkan/fo3-vulkan-renderer.cpp"
+#undef vkCmdBindVertexBuffers
+#undef vkCmdBindIndexBuffer
+#undef vkCmdBindPipeline
+#undef vkCmdSetViewport
+#undef vkCmdSetScissor
 #undef vkCreateRenderPass
 #undef vkCreateFramebuffer
 #undef vkDestroyRenderPass
@@ -275,6 +309,10 @@ void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=f
     const float left[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     const float right[]{1,0,0,0, 0,1,0,0, 0,0,1,0, .8f,0,0,1};
     const float eye[]{0,0,2};assert(fqvk::BeginWorldProbe(left,right,eye,eye));
+    if(instanced){
+        fqvk::renderer->sampleScenery=true;
+        fqrender::sceneryDraw=fqrender::SceneryDraw::Static;
+    }
     // Terrain's GL EBO points past vertex bytes; native EBO has its own buffer.
     Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,instanced?2:1);
     if(instanced){fqvk::instanceMatrices=nullptr;fqvk::instanceMatrixCount=0;} // queued transforms own their data
@@ -289,6 +327,11 @@ void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=f
         Submit(1,10,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,paint.size()*4,1);
     }
     fqvk::EndWorldProbe();assert(fqvk::WorldProbeActive());
+    if(instanced){
+        assert(fqvk::renderer->scenery.instancedDraws==1&&fqvk::renderer->scenery.alreadySaved==1);
+        assert(fqvk::renderer->scenery.additionalMatches==0);
+        fqrender::sceneryDraw=fqrender::SceneryDraw::OutsidePass;
+    }
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),terrain?.5f:1);Near(Pixel(pixels,0,32,32,1),terrain?.5f:0);
     Near(Pixel(pixels,1,32,32,0),0); // gl_ViewIndex really selected the right camera.
@@ -565,7 +608,8 @@ void PostOverlay() {
 
 }
 
-void HeadlessSceneSubmission() {
+void HeadlessSceneSubmission(bool reuse) {
+    fqperf::reuseVulkanBufferBinds=reuse;
     // Exercise the real shared frontend and program registration, without EGL
     // initialization or a GLES context. Original shaders execute through Vulkan.
     fqrender::nativeOnly=true;fqrender::driverCalls=0;fqgl::Reset();
@@ -594,13 +638,56 @@ void HeadlessSceneSubmission() {
     glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_TRUE);
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    auto& renderer=*fqvk::renderer;
+    renderer.sampleScenery=true;
+    fqrender::sceneryDraw=fqrender::SceneryDraw::Static;
     glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
     assert(fqvk::renderer->pending.size()==1&&fqvk::renderer->draws==0);
+    for(int i=1;i<64;++i){
+        if(i==8)glUniformMatrix4fv(glGetUniformLocation(program,"uObjectTransformQ2017"),1,GL_FALSE,identity);
+        if(i==16)scalar("uGlossiness",15); // different material, same pipeline and texture
+        fqrender::sceneryDraw=i==32?fqrender::SceneryDraw::OtherDetail:fqrender::SceneryDraw::Static;
+        glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    }
     // Mutating live uniforms and CPU state after queueing cannot alter the draw.
     scalar("uMaterialAlpha",0);glDisable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,0);
+    pipelineBinds=viewportSets=scissorSets=vertexBinds=indexBinds=0;
+    const auto hits=fqvk::renderer->descriptorHits;
+    fqvk::renderer->DrainDraws();
+    assert(fqvk::renderer->draws==64&&fqvk::renderer->descriptorHits>=hits+63);
+    assert(pipelineBinds==1&&viewportSets==1&&scissorSets==1);
+    assert(vertexBinds==(reuse?1u:64u)&&indexBinds==vertexBinds);
+    assert(fqvk::renderer->bufferBindsIssued==vertexBinds+indexBinds);
+    assert(fqvk::renderer->bufferBindsSkipped==(reuse?126u:0u));
+    // A new drain must bind both buffers again, even for the same mesh.
+    // Keep the readback sensitive to the original queued uniforms and texture.
+    glEnable(GL_DEPTH_TEST);glDepthFunc(GL_NEVER);
+    glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    fqvk::renderer->DrainDraws();
+    assert(vertexBinds==(reuse?2u:65u)&&indexBinds==vertexBinds);
+    assert(fqvk::renderer->draws==65);
+    assert(renderer.scenery.detailedDraws==65&&renderer.scenery.eligibleDraws==64);
+    assert(renderer.scenery.additionalMatches==60&&renderer.scenery.alreadySaved==0);
+    fqrender::sceneryDraw=fqrender::SceneryDraw::OutsidePass;
     fqvk::EndWorldProbe();assert(fqvk::renderer->pending.empty());
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,1,32,32,0),1);
+    // A single VAO can alternate between original and reduced index buffers
+    // within one command drain. Reuse only the buffer actually bound.
+    fqdetail::Levels detail;
+    detail.indices={0,1,2};
+    detail.ranges[1]={0,3};
+    fqvk::Detail(vao,detail);
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    const auto initialIndexBinds=indexBinds;
+    for(int tier:{-1,1,1,-1}){
+        fqrender::DetailScope select(tier);
+        glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    }
+    renderer.DrainDraws();
+    assert(renderer.vertices==18&&renderer.savedCorners[0]==6);
+    assert(indexBinds-initialIndexBinds==(reuse?3u:4u));
+    fqvk::EndWorldProbe();
     // The native renderer owns program uniforms; GLES and EGL never provided them.
     assert(fqrender::driverCalls==0);
     glDeleteTextures(1,&texture);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);
@@ -1057,7 +1144,12 @@ void GameplayPresentation(bool withDepth) {
         const bool loading=frame<3;
         // A valid exterior/interior horizon must never colour the loading void.
         const float horizon[]{.35f,.6f,.8f};
-        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading,loading?horizon:nullptr));fqgl::state.texture2d[0].Change(5);
+        auto& renderer=*fqvk::renderer;
+        renderer.resolution.step=6;
+        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading,loading?horizon:nullptr,false,13.89));
+        assert(renderer.reduced==!loading);
+        assert(renderer.worldRect.extent.width==(loading?64u:53u));
+        fqgl::state.texture2d[0].Change(5);
         Submit(1,40,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         if(!loading)fqvk::PostProcess({});
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,125000.0f/70.0f));
@@ -1109,7 +1201,7 @@ int main() {
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();PerformanceCapture();
-    NativeLodMaterials();SolidMaterialParity();AsyncResources();HeadlessSceneSubmission();
+    NativeLodMaterials();SolidMaterialParity();AsyncResources();HeadlessSceneSubmission(false);HeadlessSceneSubmission(true);
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {
     fqrender::nativeOnly=asynchronous;
