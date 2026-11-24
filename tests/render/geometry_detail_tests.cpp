@@ -63,6 +63,44 @@ int main(){
             assert(land.geometryLevels.indices[l.first+i+j]==side*side-1-paint.geometryLevels.indices[p.first+i+(j?3-j:0)]);
         assert(land.detailBounds.boundsValid && land.detailBounds.maxX==paint.detailBounds.maxX);
     }
+    // Long narrow paint strips have no interior vertices. Reaching the
+    // far budget requires moving both sides of a material boundary together.
+    Batch ground,stripes;
+    ground.vertices=grid;ground.indices=corners;stripes.vertices=grid;
+    for(size_t i=0;i<corners.size();i+=6)
+        if((corners[i]%side)%3==1)stripes.indices.insert(stripes.indices.end(),corners.begin()+i,corners.begin()+i+6);
+    fo3terrain::PrepareCellDetail(std::vector<Batch*>{&ground,&stripes});
+    for(unsigned tier=0;tier<3;++tier){
+        const auto total=ground.geometryLevels.sourceVertices+stripes.geometryLevels.sourceVertices;
+        const auto used=ground.geometryLevels.tierVertices[tier]+stripes.geometryLevels.tierVertices[tier];
+        assert(used<=(total*keep[tier]+50)/100);
+        auto faces=[&](const Batch& b){
+            std::set<std::array<uint32_t,3>> out;
+            const auto r=b.geometryLevels.ranges[tier];assert(r.count>0);
+            for(size_t i=r.first;i<size_t(r.first)+r.count;i+=3){
+                const auto* vertex=b.geometryLevels.indices.data()+i;
+                std::array<uint32_t,3> face{vertex[0],vertex[1],vertex[2]};
+                std::sort(face.begin(),face.end());out.insert(face);
+            }
+            return out;
+        };
+        auto base=faces(ground);
+        for(auto face:faces(stripes))assert(base.count(face));
+        unsigned twiceArea=0;
+        std::map<std::array<uint32_t,2>,unsigned> edges;
+        for(auto f:base){
+            int x[3],z[3];
+            for(unsigned j=0;j<3;++j){
+                x[j]=int(f[j]%side);z[j]=int(f[j]/side);
+                auto a=f[j],b=f[(j+1)%3];++edges[{std::min(a,b),std::max(a,b)}];
+            }
+            twiceArea+=std::abs((x[1]-x[0])*(z[2]-z[0])-(x[2]-x[0])*(z[1]-z[0]));
+        }
+        assert(twiceArea==2*(side-1)*(side-1));
+        unsigned boundary=0;
+        for(const auto& edge:edges){assert(edge.second<=2);boundary+=edge.second==1;}
+        assert(boundary==4*(side-1));
+    }
     // The last three vertices form a detached decoration. Its triangle must
     // survive even the far tier and a remaining one-triangle mesh stays drawable.
     std::vector<float> prop((side*side+3)*18);
