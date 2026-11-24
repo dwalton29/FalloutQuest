@@ -59,8 +59,10 @@ struct Q76BV3 {
 };
 
 struct Q711TerrainBatch : fo3terrain::Bounds {
+#ifdef FQ_ENABLE_VULKAN
     fo3terrain::Bounds detailBounds;
     std::shared_ptr<int> detailTier;
+#endif
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::string texturePath;
