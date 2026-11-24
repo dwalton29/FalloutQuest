@@ -3,7 +3,8 @@ param(
     [string]$OutputDirectory = ".",
     [ValidatePattern('^[a-zA-Z0-9_-]{1,48}$')][string]$Scene = "megaton",
     [switch]$AllowDebug,
-    [ValidateSet('16','20')][string]$SolverIterations
+    [ValidateSet('16','20')][string]$SolverIterations,
+    [ValidateSet('On','Off')][string]$BufferBindReuse
 )
 $ErrorActionPreference = "Stop"
 $token = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
@@ -71,6 +72,12 @@ function Write-CaptureSummary($Csv, [string]$Path) {
                 $report.Add(("{0} on {1} frames. First example: object {2}, ref {3:X8}, mesh {4}, {5} objects, {6} bytes in use, {7} bytes for this record." -f $group.Name,$group.Count,$row.motionRejectObject,([uint32]$row.motionRejectRef),$row.motionRejectMesh,$row.motionRejectObjects,$row.motionRejectUsedBytes,$row.motionRejectRecordBytes))
             }
         }
+        if ('vkBufferBindsIssued' -in $rows[0].PSObject.Properties.Name) {
+            $issued = ($gameplay | Measure-Object -Property vkBufferBindsIssued -Sum).Sum
+            $skipped = ($gameplay | Measure-Object -Property vkBufferBindsSkipped -Sum).Sum
+            $draws = ($gameplay | Measure-Object -Property vkSceneDraws -Sum).Sum
+            $report.Add("Vulkan scene draws: $draws. Vertex and index buffer binds issued: $issued. Skipped: $skipped.")
+        }
         $measurements = @()
         $primary = @('workUs','threadCpuUs','xrWaitUs','xrEndUs','swapchainAcquireWaitUs','vkWorldGpuUs','vkUiGpuUs','vkReuseWaitUs','vkFinishWaitUs','gpuEyesUs')
         foreach ($key in $rows[0].PSObject.Properties.Name) {
@@ -132,6 +139,12 @@ try {
         $prefix = Join-Path $destination.FullName "$Scene-v$versionCode-i$SolverIterations-$token"
         $request = "${token}:$SolverIterations"
     }
+    if ($BufferBindReuse) {
+        if ([int]$versionCode -lt 364) { throw "Buffer bind comparison requires v364 or newer." }
+        $bindMode = [int]($BufferBindReuse -eq 'On')
+        $request = "${request}:binds$bindMode"
+        $prefix = $prefix -replace "-$token$", "-binds$bindMode-$token"
+    }
     if (!$AllowDebug -and !$versionName.EndsWith("-O2")) {
         throw "Install the FalloutQuest O2 profile APK, or pass -AllowDebug to capture a debug build."
     }
@@ -188,6 +201,9 @@ try {
     }
     if ($SolverIterations -and $header -notmatch "\bsolverIterationLimit=$SolverIterations\b") {
         throw "The headset did not confirm the requested solver iteration limit of $SolverIterations."
+    }
+    if ($BufferBindReuse -and ($header -notmatch '\brenderer=vulkan\b' -or $header -notmatch "\bvkBufferBindReuse=$bindMode\b")) {
+        throw "The Vulkan renderer did not confirm buffer bind reuse $BufferBindReuse."
     }
     [System.IO.File]::WriteAllLines("$prefix.csv", [string[]]$csv, $utf8)
     Write-Host $header

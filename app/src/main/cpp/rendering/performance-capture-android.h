@@ -59,6 +59,7 @@ inline void Complete(const char* reason) {
     Status("complete",ok,error,reason);
     capture.active=false;
     fo3rigid::Live().UseBaselineIterations(false);
+    reuseVulkanBufferBinds=true;
     __android_log_print(ANDROID_LOG_INFO,"FQPerf","CAPTURE_END id=%llu frames=%zu saved=%d error=%d reason=%s gpuDisjoint=%llu gpuDropped=%llu",
         (unsigned long long)capture.id,capture.size,ok,error,reason,(unsigned long long)gpu.disjoints,(unsigned long long)gpu.dropped);
 }
@@ -74,6 +75,9 @@ inline void Control() {
         Complete(capture.size==Capacity?"capacity":Us(capture.started)>120e6?"timeout":token?"replaced":"requested");
     if(token && token!=lastToken) {
         // A plain token uses the gameplay default. The comparison applies only to this capture.
+        char* binds=std::strstr(suffix,":binds");
+        reuseVulkanBufferBinds=!binds||std::strcmp(binds,":binds0")!=0;
+        if(binds)*binds='\0';
         fo3rigid::Live().UseBaselineIterations(std::strcmp(suffix,":20")==0);
         capture.Start(token);
         gpu.Shutdown();gpu.Initialize();

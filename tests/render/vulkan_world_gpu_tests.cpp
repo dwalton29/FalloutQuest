@@ -5,6 +5,15 @@
 #include "vulkan_density_driver.h"
 namespace {
 unsigned pipelineBinds=0,viewportSets=0,scissorSets=0;
+unsigned vertexBinds=0,indexBinds=0;
+void CountBindVertexBuffers(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkBuffer* buffers,const VkDeviceSize* offsets){
+    ++vertexBinds;
+    vkCmdBindVertexBuffers(cmd,first,count,buffers,offsets);
+}
+void CountBindIndexBuffer(VkCommandBuffer cmd,VkBuffer buffer,VkDeviceSize offset,VkIndexType type){
+    ++indexBinds;
+    vkCmdBindIndexBuffer(cmd,buffer,offset,type);
+}
 void CountBindPipeline(VkCommandBuffer cmd,VkPipelineBindPoint point,VkPipeline pipeline){
     ++pipelineBinds;
     vkCmdBindPipeline(cmd,point,pipeline);
@@ -18,10 +27,14 @@ void CountSetScissor(VkCommandBuffer cmd,uint32_t first,uint32_t count,const VkR
     vkCmdSetScissor(cmd,first,count,scissors);
 }
 }
+#define vkCmdBindVertexBuffers CountBindVertexBuffers
+#define vkCmdBindIndexBuffer CountBindIndexBuffer
 #define vkCmdBindPipeline CountBindPipeline
 #define vkCmdSetViewport CountSetViewport
 #define vkCmdSetScissor CountSetScissor
 #include "rendering/vulkan/fo3-vulkan-renderer.cpp"
+#undef vkCmdBindVertexBuffers
+#undef vkCmdBindIndexBuffer
 #undef vkCmdBindPipeline
 #undef vkCmdSetViewport
 #undef vkCmdSetScissor
@@ -586,7 +599,8 @@ void PostOverlay() {
 
 }
 
-void HeadlessSceneSubmission() {
+void HeadlessSceneSubmission(bool reuse) {
+    fqperf::reuseVulkanBufferBinds=reuse;
     // Exercise the real shared frontend and program registration, without EGL
     // initialization or a GLES context. Original shaders execute through Vulkan.
     fqrender::nativeOnly=true;fqrender::driverCalls=0;fqgl::Reset();
@@ -620,11 +634,20 @@ void HeadlessSceneSubmission() {
     for(int i=1;i<64;++i)glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
     // Mutating live uniforms and CPU state after queueing cannot alter the draw.
     scalar("uMaterialAlpha",0);glDisable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,0);
-    pipelineBinds=viewportSets=scissorSets=0;
+    pipelineBinds=viewportSets=scissorSets=vertexBinds=indexBinds=0;
     const auto hits=fqvk::renderer->descriptorHits;
     fqvk::renderer->DrainDraws();
     assert(fqvk::renderer->draws==64&&fqvk::renderer->descriptorHits>=hits+63);
     assert(pipelineBinds==1&&viewportSets==1&&scissorSets==1);
+    assert(vertexBinds==(reuse?1u:64u)&&indexBinds==vertexBinds);
+    assert(fqvk::renderer->bufferBindsIssued==vertexBinds+indexBinds);
+    assert(fqvk::renderer->bufferBindsSkipped==(reuse?126u:0u));
+    // A new drain must bind both buffers again, even for the same mesh.
+    scalar("uMaterialAlpha",1);glEnable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,texture);
+    glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    fqvk::renderer->DrainDraws();
+    assert(vertexBinds==(reuse?2u:65u)&&indexBinds==vertexBinds);
+    assert(fqvk::renderer->draws==65);
     fqvk::EndWorldProbe();assert(fqvk::renderer->pending.empty());
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,1,32,32,0),1);
@@ -1136,7 +1159,7 @@ int main() {
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();PerformanceCapture();
-    NativeLodMaterials();SolidMaterialParity();AsyncResources();HeadlessSceneSubmission();
+    NativeLodMaterials();SolidMaterialParity();AsyncResources();HeadlessSceneSubmission(false);HeadlessSceneSubmission(true);
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {
     fqrender::nativeOnly=asynchronous;

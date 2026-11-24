@@ -22,7 +22,8 @@ elif a[:3]==['shell','dumpsys','package']:
 elif a[:3]==['shell','setprop','debug.falloutquest.perf_capture']:
  if a[3]!='0':
   token,_,limit=a[3].partition(':')
-  s={'token':token,'limit':limit}
+  limit,_,binds=limit.partition(':binds') if not limit.startswith('binds') else ('','',limit[5:])
+  s={'token':token,'limit':limit,'binds':binds}
  else:s['stopped']=True
  p.write_text(json.dumps(s))
 elif a[:2]==['shell','dumpsys']:
@@ -42,7 +43,7 @@ elif a[:3]==['exec-out','run-as','com.falloutquest.app']:
   print('saved=1')
   sys.exit(0)
  if os.environ.get('FAKE_ADB_PULL_FAIL'):sys.exit('run-as: could not read files/performance.csv')
- print('# format='+('351' if os.environ.get('FAKE_ADB_STATUS') else '233')+' session='+('stale' if os.environ.get('FAKE_ADB_STALE') else s['token'])+' native=profile-O2'+(' solverIterationLimit='+os.environ.get('FAKE_ADB_LIMIT',s['limit']) if s['limit'] else ''))
+ print('# format='+('351' if os.environ.get('FAKE_ADB_STATUS') else '233')+' session='+('stale' if os.environ.get('FAKE_ADB_STALE') else s['token'])+' native=profile-O2'+(' solverIterationLimit='+os.environ.get('FAKE_ADB_LIMIT',s['limit']) if s['limit'] else '')+(' renderer=vulkan vkBufferBindReuse='+os.environ.get('FAKE_ADB_BINDS',s['binds']) if s['binds'] else ''))
  solver=os.environ.get('FAKE_ADB_SOLVER')
  print('serial,loading,blocked,submitted,workUs,threadCpuUs,rigidStepUs,cell,world,residents,draws,slowObjectRef'+(',rigidUpdateBoundsUs,rigidGroupSetupUs,rigidGroupIterationsUs,rigidGroupFinishUs,rigidConstraintRemainderUs,rigidGroupIterationsUsCalls,solverVelocityIterations' if solver else ''))
  print('1,0,0,1,40000,10000,29000,42,60,64,2000,4660'+(',200,1000,3500,500,1000,3,41' if solver else ''))
@@ -96,6 +97,20 @@ class CaptureScript(unittest.TestCase):
         self.assertIn('before capture',device.read_text())
         self.assertIn('after capture',device.read_text())
         self.assertIn('thermalservice',device.read_text())
+
+    def test_buffer_bind_control(self):
+        self.env.update(FAKE_ADB_STATUS='1',FAKE_ADB_CODE='364')
+        r=self.run_script('-SolverIterations','16','-BufferBindReuse','Off')
+        self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+        report, = (self.directory/'captures').glob('*-summary.txt')
+        self.assertIn('v364-i16-binds0-',report.name)
+        self.assertIn('vkBufferBindReuse=0',report.read_text())
+
+    def test_rejects_mismatched_buffer_bind_mode(self):
+        self.env.update(FAKE_ADB_STATUS='1',FAKE_ADB_CODE='364',FAKE_ADB_BINDS='0')
+        r=self.run_script('-BufferBindReuse','On')
+        self.assertNotEqual(r.returncode,0)
+        self.assertIn('did not confirm buffer bind reuse On',r.stdout+r.stderr)
 
     def test_rejects_mismatched_solver_setting(self):
         self.env.update(FAKE_ADB_STATUS='1',FAKE_ADB_CODE='363',FAKE_ADB_LIMIT='20')

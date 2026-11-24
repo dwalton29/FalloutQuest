@@ -9,6 +9,7 @@
 #include <ctime>
 
 namespace fqperf {
+inline bool reuseVulkanBufferBinds=true;
 using Clock=std::chrono::steady_clock;
 inline double Us(Clock::time_point t) {return std::chrono::duration<double,std::micro>(Clock::now()-t).count();}
 inline double ThreadUs() {
@@ -75,6 +76,7 @@ struct Frame {
     bool spacewarp=false,focused=false;
     double vkWorldUs=0,vkUiUs=0;
     std::array<double,VkPassCount> vkPassUs{};
+    uint32_t vkSceneDraws=0,vkBufferBindsIssued=0,vkBufferBindsSkipped=0;
     uint32_t vkExpected=0,vkReceived=0,vkTimed=0,vkCpuTimed=0,vkTimingDropped=0;
     double vkRecordUs=0,vkUploadUs=0,vkDrawUs=0,vkQueueUs=0,vkReuseWaitUs=0,vkFinishWaitUs=0,vkXrWaitUs=0;
     double gpuEyesUs=-1,periodUs=0;
@@ -145,7 +147,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -176,9 +178,9 @@ struct Session {
             // sorting, dispatch and timing overhead inside solveConstraints.
             const double remainder=v.us[RigidConstraints]-v.us[RigidGroupSetup]
                 -v.us[RigidGroupIterations]-v.us[RigidGroupFinish];
-            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u\n",reject.reason?reject.reason:"none",
+            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u,%u,%u,%u\n",reject.reason?reject.reason:"none",
                 (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes,
-                v.staticRefsReused,v.staticRefsBuilt,remainder,v.solverVelocityIterations);
+                v.staticRefsReused,v.staticRefsBuilt,remainder,v.solverVelocityIterations,v.vkSceneDraws,v.vkBufferBindsIssued,v.vkBufferBindsSkipped);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

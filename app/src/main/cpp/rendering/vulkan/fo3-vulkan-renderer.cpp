@@ -965,12 +965,34 @@ public:
         pending.push_back({command,p->second.bytes,p->second.units});
         if(passTiming)queueCpuUs+=NowUs()-started;
     }
+    struct VertexBinding {
+        VkBuffer buffer{};
+        VkDeviceSize offset{};
+    };
+    struct DrawBindings {
+        VkPipeline pipeline{};
+        std::array<VertexBinding,3> vertices{};
+        VkBuffer indexBuffer{}; // Scene indices always use UINT32 at byte offset zero.
+    };
+    uint32_t bufferBindsIssued=0,bufferBindsSkipped=0;
+
+    void BindVertex(DrawBindings& bound,uint32_t slot,VkBuffer buffer,VkDeviceSize offset) {
+        auto& previous=bound.vertices[slot];
+        if(fqperf::reuseVulkanBufferBinds&&previous.buffer==buffer&&previous.offset==offset){
+            ++bufferBindsSkipped;
+            return;
+        }
+        vkCmdBindVertexBuffers(command,slot,1,&buffer,&offset);
+        previous={buffer,offset};
+        ++bufferBindsIssued;
+    }
+
     void DrainDraws() {
-        VkPipeline boundPipeline=VK_NULL_HANDLE;
-        for(const auto& item:pending)Draw(item,boundPipeline);
+        DrawBindings bound{};
+        for(const auto& item:pending)Draw(item,bound);
         pending.clear();
     }
-    void Draw(const PendingDraw& item,VkPipeline& boundPipeline) {
+    void Draw(const PendingDraw& item,DrawBindings& bound) {
         const auto& draw=item.command;
         const auto program=draw.program,vao=draw.mesh,mode=draw.topology,type=draw.indexType;
         const auto first=draw.first,count=draw.count,instances=draw.instances;const auto offset=draw.indexOffset;
@@ -996,10 +1018,10 @@ public:
         if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
         if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady))){
             FullRateScene();
-            boundPipeline=VK_NULL_HANDLE;
+            bound={};
         }else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone){
             ResumeSidecar();
-            boundPipeline=VK_NULL_HANDLE;
+            bound={};
         }
         PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.fused=fused;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.split=sidecarPass&&!offscreen&&!postDone;key.foveated=densityActive&&!offscreen&&!postDone;
@@ -1064,24 +1086,32 @@ public:
         if(key.instanced){std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,draw.transforms.data(),instanceBytes);cursor+=instanceBytes;}
         // Every scene pipeline uses dynamic viewport and scissor. Target size
         // is constant within a pass, and a new drain starts with unknown state.
-        if(!boundPipeline){
+        if(!bound.pipeline){
             const VkViewport viewport{0,0,float(targetWidth),float(targetHeight),0,1};
             const VkRect2D scissor{{0,0},{targetWidth,targetHeight}};
             vkCmdSetViewport(command,0,1,&viewport);
             vkCmdSetScissor(command,0,1,&scissor);
         }
         const VkPipeline pipeline=Pipeline(key);
-        if(boundPipeline!=pipeline){
+        if(bound.pipeline!=pipeline){
             vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
-            boundPipeline=pipeline;
+            bound.pipeline=pipeline;
         }
         vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[kind],0,1,&set,1,&dynamic);
         if(key.offset)vkCmdSetDepthBias(command,s.offsetUnits,0,s.offsetFactor);
-        const VkDeviceSize zero=0;vkCmdBindVertexBuffers(command,0,1,&m.vertices.buffer,&zero);
-        if(key.skinned)vkCmdBindVertexBuffers(command,2,1,&m.skin.buffer,&zero);
-        if(key.instanced)vkCmdBindVertexBuffers(command,1,1,&arena.buffer,&instanceOffset);
-        if(type){vkCmdBindIndexBuffer(command,m.indices.buffer,0,VK_INDEX_TYPE_UINT32);vkCmdDrawIndexed(command,count,instances,indexFirst,0,0);}
-        else vkCmdDraw(command,count,instances,first,0);
+        BindVertex(bound,0,m.vertices.buffer,0);
+        if(key.skinned)BindVertex(bound,2,m.skin.buffer,0);
+        if(key.instanced)BindVertex(bound,1,arena.buffer,instanceOffset);
+        if(type){
+            if(fqperf::reuseVulkanBufferBinds&&bound.indexBuffer==m.indices.buffer){
+                ++bufferBindsSkipped;
+            }else{
+                vkCmdBindIndexBuffer(command,m.indices.buffer,0,VK_INDEX_TYPE_UINT32);
+                bound.indexBuffer=m.indices.buffer;
+                ++bufferBindsIssued;
+            }
+            vkCmdDrawIndexed(command,count,instances,indexFirst,0,0);
+        }else vkCmdDraw(command,count,instances,first,0);
         ++draws;vertices+=uint64_t(count)*instances;
         if(key.foveated)++foveatedDraws;
         if((kind<2||p.fused)&&(key.lighting||key.noLocal))++specializedDraws;
@@ -1372,8 +1402,8 @@ public:
         // limit instrumentation overhead, without restarting the application.
         passTiming=configuredPassTiming||(captureId&&captureFrame%8==0);
         if(captureId&&!fqperf::capture.graphics[0])std::snprintf(fqperf::capture.graphics,sizeof(fqperf::capture.graphics),
-            "vkDevice=%s vkVendor=%u vkDeviceId=%u vkDriver=%u vkTimestampBits=%u vkTimestampPeriodNs=%.6f vkBuffered=%d vkTimingForced=%d",
-            properties.deviceName,properties.vendorID,properties.deviceID,properties.driverVersion,timestampBits,properties.limits.timestampPeriod,Buffered(),configuredPassTiming);
+            "vkDevice=%s vkVendor=%u vkDeviceId=%u vkDriver=%u vkTimestampBits=%u vkTimestampPeriodNs=%.6f vkBuffered=%d vkTimingForced=%d vkBufferBindReuse=%d",
+            properties.deviceName,properties.vendorID,properties.deviceID,properties.driverVersion,timestampBits,properties.limits.timestampPeriod,Buffered(),configuredPassTiming,fqperf::reuseVulkanBufferBinds);
         loadingFrame=loading;modalActive=false;
         FlushUploads();
         if(Buffered()){CreateContexts();SelectSlot(offscreen?2:nextWorldSlot);if(!offscreen)nextWorldSlot=1-nextWorldSlot;}
@@ -1402,6 +1432,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
+        bufferBindsIssued=bufferBindsSkipped=0;
         pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=fusedLandDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
@@ -1474,6 +1505,9 @@ public:
         if(passTiming)sample.spans=gpuSpans;
         if(auto* frame=fqperf::capture.Find(captureId,captureFrame)){
             ++frame->vkExpected;
+            frame->vkSceneDraws+=uint32_t(draws);
+            frame->vkBufferBindsIssued+=bufferBindsIssued;
+            frame->vkBufferBindsSkipped+=bufferBindsSkipped;
             if(sample.profile)++frame->vkCpuTimed;
             frame->vkRecordUs+=sample.record;frame->vkUploadUs+=sample.uploadCpu;
             frame->vkDrawUs+=sample.drawCpu;frame->vkQueueUs+=sample.queueCpu;frame->vkReuseWaitUs+=sample.reuse;
