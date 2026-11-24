@@ -2,6 +2,7 @@
 // Transitional resource/command boundary. CPU asset decoders and gameplay do
 // not depend on Vulkan headers. Disabled bridge is a no-op for normal GLES.
 #include "rendering/render-submission.h"
+#include "rendering/geometry-detail.h"
 #include <cstddef>
 #include <cstdint>
 #include "data/fo3-texture-bsa.h"
@@ -20,6 +21,7 @@ struct Hooks {
     void (*draw)(const fqrender::DrawCommand&)=nullptr;
     void (*texture)(uint32_t,int,int,const uint8_t*,unsigned)=nullptr;
     void (*mesh)(uint32_t,const float*,size_t,size_t,const uint32_t*,size_t)=nullptr;
+    void (*detail)(uint32_t,const fqdetail::Levels&)=nullptr;
     void (*program)(uint32_t,int)=nullptr;
     void (*skin)(uint32_t,uint32_t,const float*,size_t,const float*,size_t)=nullptr;
     void (*dynamicMesh)(uint32_t,const float*,size_t)=nullptr;
@@ -54,6 +56,9 @@ inline bool Texture(uint32_t id,int w,int h,const uint8_t* rgba,bool repeat=true
 inline void Mesh(uint32_t vao,const float* vertices,size_t count,size_t stride,
                  const uint32_t* indices,size_t indexCount) {
     if(hooks.mesh)hooks.mesh(vao,vertices,count,stride,indices,indexCount);
+}
+inline void Detail(uint32_t vao,const fqdetail::Levels& levels) {
+    if(hooks.detail&&!levels.indices.empty())hooks.detail(vao,levels);
 }
 inline void Skin(uint32_t vao,uint32_t texture,const float* attributes,size_t count,const float* palette,size_t rows) {
     if(hooks.skin)hooks.skin(vao,texture,attributes,count,palette,rows);

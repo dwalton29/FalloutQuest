@@ -53,6 +53,7 @@ struct Q76BV3 {
 };
 
 struct Q711TerrainBatch : fo3terrain::Bounds {
+    mutable int geometryTier=-1;
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::string texturePath;
@@ -87,12 +88,18 @@ struct Q711CpuBatch {
     std::vector<float> vertices;
     std::vector<uint32_t> indices;
     size_t vertexFloats = 12u;
+    bool allowGeometryDetail=false;
     std::vector<fo3terrain::PaintMaterial> paintMaterials;
     int layerOrder = -1;
     bool alphaLayer = false;
 };
 
 void Q237DrawTerrainBatch(const Q711TerrainBatch& batch) {
+#ifdef FQ_ENABLE_VULKAN
+    batch.geometryTier=batch.boundsValid?fqdetail::Tier(fqdetail::Distance(gFo3EyePosition,
+        batch.minX,batch.maxX,batch.minY,batch.maxY,batch.minZ,batch.maxZ),batch.geometryTier):-1;
+    fqrender::DetailScope geometryDetail(batch.geometryTier);
+#endif
     if (batch.indexOffset)
         glDrawElements(GL_TRIANGLES, batch.vertexCount, GL_UNSIGNED_INT,
                        reinterpret_cast<const void*>(batch.indexOffset));
@@ -233,6 +240,23 @@ uint64_t Q711GridKey(int32_t x, int32_t y) {
            static_cast<uint32_t>(y);
 }
 
+
+#ifdef FQ_ENABLE_VULKAN
+// Legacy paint draws re-use the base surface at equal depth. Coarsen only
+// fused surfaces and base cells whose final layout has no overlapping passes.
+void MarkTerrainDetail(std::vector<Q711CpuBatch>& batches) {
+    std::set<uint64_t> layered;
+    for(const auto& b:batches)
+        if(b.alphaLayer&&!b.vertices.empty())layered.insert(Q711GridKey(b.gridX,b.gridY));
+    for(auto& b:batches)b.allowGeometryDetail=!b.alphaLayer&&(b.vertexFloats==15u||!layered.count(Q711GridKey(b.gridX,b.gridY)));
+}
+void UploadTerrainDetail(GLuint vao,const Q711CpuBatch& b) {
+    if(!fqvk::hooks.detail||!b.allowGeometryDetail||b.indices.empty())return;
+    auto levels=fqdetail::Build(fqdetail::Family::Terrain,b.vertices.data(),b.vertices.size()/b.vertexFloats,
+        b.vertexFloats,b.indices,false);
+    fqvk::Detail(vao,levels);
+}
+#endif
 
 Q76BV3 Q76BSub(const Q76BV3& a, const Q76BV3& b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
@@ -1291,6 +1315,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     });
     Q76B_LOGI("Q238 TERRAIN FUSION: path=cold baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
               q238Fusion.triangles,q238Fusion.paintTriangles,q238Fusion.groups,q238Fusion.fallback,fo3terrain::LegacyLayers());
+#ifdef FQ_ENABLE_VULKAN
+    MarkTerrainDetail(cpuBatches);
+#endif
     size_t q237Corners = 0u, q237Unique = 0u, q237IndexedBatches = 0u;
     q711RealTextureBatches=q711FallbackBatches=q718AlphaBatches=0u;
     for (Q711CpuBatch& cpu : cpuBatches) {
@@ -1308,6 +1335,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
 #ifdef FQ_ENABLE_VULKAN
         fqvk::Mesh(gpu.vao,cpu.vertices.data(),cpu.vertices.size()/cpu.vertexFloats,
                    cpu.vertexFloats,cpu.indices.data(),cpu.indices.size());
+        UploadTerrainDetail(gpu.vao,cpu);
 #endif
         const size_t vertexBytes = cpu.vertices.size() * sizeof(float);
         const size_t indexBytes = cpu.indices.size() * sizeof(uint32_t);

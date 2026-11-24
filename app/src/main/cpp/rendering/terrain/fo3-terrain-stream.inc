@@ -853,6 +853,7 @@ bool Q2000AdvanceOneBatch(
 #ifdef FQ_ENABLE_VULKAN
     fqvk::Mesh(gpu.vao,cpu.vertices.data(),cpu.vertices.size()/cpu.vertexFloats,
                cpu.vertexFloats,cpu.indices.data(),cpu.indices.size());
+    UploadTerrainDetail(gpu.vao,cpu);
 #endif
     glBindVertexArray(gpu.vao);
     glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
@@ -1017,6 +1018,9 @@ void Q2000AdvanceGpu() {
                 for(Q711CpuBatch& batch:cell.batches)if(batch.vertexFloats==15u)Q237PrepareTerrainIndices(batch);
                 Q76B_LOGI("Q238 TERRAIN FUSION: cell=(%d,%d) baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
                           cell.gridX,cell.gridY,fused.triangles,fused.paintTriangles,fused.groups,fused.fallback,fo3terrain::LegacyLayers());
+#ifdef FQ_ENABLE_VULKAN
+                MarkTerrainDetail(cell.batches);
+#endif
                 cell.coveragePrepared = true;
                 const uint64_t elapsed = Q2000ElapsedUs(started);
                 gQ2000TargetMaxGpuStepUs = std::max(gQ2000TargetMaxGpuStepUs, elapsed);

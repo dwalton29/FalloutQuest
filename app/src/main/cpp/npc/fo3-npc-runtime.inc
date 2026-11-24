@@ -544,6 +544,15 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
   GpuObject gpu;
   if (!UploadCpuObject(part, centerX, centerY, floorZ, gpu))
     return false;
+#if defined(FQ_ENABLE_VULKAN) && !defined(FO3_ACTOR_RUNTIME_HOST_TEST)
+  if(fqvk::hooks.detail && deform&&!bindExpanded.empty()&&!gpu.alphaTest&&!gpu.alphaBlend&&
+     rig.facialBind.empty()&&!fo3appearance::HeadPart(actor.source,part.placement.modelPath)){
+    const auto levels=fqdetail::Build(fqdetail::Family::Actor,bindExpanded.data(),bindExpanded.size()/18,18,
+        part.mesh.indices,true,part.mesh.skinned?&part.mesh.skinBoneIndices:nullptr,
+        part.mesh.skinned?&part.mesh.skinBoneWeights:nullptr);
+    fqvk::Detail(gpu.vao,levels);
+  }
+#endif
   gpu.q230NpcActor = true;
   rig.gpuIndex = actor.objects.size();
   if (deform) {
@@ -886,6 +895,9 @@ void Q230RenderNpcActors(bool alphaPass) {
         glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
                     Q1150BlendFactor(object.alphaDestBlend, false));
       }
+#if defined(FQ_ENABLE_VULKAN) && !defined(FO3_ACTOR_RUNTIME_HOST_TEST)
+      fqrender::DetailScope actorDetail(fqmotion::eye.collecting?-1:actor.geometryTier);
+#endif
       DrawSceneObject(object);
     }
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST

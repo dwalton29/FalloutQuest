@@ -37,7 +37,14 @@ struct DrawState {
     float offsetUnits=0,offsetFactor=0;
     std::array<Handle,16> textures{},cubes{};
 };
+inline int detailTier=-1;
+struct DetailScope {
+    int previous;
+    explicit DetailScope(int tier):previous(detailTier){detailTier=tier;}
+    ~DetailScope(){detailTier=previous;}
+};
 struct DrawCommand {
+    int detailTier=fqrender::detailTier;
     Handle program=0,mesh=0;
     uint32_t topology=0,indexType=0;
     int first=0,count=0,instances=1;

@@ -137,6 +137,7 @@ if(FALLOUTQUEST_VULKAN)
                 ui/interaction/fo3-interaction-hud-assets.h ui/interaction/fo3-item-notification-renderer.h ui/loading/fo3-loading-vr.h
         VERBATIM)
     target_sources(falloutquest PRIVATE rendering/vulkan/fo3-vulkan-renderer.cpp
+        rendering/geometry-detail.cpp ../../../../third_party/meshoptimizer/simplifier.cpp
         "${FQ_VULKAN_GENERATED}/fo3-vulkan-shaders.h")
     target_include_directories(falloutquest PRIVATE "${FQ_VULKAN_GENERATED}")
     target_compile_definitions(falloutquest PRIVATE FQ_ENABLE_VULKAN=1)
