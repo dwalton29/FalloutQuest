@@ -89,7 +89,15 @@ struct TimedWorld final : btDiscreteDynamicsWorld {
     }
     void updateAabbs() override {
         FQ_PERF_SCOPE(RigidUpdateBounds);
-        btDiscreteDynamicsWorld::updateAabbs();
+        // Scenery proxies receive their contact-expanded bounds at publication.
+        // Continue updating every movable body, including sleeping bodies.
+        if(fqperf::capture.recording){
+            auto& frame=fqperf::capture.current;
+            frame.movableBoundsUpdated+=m_nonStaticRigidBodies.size();
+            frame.staticBoundsReused+=getNumCollisionObjects()-m_nonStaticRigidBodies.size();
+        }
+        for(int i=0;i<m_nonStaticRigidBodies.size();++i)
+            updateSingleAabb(m_nonStaticRigidBodies[i]);
     }
     void computeOverlappingPairs() override {
         FQ_PERF_SCOPE(RigidOverlapPairs);
@@ -210,6 +218,9 @@ struct World::Impl {
         if(fqperf::capture.recording){
             auto& frame=fqperf::capture.current;
             if(unsigned(requested)>frame.ragdollRequested){
+                const auto& body=*bodies.at(rag.bodies[requestedBone]).body;
+                frame.ragdollRequestHeight=body.getWorldTransform().getOrigin().y();
+                frame.ragdollRequestVelocityY=body.getLinearVelocity().y();
                 frame.ragdollRequested=requested;frame.ragdollRequestActor=actor;frame.ragdollRequestBone=requestedBone;
             }
             if(unsigned(applied)>frame.ragdollApplied){
@@ -292,6 +303,7 @@ void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     // Scenery is immutable until removed or replaced. Only loose objects (2)
     // and ragdolls / capsule sweeps (4) need to collide with it.
     impl->world.addRigidBody(e.body.get(),1,2|4);
+    impl->world.updateSingleAabb(e.body.get());
     impl->statics.emplace(id,std::move(e));
     // Newly published/moving support must wake resting nearby bodies.
     btVector3 lo,hi;impl->statics.at(id).body->getAabb(lo,hi);impl->WakeBounds(lo,hi);

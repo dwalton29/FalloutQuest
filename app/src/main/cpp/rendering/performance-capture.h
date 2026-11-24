@@ -71,6 +71,8 @@ struct Frame {
     std::array<double,Count> maxUs{};
     double threadCpuUs=-1,elapsedUs=0,slowObjectUs=0;
     uint32_t slowObjectRef=0,slowObjectMetric=0;
+    uint32_t movableBoundsUpdated=0,staticBoundsReused=0;
+    float ragdollRequestHeight=0,ragdollRequestVelocityY=0;
     uint32_t staticRefsReused=0,staticRefsBuilt=0;
     uint32_t solverVelocityIterations=0;
     // Per-frame peak subdivision requests; bone indices refer to the actor's ragdoll definition.
@@ -154,7 +156,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped,scenerySampled,sceneryDetailedDraws,sceneryInstancedDraws,sceneryAlreadySaved,sceneryEligibleDraws,sceneryAdditionalMatches\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt,rigidConstraintRemainderUs,solverVelocityIterations,vkSceneDraws,vkBufferBindsIssued,vkBufferBindsSkipped,scenerySampled,sceneryDetailedDraws,sceneryInstancedDraws,sceneryAlreadySaved,sceneryEligibleDraws,sceneryAdditionalMatches,movableBoundsUpdated,staticBoundsReused,ragdollRequestHeight,ragdollRequestVelocityY\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -185,11 +187,12 @@ struct Session {
             // sorting, dispatch and timing overhead inside solveConstraints.
             const double remainder=v.us[RigidConstraints]-v.us[RigidGroupSetup]
                 -v.us[RigidGroupIterations]-v.us[RigidGroupFinish];
-            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u\n",reject.reason?reject.reason:"none",
+            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u,%.3f,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%.4f,%.4f\n",reject.reason?reject.reason:"none",
                 (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes,
                 v.staticRefsReused,v.staticRefsBuilt,remainder,v.solverVelocityIterations,v.vkSceneDraws,v.vkBufferBindsIssued,v.vkBufferBindsSkipped,
                 v.scenerySampled,v.scenery.detailedDraws,v.scenery.instancedDraws,v.scenery.alreadySaved,
-                v.scenery.eligibleDraws,v.scenery.additionalMatches);
+                v.scenery.eligibleDraws,v.scenery.additionalMatches,v.movableBoundsUpdated,v.staticBoundsReused,
+                v.ragdollRequestHeight,v.ragdollRequestVelocityY);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

@@ -43,6 +43,9 @@ static void VerifySubsteps(const fo3rag::Definition& rig){
   const auto f=step(.064f);
   assert(f.calls[fqperf::RigidTick]==unsigned(7+i));
   assert(f.calls[fqperf::RigidSolve]==f.calls[fqperf::RigidTick]);
+  assert(f.staticBoundsReused==f.calls[fqperf::RigidSolve]); // one fixed floor
+  assert(f.movableBoundsUpdated==2*f.calls[fqperf::RigidSolve]); // two moving bones
+  assert(f.ragdollRequestHeight>40&&f.ragdollRequestVelocityY<0);
   double phases=0;
   for(auto phase:{fqperf::RigidPredictiveContacts,fqperf::RigidUpdateBounds,fqperf::RigidOverlapPairs,
                   fqperf::RigidContactDispatch,fqperf::RigidIslands,fqperf::RigidConstraints,fqperf::RigidIntegrate}){
