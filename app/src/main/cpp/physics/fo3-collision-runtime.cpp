@@ -2959,9 +2959,26 @@ void SynchronizeFo3RigidWorld(float x,float z) {
                 if(entry!=gAnimatedReferenceTriangles.end())for(uint32_t index:entry->second)append(ref,gWorldTriangles[index]);
             }
         }
-        if(gRigidFullDirty){for(auto ref:published)world.RemoveStatic(ref);published.clear();}
-        else for(auto ref:gRigidDirtyRefs){world.RemoveStatic(ref);published.erase(ref);}
-        for(const auto& c:chunks){world.Static(c.first,c.second);published.insert(c.first);}
+        if(gRigidFullDirty){
+            for(auto it=published.begin();it!=published.end();){
+                if(chunks.count(*it)){++it;continue;}
+                world.RemoveStatic(*it);
+                it=published.erase(it);
+            }
+        }else{
+            for(auto ref:gRigidDirtyRefs)if(!chunks.count(ref)){
+                world.RemoveStatic(ref);
+                published.erase(ref);
+            }
+        }
+        for(auto& [ref,triangles]:chunks){
+            const bool built=world.SyncStatic(ref,std::move(triangles));
+            published.insert(ref);
+            if(fqperf::capture.recording){
+                auto& frame=fqperf::capture.current;
+                if(built)++frame.staticRefsBuilt;else ++frame.staticRefsReused;
+            }
+        }
         gRigidFullDirty=false;gRigidDirtyRefs.clear();
     }
     FQ_PERF_SCOPE(RigidTerrainSync);

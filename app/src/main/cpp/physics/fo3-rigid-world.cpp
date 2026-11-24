@@ -36,6 +36,7 @@ struct SurfaceQuery:btTriangleCallback {
     }
 };
 struct Entry {
+    std::vector<Triangle> publishedTriangles;
     uint32_t ragdollActor=0;float ragdollScale=1,ragdollRadius=0,ragdollThinRadius=0;
     btTransform principal=btTransform::getIdentity();
     std::unique_ptr<btTriangleMesh> mesh,visualMesh;
@@ -44,13 +45,49 @@ struct Entry {
     std::unique_ptr<btCollisionShape> shape;
     std::unique_ptr<btRigidBody> body;
 };
+
+// Time Bullet's phase entry points, keeping its step order and collision policy.
+struct TimedDispatcher final : btCollisionDispatcher {
+    using btCollisionDispatcher::btCollisionDispatcher;
+    void dispatchAllCollisionPairs(btOverlappingPairCache* pairs,const btDispatcherInfo& info,btDispatcher* dispatcher) override {
+        FQ_PERF_SCOPE(RigidContactDispatch);
+        btCollisionDispatcher::dispatchAllCollisionPairs(pairs,info,dispatcher);
+    }
+};
+struct TimedWorld final : btDiscreteDynamicsWorld {
+    using btDiscreteDynamicsWorld::btDiscreteDynamicsWorld;
+    void createPredictiveContacts(btScalar dt) override {
+        FQ_PERF_SCOPE(RigidPredictiveContacts);
+        btDiscreteDynamicsWorld::createPredictiveContacts(dt);
+    }
+    void updateAabbs() override {
+        FQ_PERF_SCOPE(RigidUpdateBounds);
+        btDiscreteDynamicsWorld::updateAabbs();
+    }
+    void computeOverlappingPairs() override {
+        FQ_PERF_SCOPE(RigidOverlapPairs);
+        btDiscreteDynamicsWorld::computeOverlappingPairs();
+    }
+    void calculateSimulationIslands() override {
+        FQ_PERF_SCOPE(RigidIslands);
+        btDiscreteDynamicsWorld::calculateSimulationIslands();
+    }
+    void solveConstraints(btContactSolverInfo& info) override {
+        FQ_PERF_SCOPE(RigidConstraints);
+        btDiscreteDynamicsWorld::solveConstraints(info);
+    }
+    void integrateTransforms(btScalar dt) override {
+        FQ_PERF_SCOPE(RigidIntegrate);
+        btDiscreteDynamicsWorld::integrateTransforms(dt);
+    }
+};
 }
 struct World::Impl {
     btDefaultCollisionConfiguration config;
-    btCollisionDispatcher dispatcher{&config};
+    TimedDispatcher dispatcher{&config};
     btDbvtBroadphase broad;
     btSequentialImpulseConstraintSolver solver;
-    btDiscreteDynamicsWorld world{&dispatcher,&broad,&solver,&config};
+    TimedWorld world{&dispatcher,&broad,&solver,&config};
     std::unordered_map<uint64_t,Entry> statics,bodies;
     struct Grip {uint64_t id=0;btTransform anchor,offset,target;btVector3 carryVelocity{0,0,0};std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
     struct Ragdoll {float quietSeconds=0;std::vector<uint64_t> bodies;std::vector<std::unique_ptr<btTypedConstraint>> joints;};
@@ -229,6 +266,22 @@ void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     btVector3 lo,hi;impl->statics.at(id).body->getAabb(lo,hi);impl->WakeBounds(lo,hi);
 }
 bool World::Has(uint64_t id)const{return impl->bodies.count(id)!=0;}
+bool World::SyncStatic(uint64_t id,std::vector<Triangle> triangles){
+    const auto existing=impl->statics.find(id);
+    if(triangles.empty()){
+        if(existing==impl->statics.end())return false;
+        RemoveStatic(id);
+        return true;
+    }
+    if(existing!=impl->statics.end()){
+        const auto& previous=existing->second.publishedTriangles;
+        const auto same=[](const Triangle& a,const Triangle& b){return a.a==b.a&&a.b==b.b&&a.c==b.c;};
+        if(std::equal(previous.begin(),previous.end(),triangles.begin(),triangles.end(),same))return false;
+    }
+    Static(id,triangles);
+    impl->statics.at(id).publishedTriangles=std::move(triangles);
+    return true;
+}
 bool World::Add(uint64_t id,const Asset& asset,const M& pose){
     if(Has(id))return true;
     if(!id||asset.hulls.empty()||!Finite(pose)||!std::isfinite(asset.material.mass)||asset.material.mass<=0)return false;

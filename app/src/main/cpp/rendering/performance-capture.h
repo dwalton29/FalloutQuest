@@ -26,7 +26,8 @@ enum Metric : unsigned {
     VrInteractionUpdate,PlayerRigUpdate,VatsUpdate,MenuUpdate,PipboyUpdate,DialogueUpdate,
     WeaponUpdate,RigidWorldUpdate,RigidSync,RigidStep,RagdollUpdate,LooseGrab,UnarmedUpdate,ScriptSounds,
     ObjectUpload,DoorResolve,RigidTick,RigidSolve,RigidBodySweep,UploadFenceWait,
-    NpcPointerBounds,PlayerPlanar,PlayerGravity,PlayerStance,RigidFullRefresh,RigidPartialRefresh,RigidTerrainSync,CollisionSnapshotPublish,Count
+    NpcPointerBounds,PlayerPlanar,PlayerGravity,PlayerStance,RigidFullRefresh,RigidPartialRefresh,RigidTerrainSync,CollisionSnapshotPublish,
+    RigidPredictiveContacts,RigidUpdateBounds,RigidOverlapPairs,RigidContactDispatch,RigidIslands,RigidConstraints,RigidIntegrate,Count
 };
 inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","gameplayUs",
     "streamingUs","actorPrepUs","npcSimulationUs","npcPackagesUs","npcPersistenceUs",
@@ -40,7 +41,8 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "weaponUpdateUs","rigidWorldUpdateUs","rigidSyncUs","rigidStepUs","ragdollUpdateUs","looseGrabUs",
     "unarmedUpdateUs","scriptSoundsUs","objectUploadUs","doorResolveUs","rigidTickUs","rigidSolveUs","rigidBodySweepUs","vkUploadFenceWaitUs",
     "npcPointerBoundsUs","playerPlanarUs","playerGravityUs","playerStanceUs",
-    "rigidFullRefreshUs","rigidPartialRefreshUs","rigidTerrainSyncUs","collisionSnapshotPublishUs"};
+    "rigidFullRefreshUs","rigidPartialRefreshUs","rigidTerrainSyncUs","collisionSnapshotPublishUs",
+    "rigidPredictiveContactsUs","rigidUpdateBoundsUs","rigidOverlapPairsUs","rigidContactDispatchUs","rigidIslandsUs","rigidConstraintsUs","rigidIntegrateUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
 enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
     GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,
@@ -59,6 +61,7 @@ struct Frame {
     std::array<double,Count> maxUs{};
     double threadCpuUs=-1,elapsedUs=0,slowObjectUs=0;
     uint32_t slowObjectRef=0,slowObjectMetric=0;
+    uint32_t staticRefsReused=0,staticRefsBuilt=0;
     // Per-frame peak subdivision requests; bone indices refer to the actor's ragdoll definition.
     uint32_t ragdollRequested=0,ragdollRequestActor=0,ragdollRequestBone=0;
     uint32_t ragdollApplied=0,ragdollApplyActor=0,ragdollApplyBone=0;
@@ -139,7 +142,7 @@ struct Session {
         for(auto name:vkPassNames)std::fprintf(f,",vk_%sUs",name);
         std::fprintf(f,",vkRecordUs,vkUploadUs,vkDrawUs,vkQueueUs,vkReuseWaitUs,vkFinishWaitUs,vkXrWaitUs");
         for(auto name:names)std::fprintf(f,",%sCalls,%sMaxUs",name,name);
-        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes\n");
+        std::fprintf(f,",ragdollRequested,ragdollRequestActor,ragdollRequestBone,ragdollApplied,ragdollApplyActor,ragdollApplyBone,paletteStagedCopies,paletteStagingPages,npcGroundFullScans,npcGroundScannedTriangles,motionReplayPasses,motionReplayDraws,motionRejectReason,motionRejectObject,motionRejectRef,motionRejectMesh,motionRejectObjects,motionRejectUsedBytes,motionRejectRecordBytes,staticRefsReused,staticRefsBuilt\n");
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
             std::fprintf(f,"%llu,%d,%d,%d,%d,%d,%u,%u,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%.3f,%.3f,%.3f",
@@ -166,8 +169,9 @@ struct Session {
                 v.ragdollApplied,v.ragdollApplyActor,v.ragdollApplyBone,v.paletteStagedCopies,v.paletteStagingPages,v.npcGroundFullScans,
                 (unsigned long long)v.npcGroundScannedTriangles,v.motionReplayPasses,v.motionReplayDraws);
             const auto& reject=v.motionRejection;
-            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu\n",reject.reason?reject.reason:"none",
-                (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes);
+            std::fprintf(f,",%s,%llu,%u,%u,%zu,%zu,%zu,%u,%u\n",reject.reason?reject.reason:"none",
+                (unsigned long long)reject.identity,reject.reference,reject.mesh,reject.objects,reject.usedBytes,reject.recordBytes,
+                v.staticRefsReused,v.staticRefsBuilt);
         }
         const bool ok=std::ferror(f)==0;
         return std::fclose(f)==0&&ok;

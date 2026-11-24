@@ -101,6 +101,18 @@ def diagnostic_summary(rows):
         solves = sum(int(r['rigidSolveUsCalls']) for r in selected)
         if ticks:
             print(f'Rigid physics: {solves} solves over {ticks} fixed ticks ({solves/ticks:.2f} solves/tick).')
+        if solves and 'rigidUpdateBoundsUs' in rows[0]:
+            print('Bullet phases, mean ms per simulation substep across active gameplay:')
+            for key in ('rigidSolveUs', 'rigidPredictiveContactsUs', 'rigidUpdateBoundsUs',
+                        'rigidOverlapPairsUs', 'rigidContactDispatchUs', 'rigidIslandsUs',
+                        'rigidConstraintsUs', 'rigidIntegrateUs'):
+                ms = sum(float(r[key]) for r in selected) / (1000 * solves)
+                print(f'  {key} {ms:.3f}')
+        if 'staticRefsBuilt' in rows[0]:
+            for r in selected:
+                if int(r['rigidFullRefreshUsCalls']):
+                    print(f"Full scenery refresh on frame {r['serial']} took {float(r['rigidFullRefreshUs'])/1000:.3f} ms. "
+                          f"Frame totals: {r['staticRefsReused']} reused and {r['staticRefsBuilt']} built.")
         for kind, actor, bone in [('ragdollRequested', 'ragdollRequestActor', 'ragdollRequestBone'),
                                   ('ragdollApplied', 'ragdollApplyActor', 'ragdollApplyBone')]:
             drivers = Counter((int(r[actor]), int(r[bone]), int(r[kind])) for r in selected if int(r[kind]) > 1)

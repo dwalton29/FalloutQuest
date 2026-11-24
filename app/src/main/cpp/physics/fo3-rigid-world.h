@@ -23,6 +23,8 @@ public:
     World();~World();
     World(const World&)=delete;World& operator=(const World&)=delete;
     void Static(uint64_t id,const std::vector<Triangle>& triangles);
+    // Compare with the live snapshot for this ID. Returns true if geometry changed.
+    bool SyncStatic(uint64_t id,std::vector<Triangle> triangles);
     void RemoveStatic(uint64_t id);
     void ClearStatics();
     bool Add(uint64_t id,const Asset& asset,const M& pose);

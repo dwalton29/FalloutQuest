@@ -39,6 +39,13 @@ static void VerifySubsteps(const fo3rag::Definition& rig){
   const auto f=step(.064f);
   assert(f.calls[fqperf::RigidTick]==unsigned(7+i));
   assert(f.calls[fqperf::RigidSolve]==f.calls[fqperf::RigidTick]);
+  double phases=0;
+  for(auto phase:{fqperf::RigidPredictiveContacts,fqperf::RigidUpdateBounds,fqperf::RigidOverlapPairs,
+                  fqperf::RigidContactDispatch,fqperf::RigidIslands,fqperf::RigidConstraints,fqperf::RigidIntegrate}){
+   assert(f.calls[phase]==f.calls[fqperf::RigidSolve]);
+   phases+=f.us[phase];
+  }
+  assert(phases<=f.us[fqperf::RigidSolve]);
   assert(f.ragdollRequested==8&&f.ragdollRequestActor==actor&&f.ragdollApplied==1);
  }
  // Preserve the approach to impact even before the floor is within one tick.

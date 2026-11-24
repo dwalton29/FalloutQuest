@@ -82,6 +82,13 @@ function Write-CaptureSummary($Csv, [string]$Path) {
             $measurements += [pscustomobject]@{ Key=$key; P95=$p95; Line=("{0} | {1} | {2:F3} | {3:F3} | {4:F3}" -f $key,$values.Count,($median/1000),($p95/1000),($maximum/1000)) }
         }
         foreach ($m in $measurements | Where-Object { $_.Key -in $primary }) { $report.Add($m.Line) }
+        if ('rigidUpdateBoundsUs' -in $rows[0].PSObject.Properties.Name) {
+            $report.Add("Bullet timings per gameplay frame (rigidSolveUs includes all phases)")
+            foreach ($m in $measurements | Where-Object { $_.Key -in @('rigidSolveUs','rigidPredictiveContactsUs','rigidUpdateBoundsUs','rigidOverlapPairsUs','rigidContactDispatchUs','rigidIslandsUs','rigidConstraintsUs','rigidIntegrateUs') }) { $report.Add($m.Line) }
+            foreach ($r in $gameplay | Where-Object { [int]$_.rigidFullRefreshUsCalls -gt 0 }) {
+                $report.Add("Full scenery refresh on frame $($r.serial) took $($r.rigidFullRefreshUs) us. Frame totals: $($r.staticRefsReused) reused and $($r.staticRefsBuilt) built.")
+            }
+        }
         $report.Add("Largest instrumented scopes by p95 (inclusive, may overlap):")
         foreach ($m in $measurements | Where-Object { $_.Key -notin $primary -and $_.P95 -gt 0 } | Sort-Object P95 -Descending | Select-Object -First 15) { $report.Add($m.Line) }
         $report.Add("Slowest gameplay frames: serial | cell | world | work ms | thread CPU ms | residents | draws | slow object reference (decimal)")
