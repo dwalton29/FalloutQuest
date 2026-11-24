@@ -1,3 +1,4 @@
+#include <set>
 #include "rendering/loading-work-scope.h"
 #include "rendering/loading-diagnostics.h"
 #include "fo3-install-paths.h"

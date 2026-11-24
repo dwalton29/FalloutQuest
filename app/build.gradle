@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 366
-        versionName '0.211.0-fixed-scenery-bounds'
+        versionCode 368
+        versionName '0.213.0-integrated-geometry-detail'
 
         ndk {
             abiFilters 'arm64-v8a'

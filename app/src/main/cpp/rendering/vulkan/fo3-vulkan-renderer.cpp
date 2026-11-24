@@ -54,7 +54,7 @@ struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDevice
 struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1,width=0,height=0;bool palette=false,clamp=false,repeatT=false,repeatS=false;};
 struct PostTarget {Image image;VkFramebuffer framebuffer{},overlay{};uint32_t width=0,height=0;bool initialized=false;};
 struct UiTarget {PostTarget target;VkImageView sampled{};};
-struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
+struct MeshData {Buffer vertices,indices,skin,detail;std::array<fqdetail::Range,3> detailRanges{};fqdetail::Family family{};uint32_t count=0,stride=0;};
 struct ProgramData {
     bool terrain=false,fused=false,sky=false,water=false;int ui=0;
     std::vector<uint8_t> bytes;
@@ -204,6 +204,7 @@ public:
     int adaptIndex=0;bool exposureFirst=true,postDone=false,passOpen=false;
     std::vector<Retired<Buffer>> retiredBuffers;std::vector<Retired<Image>> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;std::array<uint64_t,6> skipReasons{};uint32_t firstSkippedProgram=0,visualDiagnostics=0;bool begun=false;
+    bool geometryDetail=true;std::array<uint64_t,3> savedCorners{};
     bool failed=false;
     // The OpenXR runtime owns these images. Only our views/framebuffers are destroyed.
     XrInstance xrInstance{};XrSession xrSession{};XrSwapchain xrSwapchain{};
@@ -788,6 +789,7 @@ public:
         legacyPresentation=std::atoi(visualProp)==1;
         __system_property_get("debug.falloutquest.vulkan_timing",visualProp);configuredPassTiming=passTiming=std::atoi(visualProp)==1;
         __system_property_get("debug.falloutquest.vulkan_sync",visualProp);synchronous=std::atoi(visualProp)==1;
+        __system_property_get("debug.falloutquest.geometry_lod",visualProp);geometryDetail=std::strcmp(visualProp,"0")!=0;
         __system_property_get("debug.falloutquest.vulkan_generic_shaders",visualProp);genericShaders=std::atoi(visualProp)==1;
 #endif
         VKLOG("FQVK VISUAL diagnosticMask=%u forceNoCull=%u rawSceneNoFilm=%u reverseFrontFace=%u originalAssets=1",visualDiagnostics,(visualDiagnostics&1u)?1u:0u,(visualDiagnostics&2u)?1u:0u,(visualDiagnostics&4u)?1u:0u);
@@ -996,7 +998,7 @@ public:
     std::set<SceneryKey> sceneryGroups;
     fqperf::SceneryCounts scenery;
     bool sampleScenery=false;
-    void CountScenery(const PendingDraw& item,PipelineKey key,VkDescriptorSet set,uint32_t first) {
+    void CountScenery(const PendingDraw& item,PipelineKey key,VkDescriptorSet set,uint32_t first,uint32_t count,bool reduced) {
         if(item.scenery!=fqrender::SceneryDraw::OutsidePass){
             ++scenery.detailedDraws;
             if(item.command.instances>1){
@@ -1031,8 +1033,8 @@ public:
         key.Normalize();
         ++scenery.eligibleDraws;
         const auto& draw=item.command;
-        const bool inserted=sceneryGroups.emplace(draw.mesh,draw.program,draw.topology,draw.indexType,
-            first,draw.count,set,key.Words(),std::move(material)).second;
+        const bool inserted=sceneryGroups.emplace(draw.mesh,draw.program,draw.topology,reduced?GL_UNSIGNED_INT:draw.indexType,
+            first,int(count),set,key.Words(),std::move(material)).second;
         if(!inserted)++scenery.additionalMatches;
     }
     void DrainDraws() {
@@ -1153,18 +1155,28 @@ public:
         BindVertex(bound,0,m.vertices.buffer,0);
         if(key.skinned)BindVertex(bound,2,m.skin.buffer,0);
         if(key.instanced)BindVertex(bound,1,arena.buffer,instanceOffset);
-        if(type){
-            if(fqperf::reuseVulkanBufferBinds&&bound.indexBuffer==m.indices.buffer){
+        fqdetail::Range detail{};
+        if(geometryDetail && draw.detailTier>=0 && !offscreen && !key.ui && !key.sky && !key.water &&
+           !key.strip && !indexFirst && uint32_t(count)==m.count && m.detail.buffer) {
+            for(int tier=std::min(draw.detailTier,2);tier>=0;--tier)
+                if(m.detailRanges[tier].count){detail=m.detailRanges[tier];break;}
+        }
+        const uint32_t submittedCount=detail.count?detail.count:uint32_t(count);
+        const uint32_t firstIndex=detail.count?detail.first:indexFirst;
+        if(detail.count||type){
+            const VkBuffer indexBuffer=detail.count?m.detail.buffer:m.indices.buffer;
+            if(fqperf::reuseVulkanBufferBinds&&bound.indexBuffer==indexBuffer){
                 ++bufferBindsSkipped;
             }else{
-                vkCmdBindIndexBuffer(command,m.indices.buffer,0,VK_INDEX_TYPE_UINT32);
-                bound.indexBuffer=m.indices.buffer;
+                vkCmdBindIndexBuffer(command,indexBuffer,0,VK_INDEX_TYPE_UINT32);
+                bound.indexBuffer=indexBuffer;
                 ++bufferBindsIssued;
             }
-            vkCmdDrawIndexed(command,count,instances,indexFirst,0,0);
+            vkCmdDrawIndexed(command,submittedCount,instances,firstIndex,0,0);
         }else vkCmdDraw(command,count,instances,first,0);
-        ++draws;vertices+=uint64_t(count)*instances;
-        if(sampleScenery)CountScenery(item,key,set,indexFirst);
+        if(detail.count)savedCorners[size_t(m.family)]+=uint64_t(count-detail.count)*instances;
+        ++draws;vertices+=uint64_t(submittedCount)*instances;
+        if(sampleScenery)CountScenery(item,key,set,firstIndex,submittedCount,detail.count!=0);
         if(key.foveated)++foveatedDraws;
         if((kind<2||p.fused)&&(key.lighting||key.noLocal))++specializedDraws;
         if(kind<2||kind==TerrainFusionKind){if(key.noDiscard)++solidDraws;else ++guardedDraws;if(p.terrain){++landDraws;if(key.fused&&key.stride==15)++fusedLandDraws;}else ++worldDraws;}
@@ -1456,8 +1468,8 @@ public:
         scenery={};
         passTiming=configuredPassTiming||(captureId&&captureFrame%8==0);
         if(captureId&&!fqperf::capture.graphics[0])std::snprintf(fqperf::capture.graphics,sizeof(fqperf::capture.graphics),
-            "vkDevice=%s vkVendor=%u vkDeviceId=%u vkDriver=%u vkTimestampBits=%u vkTimestampPeriodNs=%.6f vkBuffered=%d vkTimingForced=%d vkBufferBindReuse=%d",
-            properties.deviceName,properties.vendorID,properties.deviceID,properties.driverVersion,timestampBits,properties.limits.timestampPeriod,Buffered(),configuredPassTiming,fqperf::reuseVulkanBufferBinds);
+            "vkDevice=%s vkVendor=%u vkDeviceId=%u vkDriver=%u vkTimestampBits=%u vkTimestampPeriodNs=%.6f vkBuffered=%d vkTimingForced=%d vkBufferBindReuse=%d geometryLod=%d",
+            properties.deviceName,properties.vendorID,properties.deviceID,properties.driverVersion,timestampBits,properties.limits.timestampPeriod,Buffered(),configuredPassTiming,fqperf::reuseVulkanBufferBinds,geometryDetail);
         loadingFrame=loading;modalActive=false;
         FlushUploads();
         if(Buffered()){CreateContexts();SelectSlot(offscreen?2:nextWorldSlot);if(!offscreen)nextWorldSlot=1-nextWorldSlot;}
@@ -1486,6 +1498,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
+        savedCorners={};
         bufferBindsIssued=bufferBindsSkipped=0;
         pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=fusedLandDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1553,6 +1566,9 @@ public:
         sample.foveated=foveatedDraws;sample.specialized=specializedDraws;sample.compact=compactFrame&&!offscreen;sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;sample.fusedLand=fusedLandDraws;
         sample.record=recordSpanUs;sample.queueCpu=queueCpuUs;sample.drawCpu=drawCpuUs;sample.reuse=reuseWaitUs;sample.xrWait=xrWaitUs;
         sample.uploadCpu=uploadPrepareUs-lastUploadPrepareUs;lastUploadPrepareUs=uploadPrepareUs;
+        if(passTiming||(!offscreen&&(frames-1)%120==0))VKLOG("FQVK GEOMETRY submission=%llu actualCorners=%llu savedScenery=%llu savedTerrain=%llu savedActors=%llu",
+            (unsigned long long)sample.serial,(unsigned long long)vertices,(unsigned long long)savedCorners[0],
+            (unsigned long long)savedCorners[1],(unsigned long long)savedCorners[2]);
         sample.drawCount=draws;sample.vertexCount=vertices;sample.skipCount=skipped;sample.reasons=skipReasons;sample.firstSkip=firstSkippedProgram;
         sample.diagnostic=visualDiagnostics;sample.dropped=timingDropped;sample.offscreen=offscreen;sample.profile=passTiming;sample.supported=timestampSupported;
         sample.direct=directOutput&&!(visualDiagnostics&2u);sample.buffered=Buffered();sample.logFrame=!offscreen&&((frames-1)%120)==0;
@@ -1566,6 +1582,8 @@ public:
                 frame->scenery.eligibleDraws+=scenery.eligibleDraws;
                 frame->scenery.additionalMatches+=scenery.additionalMatches;
             }
+            frame->vkActualCorners+=vertices;
+            for(size_t i=0;i<savedCorners.size();++i)frame->geometrySaved[i]+=savedCorners[i];
             ++frame->vkExpected;
             frame->vkSceneDraws+=uint32_t(draws);
             frame->vkBufferBindsIssued+=bufferBindsIssued;
@@ -1848,7 +1866,7 @@ public:
         if(device){CancelUploads();begun=false;DestroyDensityPasses(densityMain);Destroy(densityMap);
             SwapSlot(frameSlots[activeSlot]);
             for(auto& e:pipelines)vkDestroyPipeline(device,e.second,nullptr);
-            for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
+            for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);Destroy(e.second.detail);}
             for(auto& e:textures)Destroy(e.second);
             Collect(true);
             for(auto& slot:frameSlots)DestroySlot(slot);
@@ -1918,11 +1936,26 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.uniform=[](uint32_t id,int location,int kind,int size,const void* bytes){renderer->Uniform(id,location,kind,size,bytes);};
         hooks.mesh=[](uint32_t vao,const float* vertices,size_t n,size_t stride,const uint32_t* indices,size_t indexCount){
             try {if(!vao||!vertices||!n)return;auto& r=*renderer;r.DrainDraws();
-                auto& m=r.meshes[vao];r.Retire(m.vertices);r.Retire(m.indices);
+                auto& m=r.meshes[vao];r.Retire(m.vertices);r.Retire(m.indices);r.Retire(m.detail);m.detailRanges={};
                 m.stride=uint32_t(stride);m.count=uint32_t(indexCount?indexCount:n);
                 m.vertices=r.UploadBuffer(vertices,n*stride*4,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
                 if(indexCount)m.indices=r.UploadBuffer(indices,indexCount*4,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
             }catch(const std::exception& e){Failure(e);}};
+        if(renderer->geometryDetail)hooks.detail=[](uint32_t vao,const fqdetail::Levels& levels){
+            auto& r=*renderer;
+            auto found=r.meshes.find(vao);
+            if(found==r.meshes.end()||levels.indices.empty())return;
+            r.DrainDraws();
+            auto& mesh=found->second;
+            Buffer buffer{};
+            try {
+                buffer=r.UploadBuffer(levels.indices.data(),levels.indices.size()*sizeof(uint32_t),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+            } catch(const std::exception& e) {
+                VKLOG("FQVK GEOMETRY fallback vao=%u error=%s",vao,e.what());
+                return;
+            }
+            r.Retire(mesh.detail);mesh.detail=buffer;mesh.detailRanges=levels.ranges;mesh.family=levels.family;
+        };
         hooks.texture=[](uint32_t id,int w,int h,const uint8_t* rgba,unsigned flags){try{if(w<=0||h<=0||!rgba)return;auto& r=*renderer;r.DrainDraws();auto image=r.UploadTexture(w,h,rgba,false,flags&2,flags&1);r.Retire(r.textures[id]);r.textures[id]=image;}catch(const std::exception& e){Failure(e);}};
         hooks.dynamicMesh=[](uint32_t vao,const float* data,size_t floats){try{
             auto& r=*renderer;r.DrainDraws();auto found=r.meshes.find(vao);if(found==r.meshes.end())return;
@@ -1944,7 +1977,7 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.erase=[](uint32_t id,bool texture){try{auto& r=*renderer;r.DrainDraws();
             if(texture){auto ui=r.uiTargets.find(id);if(ui!=r.uiTargets.end()){r.RetireUi(ui->second);r.uiTargets.erase(ui);}
                 auto i=r.textures.find(id);if(i!=r.textures.end()){r.Retire(i->second);r.textures.erase(i);}}
-            else{auto i=r.meshes.find(id);if(i!=r.meshes.end()){r.Retire(i->second.vertices);r.Retire(i->second.indices);r.Retire(i->second.skin);r.meshes.erase(i);}}}catch(const std::exception& e){Failure(e);}};
+            else{auto i=r.meshes.find(id);if(i!=r.meshes.end()){r.Retire(i->second.vertices);r.Retire(i->second.indices);r.Retire(i->second.skin);r.Retire(i->second.detail);r.meshes.erase(i);}}}catch(const std::exception& e){Failure(e);}};
         return true;
     }catch(const std::exception& e){Failure(e);ShutdownWorldProbe();return false;}
 }

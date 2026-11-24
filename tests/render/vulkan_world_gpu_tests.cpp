@@ -672,6 +672,22 @@ void HeadlessSceneSubmission(bool reuse) {
     fqvk::EndWorldProbe();assert(fqvk::renderer->pending.empty());
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,1,32,32,0),1);
+    // A single VAO can alternate between original and reduced index buffers
+    // within one command drain. Reuse only the buffer actually bound.
+    fqdetail::Levels detail;
+    detail.indices={0,1,2};
+    detail.ranges[1]={0,3};
+    fqvk::Detail(vao,detail);
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    const auto initialIndexBinds=indexBinds;
+    for(int tier:{-1,1,1,-1}){
+        fqrender::DetailScope select(tier);
+        glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    }
+    renderer.DrainDraws();
+    assert(renderer.vertices==18&&renderer.savedCorners[0]==6);
+    assert(indexBinds-initialIndexBinds==(reuse?3u:4u));
+    fqvk::EndWorldProbe();
     // The native renderer owns program uniforms; GLES and EGL never provided them.
     assert(fqrender::driverCalls==0);
     glDeleteTextures(1,&texture);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);

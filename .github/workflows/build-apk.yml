@@ -18,6 +18,8 @@ jobs:
           sudo apt-get install -y glslang-tools spirv-tools libvulkan-dev libopenxr-dev libgles-dev libegl-dev libegl-mesa0 libgl1-mesa-dri mesa-vulkan-drivers vulkan-validationlayers gdb
       - name: Compile and link production world and original LAND SPIR-V
         run: |
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/geometry_detail_tests.cpp app/src/main/cpp/rendering/geometry-detail.cpp third_party/meshoptimizer/simplifier.cpp -o /tmp/fq-geometry-detail
+          /tmp/fq-geometry-detail
           python3 tests/render/test_vulkan_shaders.py
           python3 tests/render/test_spacewarp_shaders.py
           python3 tests/render/test_spacewarp_openxr.py
