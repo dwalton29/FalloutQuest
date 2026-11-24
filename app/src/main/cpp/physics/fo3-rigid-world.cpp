@@ -54,6 +54,32 @@ struct TimedDispatcher final : btCollisionDispatcher {
         btCollisionDispatcher::dispatchAllCollisionPairs(pairs,info,dispatcher);
     }
 };
+struct TimedConstraintSolver final : btSequentialImpulseConstraintSolver {
+    btScalar solveGroupCacheFriendlySetup(btCollisionObject** bodies,int bodyCount,
+            btPersistentManifold** manifolds,int manifoldCount,btTypedConstraint** joints,int jointCount,
+            const btContactSolverInfo& info,btIDebugDraw* debug) override {
+        FQ_PERF_SCOPE(RigidGroupSetup);
+        return btSequentialImpulseConstraintSolver::solveGroupCacheFriendlySetup(
+            bodies,bodyCount,manifolds,manifoldCount,joints,jointCount,info,debug);
+    }
+    btScalar solveGroupCacheFriendlyIterations(btCollisionObject** bodies,int bodyCount,
+            btPersistentManifold** manifolds,int manifoldCount,btTypedConstraint** joints,int jointCount,
+            const btContactSolverInfo& info,btIDebugDraw* debug) override {
+        FQ_PERF_SCOPE(RigidGroupIterations);
+        const int previousCalls=m_analyticsData.m_numSolverCalls;
+        const btScalar result=btSequentialImpulseConstraintSolver::solveGroupCacheFriendlyIterations(
+            bodies,bodyCount,manifolds,manifoldCount,joints,jointCount,info,debug);
+        // Bullet records the actual velocity passes, including early convergence.
+        if(fqperf::capture.recording&&m_analyticsData.m_numSolverCalls!=previousCalls)
+            fqperf::capture.current.solverVelocityIterations+=m_analyticsData.m_numIterationsUsed;
+        return result;
+    }
+    btScalar solveGroupCacheFriendlyFinish(btCollisionObject** bodies,int bodyCount,
+            const btContactSolverInfo& info) override {
+        FQ_PERF_SCOPE(RigidGroupFinish);
+        return btSequentialImpulseConstraintSolver::solveGroupCacheFriendlyFinish(bodies,bodyCount,info);
+    }
+};
 struct TimedWorld final : btDiscreteDynamicsWorld {
     using btDiscreteDynamicsWorld::btDiscreteDynamicsWorld;
     void createPredictiveContacts(btScalar dt) override {
@@ -86,7 +112,7 @@ struct World::Impl {
     btDefaultCollisionConfiguration config;
     TimedDispatcher dispatcher{&config};
     btDbvtBroadphase broad;
-    btSequentialImpulseConstraintSolver solver;
+    TimedConstraintSolver solver;
     TimedWorld world{&dispatcher,&broad,&solver,&config};
     std::unordered_map<uint64_t,Entry> statics,bodies;
     struct Grip {uint64_t id=0;btTransform anchor,offset,target;btVector3 carryVelocity{0,0,0};std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};

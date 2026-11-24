@@ -85,6 +85,13 @@ function Write-CaptureSummary($Csv, [string]$Path) {
         if ('rigidUpdateBoundsUs' -in $rows[0].PSObject.Properties.Name) {
             $report.Add("Bullet timings per gameplay frame (rigidSolveUs includes all phases)")
             foreach ($m in $measurements | Where-Object { $_.Key -in @('rigidSolveUs','rigidPredictiveContactsUs','rigidUpdateBoundsUs','rigidOverlapPairsUs','rigidContactDispatchUs','rigidIslandsUs','rigidConstraintsUs','rigidIntegrateUs') }) { $report.Add($m.Line) }
+            if ('rigidGroupSetupUs' -in $rows[0].PSObject.Properties.Name) {
+                $report.Add("Within rigidConstraintsUs per frame (remainder includes island grouping, sorting and dispatch)")
+                foreach ($m in $measurements | Where-Object { $_.Key -in @('rigidGroupSetupUs','rigidGroupIterationsUs','rigidGroupFinishUs','rigidConstraintRemainderUs') }) { $report.Add($m.Line) }
+                $groups = ($gameplay | Measure-Object -Property rigidGroupIterationsUsCalls -Sum).Sum
+                $iterations = ($gameplay | Measure-Object -Property solverVelocityIterations -Sum).Sum
+                $report.Add("$iterations velocity iterations across $groups solver group calls. Iteration time also includes split-impulse work.")
+            }
             foreach ($r in $gameplay | Where-Object { [int]$_.rigidFullRefreshUsCalls -gt 0 }) {
                 $report.Add("Full scenery refresh on frame $($r.serial) took $($r.rigidFullRefreshUs) us. Frame totals: $($r.staticRefsReused) reused and $($r.staticRefsBuilt) built.")
             }

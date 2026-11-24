@@ -108,6 +108,17 @@ def diagnostic_summary(rows):
                         'rigidConstraintsUs', 'rigidIntegrateUs'):
                 ms = sum(float(r[key]) for r in selected) / (1000 * solves)
                 print(f'  {key} {ms:.3f}')
+        if solves and 'rigidGroupSetupUs' in rows[0]:
+            print('Within rigidConstraintsUs, mean ms per simulation substep:')
+            print('  Remainder includes island grouping, sorting and dispatch.')
+            for key in ('rigidGroupSetupUs', 'rigidGroupIterationsUs', 'rigidGroupFinishUs',
+                        'rigidConstraintRemainderUs'):
+                ms = sum(float(r[key]) for r in selected) / (1000 * solves)
+                print(f'  {key} {ms:.3f}')
+            groups = sum(int(r['rigidGroupIterationsUsCalls']) for r in selected)
+            iterations = sum(int(r['solverVelocityIterations']) for r in selected)
+            print(f'  {iterations} velocity iterations across {groups} solver group calls. '
+                  'Iteration time also includes split-impulse work.')
         if 'staticRefsBuilt' in rows[0]:
             for r in selected:
                 if int(r['rigidFullRefreshUsCalls']):

@@ -32,6 +32,11 @@ int main() {
     s.frames[0].us[RigidStep]=29000;
     s.frames[0].calls[RigidSolve]=4;
     s.frames[0].us[RigidConstraints]=6000;
+    s.frames[0].us[RigidGroupSetup]=1000;
+    s.frames[0].us[RigidGroupIterations]=3500;
+    s.frames[0].us[RigidGroupFinish]=500;
+    s.frames[0].calls[RigidGroupIterations]=3;
+    s.frames[0].solverVelocityIterations=41;
     s.frames[0].calls[RigidFullRefresh]=1;
     s.frames[0].staticRefsReused=800;
     s.frames[0].staticRefsBuilt=50;

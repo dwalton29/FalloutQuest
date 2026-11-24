@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 361
-        versionName '0.206.0-physics-profile'
+        versionCode 362
+        versionName '0.207.0-constraint-profile'
 
         ndk {
             abiFilters 'arm64-v8a'
