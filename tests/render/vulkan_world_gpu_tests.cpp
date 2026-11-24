@@ -643,7 +643,8 @@ void HeadlessSceneSubmission(bool reuse) {
     assert(fqvk::renderer->bufferBindsIssued==vertexBinds+indexBinds);
     assert(fqvk::renderer->bufferBindsSkipped==(reuse?126u:0u));
     // A new drain must bind both buffers again, even for the same mesh.
-    scalar("uMaterialAlpha",1);glEnable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,texture);
+    // Keep the readback sensitive to the original queued uniforms and texture.
+    glEnable(GL_DEPTH_TEST);glDepthFunc(GL_NEVER);
     glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
     fqvk::renderer->DrainDraws();
     assert(vertexBinds==(reuse?2u:65u)&&indexBinds==vertexBinds);
