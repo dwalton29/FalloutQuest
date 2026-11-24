@@ -2547,7 +2547,8 @@ bool PrepareExpandedVertexStreamQ1960(
 #ifdef FQ_ENABLE_VULKAN
         const auto& type=cpu.placement.baseRecordType;
         if((cpu.q237ImmutableNativeLod||type=="STAT"||type=="SCOL"||type=="TREE"||
-            type=="FURN"||type=="CONT"||type=="ACTI"||type=="MSTT"||type=="DOOR")&&!cpu.mesh.skinned)
+            type=="FURN"||type=="CONT"||type=="ACTI"||type=="MSTT"||type=="DOOR"||Q220IsLooseRecordType(type)||
+            (cpu.placement.refFormId&&type!="NPC_"&&type!="CREA"))&&!cpu.mesh.skinned)
             cpu.geometryLevels=fqdetail::Build(cpu.nativeTerrainGeometry?fqdetail::Family::Terrain:fqdetail::Family::Scenery,cpu.q1960ExpandedVertices.data(),
                 cpu.q1960ExpandedVertices.size()/18,18,cpu.mesh.indices,!cpu.q236IndexedPrepared);
 #endif
@@ -7746,7 +7747,11 @@ uint32_t gFo3AppearanceScreenRef=0;
 #ifdef FQ_ENABLE_VULKAN
 int SceneryGeometryTier(const GpuObject& object) {
     // These bounds belong to the placement, including when it shares its owner's VAO.
-    const float d=fqdetail::Distance(gQ210Head,object.minX,object.maxX,object.minY,object.maxY,object.minZ,object.maxZ);
+    const float* transform=(object.q220LooseObject||object.physicalWeapon)?object.q220DynamicTransform:
+        (object.q2400SwingDoor||object.scriptAnimated)?object.q2400DoorTransform:nullptr;
+    const float d=transform?fqdetail::MovedDistance(gQ210Head,transform,
+        {object.minX,object.minY,object.minZ},{object.maxX,object.maxY,object.maxZ}):
+        fqdetail::Distance(gQ210Head,object.minX,object.maxX,object.minY,object.maxY,object.minZ,object.maxZ);
     return object.geometryTier=fqdetail::Tier(d,object.geometryTier);
 }
 #endif
@@ -7778,8 +7783,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false,
         (object.emissiveMult<=0.f||(object.emissiveColor[0]==0.f&&object.emissiveColor[1]==0.f&&object.emissiveColor[2]==0.f));
     fqrender::MatteScope matteMaterial(matte);
     const int detailTier=(object.q230NpcActor||gInstancedDrawActiveQ2016)?fqrender::detailTier:SceneryGeometryTier(object);
-    fqrender::DetailScope detailDraw(object.q210PlayerBody||object.physicalWeapon||object.scriptAnimated||
-        object.q220LooseObject||object.decalQ1170?-1:detailTier);
+    fqrender::DetailScope detailDraw(object.q210PlayerBody||object.geneScreen||object.pipScreen||object.decalQ1170?-1:detailTier);
 #endif
     if (gFo3Environment.interior) {
         float positions[FO3_SHADER_LIGHTS*4]{}, colours[FO3_SHADER_LIGHTS*4]{};

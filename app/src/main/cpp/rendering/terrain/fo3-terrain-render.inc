@@ -26,6 +26,7 @@ float GetFo3FogPower();
 #include <algorithm>
 #include <atomic>
 #include <thread>
+#include <memory>
 #include <unordered_set>
 #include <cmath>
 #include <cstdint>
@@ -59,6 +60,7 @@ struct Q76BV3 {
 
 struct Q711TerrainBatch : fo3terrain::Bounds {
     fo3terrain::Bounds detailBounds;
+    std::shared_ptr<int> detailTier;
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::string texturePath;
@@ -96,6 +98,7 @@ struct Q711CpuBatch {
 #ifdef FQ_ENABLE_VULKAN
     fqdetail::Levels geometryLevels;
     fo3terrain::Bounds detailBounds;
+    std::shared_ptr<int> detailTier;
 #endif
     std::vector<fo3terrain::PaintMaterial> paintMaterials;
     int layerOrder = -1;
@@ -107,8 +110,10 @@ void Q237DrawTerrainBatch(const Q711TerrainBatch& batch) {
     const auto& bounds=batch.detailBounds;
     const float distance=fqdetail::Distance(gFo3EyePosition,bounds.minX,bounds.maxX,
         bounds.minY,bounds.maxY,bounds.minZ,bounds.maxZ);
-    // Identical for every layer, even if one was outside the frustum last frame.
-    fqrender::DetailScope geometryDetail(bounds.boundsValid?fqdetail::Tier(distance,-1):-1);
+    // All layers share hysteresis, including layers first visible this frame.
+    const int tier=bounds.boundsValid&&batch.detailTier?fqdetail::Tier(distance,*batch.detailTier):-1;
+    if(batch.detailTier)*batch.detailTier=tier;
+    fqrender::DetailScope geometryDetail(tier);
 #endif
     if (batch.indexOffset)
         glDrawElements(GL_TRIANGLES, batch.vertexCount, GL_UNSIGNED_INT,
@@ -192,7 +197,7 @@ Q711TerrainBatch Q238GpuMaterial(const Q711CpuBatch& cpu) {
     Q711TerrainBatch gpu;
     gpu.gridX=cpu.gridX;gpu.gridY=cpu.gridY;
 #ifdef FQ_ENABLE_VULKAN
-    gpu.detailBounds=cpu.detailBounds;
+    gpu.detailBounds=cpu.detailBounds;gpu.detailTier=cpu.detailTier;
 #endif
     gpu.texturePath=cpu.texturePath;gpu.normalPath=cpu.normalPath;
     gpu.alphaLayer=cpu.alphaLayer;gpu.layerOrder=cpu.layerOrder;
@@ -262,7 +267,11 @@ void PrepareTerrainDetail(std::vector<Q711CpuBatch>& batches) {
         Q237PrepareTerrainIndices(batch);
         cells[Q711GridKey(batch.gridX,batch.gridY)].push_back(&batch);
     }
-    for(const auto& cell:cells)fo3terrain::PrepareCellDetail(cell.second);
+    for(const auto& cell:cells){
+        fo3terrain::PrepareCellDetail(cell.second);
+        auto tier=std::make_shared<int>(-1);
+        for(auto* batch:cell.second)batch->detailTier=tier;
+    }
 }
 void UploadTerrainDetail(GLuint vao,const Q711CpuBatch& batch) {
     fqvk::Detail(vao,batch.geometryLevels);

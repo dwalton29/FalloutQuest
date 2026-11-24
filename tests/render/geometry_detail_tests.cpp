@@ -118,6 +118,9 @@ int main(){
         }
         assert(intact);
     }
+    const float eye[]{0,0,0};
+    const float moved[]{0,2,0,0,-1,0,0,0,0,0,1,0,20,0,0,1};
+    assert(fqdetail::MovedDistance(eye,moved,{-1,-3,-1},{1,3,1})==17.f);
     auto broken=corners;broken[1]=UINT32_MAX;
     assert(fqdetail::Build(Family::Terrain,grid.data(),side*side,15,broken,false).indices.empty());
     assert(fqdetail::Tier(.3f,-1)==0 && fqdetail::Tier(11.5f,1)==1 && fqdetail::Tier(11.5f,0)==0);

@@ -28,6 +28,22 @@ inline float Distance(const float* eye, float x0,float x1,float y0,float y1,floa
     }
     return std::sqrt(squared);
 }
+// Moving props and doors store rest-pose bounds, separate from the rigid
+// transform applied by the draw. Transform their centre and half-extents.
+inline float MovedDistance(const float* eye,const float* matrix,
+                           std::array<float,3> lo,std::array<float,3> hi) {
+    std::array<float,3> low{},high{};
+    for(unsigned axis=0;axis<3;++axis){
+        float centre=matrix[12+axis],radius=0;
+        for(unsigned j=0;j<3;++j){
+            if(lo[j]>hi[j])return -1;
+            centre+=matrix[4*j+axis]*(lo[j]+hi[j])*.5f;
+            radius+=std::abs(matrix[4*j+axis])*(hi[j]-lo[j])*.5f;
+        }
+        low[axis]=centre-radius;high[axis]=centre+radius;
+    }
+    return Distance(eye,low[0],high[0],low[1],high[1],low[2],high[2]);
+}
 inline int Tier(float distance,int previous) {
     if(!std::isfinite(distance)||distance<0)return -1;
     if(distance>=(previous==2?55.f:60.f))return 2;
