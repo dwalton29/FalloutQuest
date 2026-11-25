@@ -1,4 +1,5 @@
 #include "audio/fo3-audio-catalog.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -136,6 +137,32 @@ int main(int argc, char **argv) {
             "original ESM audio decodes");
       check(c.sounds.size() == 1583 && c.music.size() == 31,
             "original catalog counts");
+      fo3audio::Listener ear;
+      ear.cell=0x3a35;ear.hour=12; // Moriarty's Saloon
+      const auto& sources=c.placements.at(ear.cell);
+      const auto fan=c.names.at("AMBFanWallMegatonLP01");
+      const auto marker=std::find_if(sources.begin(),sources.end(),[&](const auto& v){return v.sound==fan;});
+      check(marker!=sources.end(),"placed saloon fan");
+      ear.x=marker->x-150;ear.y=marker->y;ear.z=marker->z;
+      auto voices=c.Environment(ear);
+      auto findVoice=[&](uint32_t id){return std::find_if(voices.begin(),voices.end(),[&](const auto& v){return v.sound==id;});};
+      auto near=findVoice(fan);
+      check(c.MusicForCell(ear.cell).empty()&&near!=voices.end()&&near->loop&&near->pan>.99f,"silent score with spatial fan");
+      const auto nearGain=near->gain;
+      check(findVoice(c.names.at("AMBRStructureRattleSmallA01"))!=voices.end(),"saloon intermittent region");
+      ear.x-=600;ear.yaw=3.14159f;voices=c.Environment(ear);
+      auto far=findVoice(fan);check(far!=voices.end()&&far->gain<nearGain&&far->pan<-.99f,"sound falls off and follows head rotation");
+      auto state=std::make_shared<fo3world::ReferenceStateSnapshot>();
+      state->states[marker->reference]=fo3world::ReferenceEnableState::Disabled;
+      ear.states=state;voices=c.Environment(ear);check(findVoice(fan)==voices.end(),"disabled emitter removed");
+      ear.cell=0x17f37;voices=c.Environment(ear);
+      check(findVoice(fan)==voices.end()&&findVoice(c.names.at("AMBRWarehouseCreaking01"))!=voices.end()&&
+            findVoice(c.names.at("AMBRoomtoneWarehousePowerLP"))!=voices.end(),"mart switches room tone and regional creaks");
+      ear.cell=0x2db4;ear.world=0x3c;ear.x=0;ear.y=0;ear.weather=0;
+      voices=c.Environment(ear);
+      check(findVoice(c.names.at("AMBRWindPlains01"))!=voices.end(),"wasteland polygon supplies regional wind");
+      ear.x=1000000;voices=c.Environment(ear);
+      check(findVoice(c.names.at("AMBRWindPlains01"))==voices.end(),"outside region suppresses its sounds");
       std::cout << "Original ESM: " << c.sounds.size() << " sounds, "
                 << c.music.size() << " music types, " << c.cells.size()
                 << " cells\n";

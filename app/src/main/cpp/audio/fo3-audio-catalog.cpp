@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cctype>
 #include <memory>
+#include <cstring>
 namespace fo3audio {
 bool SafePath(const std::string &path) {
   if (path.empty() || path.front() == '/' ||
@@ -74,9 +75,11 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     return false;
   }
   Catalog catalog;
-  std::function<bool(uint64_t, uint64_t, unsigned)> walk = [&](uint64_t at,
+  struct Children {uint64_t start,end;uint32_t world,cell;};
+  std::vector<Children> children;
+  std::function<bool(uint64_t,uint64_t,unsigned,uint32_t,uint32_t,bool)> walk = [&](uint64_t at,
                                                                uint64_t end,
-                                                               unsigned depth) {
+                                                               unsigned depth,uint32_t world,uint32_t owner,bool refs) {
     if (depth > 32)
       return false;
     while (at < end) {
@@ -89,14 +92,17 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       auto n = fo3esm::ReadU32(h + 4), flags = fo3esm::ReadU32(h + 8),
            id = fo3esm::ReadU32(h + 12);
       if (type == "GRUP") {
-        if (n < 24 || n > end - at || !walk(at + 24, at + n, depth + 1))
+        if (n < 24 || n > end - at)return false;
+        const auto kind=fo3esm::ReadU32(h+12),label=fo3esm::ReadU32(h+8);
+        if(!refs && kind==6)children.push_back({at+24,at+n,world,label});
+        else if(!walk(at+24,at+n,depth+1,kind==1?label:world,owner,refs))
           return false;
         at += n;
         continue;
       }
       if (n > end - at - 24)
         return false;
-      const bool selected =
+      const bool selected = refs ? type=="REFR" : type=="REGN" || type=="WTHR" ||
           type == "SOUN" || type == "MUSC" || type == "ASPC" ||
           type == "CELL" || type == "DOOR" || type == "CONT" ||
           type == "WEAP" || type == "ARMO" || type == "AMMO" ||
@@ -106,6 +112,21 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         std::vector<uint8_t> bytes;
         if (!fo3esm::ReadPayloadCurrent(f.get(), n, flags, bytes))
           return false;
+        if(refs){
+          uint32_t base=0;bool positioned=false;
+          SoundPlacement source{id,0,0,0,0,(flags&0x800)==0};
+          fo3esm::WalkSubrecords(bytes,[&](const char* tag,const uint8_t* p,uint32_t len){
+            if(!memcmp(tag,"NAME",4)&&len==4)base=fo3esm::ReadU32(p);
+            if(!memcmp(tag,"DATA",4)&&len==24){
+              source.x=fo3esm::ReadF32(p);source.y=fo3esm::ReadF32(p+4);source.z=fo3esm::ReadF32(p+8);
+              positioned=std::isfinite(source.x)&&std::isfinite(source.y)&&std::isfinite(source.z);
+            }
+          });
+          if(positioned&&catalog.sounds.count(base)){
+            source.sound=base;catalog.placements[world?world:owner].push_back(source);
+          }
+          at+=24+n;continue;
+        }
         size_t pos = 0;
         uint32_t extended = 0;
         while (pos < bytes.size()) {
@@ -131,6 +152,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         }
         if (extended)
           return false;
+        SoundRegion region;bool soundSection=false;
         Sound sound;
         Object object;
         Cell cell;
@@ -139,6 +161,23 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         fo3esm::WalkSubrecords(bytes, [&](const char *tag, const uint8_t *p,
                                           uint32_t len) {
           std::string t(tag, 4);
+          if(type=="REGN"){
+            if(t=="WNAM"&&len==4)region.world=fo3esm::ReadU32(p);
+            if(t=="RPLD"&&len%8==0){
+              region.areas.emplace_back();
+              for(uint32_t i=0;i<len;i+=8)region.areas.back().push_back({fo3esm::ReadF32(p+i),fo3esm::ReadF32(p+i+4)});
+            }
+            if(t=="RDAT"&&len>=6){
+              soundSection=fo3esm::ReadU32(p)==7;
+              if(soundSection){region.overrideLower=(p[4]&1)!=0;region.priority=p[5];}
+            }
+            if(t=="RDSD"&&soundSection&&len%12==0)
+              for(uint32_t i=0;i<len;i+=12)region.sounds.push_back({fo3esm::ReadU32(p+i),fo3esm::ReadU32(p+i+4),fo3esm::ReadU32(p+i+8)});
+          }
+          if(type=="ASPC"&&t=="RDAT"&&len==4)catalog.spaceRegions[id]=fo3esm::ReadU32(p);
+          if(type=="WTHR"&&t=="DATA"&&len>=12)catalog.weatherMasks[id]=p[11]&15;
+          if(type=="WTHR"&&t=="SNAM"&&len==8&&fo3esm::ReadU32(p+4)==2)
+            catalog.weatherLoops[id].push_back(fo3esm::ReadU32(p));
           if (t == "EDID")
             name = fo3esm::ZString(p, len);
           if (t == "FNAM" && (type == "SOUN" || type == "MUSC"))
@@ -146,6 +185,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           if (type == "SOUN" && (t == "SNDX" || t == "SNDD") && len >= 12) {
             sound.nearDistance=5.f*p[0];
             sound.farDistance=100.f*p[1];
+            sound.endTime=p[10];sound.startTime=p[11];
+            sound.positional=(fo3esm::ReadU32(p+4)&0x40)==0;
             sound.loop = (fo3esm::ReadU32(p + 4) & 16) != 0;
             int16_t attenuation = static_cast<int16_t>(fo3esm::ReadU16(p + 8));
             sound.gain =
@@ -186,14 +227,15 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           catalog.cells[id] = cell;
         else if (type == "ASPC")
           catalog.spaces[id] = ambient;
-        else
+        else if(type=="REGN"){if(!region.sounds.empty())catalog.regions[id]=std::move(region);}
+        else if(type!="WTHR")
           catalog.objects[id] = object;
       }
       at += 24 + n;
     }
     return true;
   };
-  if (!walk(0, size, 0)) {
+  if (!walk(0,size,0,0,0,false)||!std::all_of(children.begin(),children.end(),[&](const Children& c){return walk(c.start,c.end,1,c.world,c.cell,true);})) {
     error = "invalid audio ESM records";
     return false;
   }
@@ -217,3 +259,68 @@ uint32_t Catalog::Footstep(uint32_t material,unsigned action) const {
   return fallback==names.end()?0:fallback->second;
 }
 } // namespace fo3audio
+
+namespace fo3audio {
+static bool Inside(const std::vector<std::array<float,2>>& polygon,float x,float y){
+  bool inside=false;
+  for(size_t i=0;i<polygon.size();++i){
+    const auto& a=polygon[i];const auto& b=polygon[i?i-1:polygon.size()-1];
+    if((a[1]>y)!=(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])inside=!inside;
+  }
+  return inside;
+}
+std::vector<AmbientVoice> Catalog::Environment(const Listener& at) const {
+  std::vector<AmbientVoice> voices;
+  const auto cell=cells.find(at.cell);
+  if(cell==cells.end())return voices;
+  const bool exterior=!(cell->second.flags&1);
+  auto add=[&](uint64_t key,uint32_t id,float distance,float pan,uint32_t chance){
+    const auto found=sounds.find(id);
+    if(found==sounds.end()||found->second.path.empty())return;
+    const auto& s=found->second;
+    const float start=s.startTime*.09375f,end=s.endTime*.09375f;
+    if(start!=end&&(start<end?(at.hour<start||at.hour>end):(at.hour<start&&at.hour>end)))return;
+    const float gain=s.GainAt(distance);
+    if(gain>0)voices.push_back({key,id,gain,s.positional?pan:0,s.loop,chance});
+  };
+  const auto bed=AmbientForCell(at.cell);
+  if(bed){
+    add((uint64_t(2)<<32)|bed,bed,0,0,0);
+    if(!voices.empty())voices.back().loop=true;
+  }
+  std::vector<const SoundRegion*> active;
+  auto interior=spaceRegions.find(cell->second.space);
+  if(interior!=spaceRegions.end()){
+    auto r=regions.find(interior->second);if(r!=regions.end())active.push_back(&r->second);
+  }else if(exterior&&at.world){
+    for(const auto& pair:regions){
+      const auto& r=pair.second;
+      if(r.world==at.world&&std::any_of(r.areas.begin(),r.areas.end(),[&](const auto& area){return Inside(area,at.x,at.y);}))
+        active.push_back(&r);
+    }
+  }
+  unsigned minimum=0;
+  for(auto r:active)if(r->overrideLower)minimum=std::max(minimum,unsigned(r->priority));
+  auto weather=weatherMasks.find(at.weather);
+  for(auto r:active)if(r->priority>=minimum)for(const auto& entry:r->sounds){
+    if(exterior&&entry.weatherMask&&weather!=weatherMasks.end()&&weather->second&&!(entry.weatherMask&weather->second))continue;
+    if(std::none_of(voices.begin(),voices.end(),[&](const auto& v){return v.key==entry.form;}))
+      add(entry.form,entry.form,0,0,entry.chance);
+  }
+  auto windy=weatherLoops.find(at.weather);
+  if(exterior&&windy!=weatherLoops.end())for(auto id:windy->second)
+    if(std::none_of(voices.begin(),voices.end(),[&](const auto& v){return v.key==id;}))add(id,id,0,0,0);
+  const auto sources=placements.find(exterior?at.world:at.cell);
+  if(sources!=placements.end())for(const auto& source:sources->second){
+    if(!(at.states?at.states->Enabled(source.reference,source.enabled):source.enabled))continue;
+    const auto& s=sounds.at(source.sound);
+    const float dx=source.x-at.x,dy=source.y-at.y,dz=source.z-at.z;
+    const float horizontal=std::hypot(dx,dy),distance=std::hypot(horizontal,dz);
+    if(s.farDistance>0&&distance>=s.farDistance)continue;
+    if(exterior&&s.farDistance==0&&distance>4096)continue;
+    const float pan=horizontal?(dx*std::cos(at.yaw)+dy*std::sin(at.yaw))/horizontal:0;
+    add((uint64_t(1)<<32)|source.reference,source.sound,distance,pan,0);
+  }
+  return voices;
+}
+}

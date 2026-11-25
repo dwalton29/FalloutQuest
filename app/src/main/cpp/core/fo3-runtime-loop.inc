@@ -2145,6 +2145,19 @@ private:
                     }
                 }
                 }
+                static int64_t lastAudioPose=0;
+                if(gPlayerSession&&gSceneReady&&!Fo3PlayerDead()&&sessionState_==XR_SESSION_STATE_FOCUSED&&
+                   (clockNs-lastAudioPose>=250000000||clockNs<lastAudioPose)){
+                    lastAudioPose=clockNs;
+                    fo3audio::Listener ear;
+                    ear.cell=gCurrentCellFormId;ear.world=gExteriorWorldspaceQ1890;
+                    ear.x=gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715;
+                    ear.y=gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715;
+                    ear.z=gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715;
+                    ear.yaw=gQ210Head[3];ear.hour=gPlayerSession->player.Snapshot().gameHour;
+                    ear.weather=fo3tod::gRuntime.weatherFormId;ear.states=CaptureFo3ReferenceState();
+                    fo3audio::UpdateListener(std::move(ear));
+                }
                 if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;
                 if (!gFo3Environment.interior) UpdateFo3TimeOfDay(0.0f,clockNs);
                 if (!gFo3Environment.interior && fo3tod::gRuntime.ready) {

@@ -22,7 +22,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private final List<MediaPlayer> effects = new ArrayList<>();
     private final List<String> tracks = new ArrayList<>();
     private int track;
-    private MediaPlayer music, ambience;
+    private MediaPlayer music;
     private static final class DialogueVoice {
         MediaPlayer player;
         Equalizer filter;
@@ -144,8 +144,6 @@ public final class FalloutNativeActivity extends NativeActivity {
         }
         return false;
     }
-    private String ambientPath = "";
-    private float ambientGain = 1;
     private boolean movieMuteWorld=false, moviePauseMusic=false;
     private float masterVolume=1, musicVolume=.3f, effectsVolume=1, voiceVolume=1, musicMultiplier=1;
     private final java.util.Map<MediaPlayer,Float> baseGains=new java.util.WeakHashMap<>();
@@ -220,12 +218,46 @@ public final class FalloutNativeActivity extends NativeActivity {
             refresh();
         });
     }
-    public void audioAmbient(String path, float gain) {
+    private static final class AmbientLayer {
+        MediaPlayer player;
+        float gain, pan;
+    }
+    private final java.util.Map<Long,AmbientLayer> layers = new java.util.HashMap<>();
+    public void audioLayer(long key,String path,float gain,float pan) {
         audio.post(() -> {
-            if (destroyed) return;
-            releaseAmbience(); ambientPath = path; ambientGain = gain;
-            refresh();
+            AmbientLayer layer=layers.get(key);
+            if(path.isEmpty() || !enabled()) {
+                if(layer!=null && layer.player!=null) { layer.player.release();layer.player=null; }
+                layers.remove(key);
+                return;
+            }
+            if(layer==null) {
+                final AmbientLayer voice=new AmbientLayer();
+                layers.put(key,voice);
+                MediaPlayer player=new MediaPlayer();
+                voice.player=player;voice.gain=gain;voice.pan=pan;
+                effectPans.put(player,pan);
+                prepare(player,path,gain,true,() -> {},() -> voice.player==player);
+            } else {
+                layer.gain=gain;layer.pan=pan;
+                if(layer.player!=null && baseGains.containsKey(layer.player)) {
+                    effectPans.put(layer.player,pan);
+                    volume(layer.player,gain);
+                }
+            }
         });
+    }
+    private boolean failLayer(MediaPlayer player) {
+        for(AmbientLayer layer:layers.values()) if(layer.player==player) {
+            layer.player=null;player.release();return true;
+        }
+        return false;
+    }
+    private void skipFailedMusic() {
+        releaseMusic();
+        if(!tracks.isEmpty()) tracks.remove(track);
+        if(track>=tracks.size()) track=0;
+        if(!tracks.isEmpty()) audio.post(this::refresh);
     }
     public void audioEffect(String path, float gain, float pan) {
         audio.post(() -> {
@@ -275,11 +307,6 @@ public final class FalloutNativeActivity extends NativeActivity {
                 releaseMusic(); track = (track + 1) % tracks.size(); refresh();
             }, () -> music == player);
         }
-        if (ambience == null && !ambientPath.isEmpty()) {
-            MediaPlayer player = new MediaPlayer(); ambience = player;
-            prepare(player, ambientPath, ambientGain, true, this::releaseAmbience,
-                    () -> ambience == player);
-        }
     }
     private interface Current { boolean check(); }
     private void prepare(MediaPlayer player, String path, float gain, boolean loop,
@@ -291,7 +318,11 @@ public final class FalloutNativeActivity extends NativeActivity {
             player.setDataSource(path);
             player.setOnPreparedListener(p -> {
                 if (enabled() && current.check()) {
-                    volume(p,gain); p.setLooping(loop); if(p!=music||!moviePauseMusic)p.start();
+                    float startGain=gain;
+                    for(AmbientLayer layer:layers.values()) if(layer.player==p) {
+                        startGain=layer.gain;effectPans.put(p,layer.pan);break;
+                    }
+                    volume(p,startGain); p.setLooping(loop); if(p!=music||!moviePauseMusic)p.start();
                     if(dialoguePlayer(p))Log.i("FalloutQuest","DIALOGUE started durationMs="+p.getDuration());
                     Log.i("FalloutQuest", "AUDIO playing: " + path + " gain=" + gain + " loop=" + loop);
                 }
@@ -301,11 +332,10 @@ public final class FalloutNativeActivity extends NativeActivity {
                 Log.w("FalloutQuest", "AUDIO decode failed: " + path + " " + what + "/" + extra);
                 // Do not retry corrupt tracks in a tight completion loop.
                 if (current.check()) {
-                    if (p == music) { tracks.clear(); releaseMusic(); }
-                    else if (p == ambience) { ambientPath = ""; releaseAmbience(); }
+                    if (p == music) { skipFailedMusic(); }
                     else if (p == menuLoop) { menuLoop = null; p.release(); }
                     else if (p == loadingEffect) releaseLoadingEffect();
-                    else if (!failBroadcast(p)) { effects.remove(p); p.release(); }
+                    else if (!failLayer(p) && !failBroadcast(p)) { effects.remove(p); p.release(); }
                 }
                 return true;
             });
@@ -313,21 +343,21 @@ public final class FalloutNativeActivity extends NativeActivity {
         } catch (Exception e) {
             Log.w("FalloutQuest", "AUDIO open failed: " + path, e);
             if (current.check()) {
-                if (player == music) { tracks.clear(); releaseMusic(); }
-                else if (player == ambience) { ambientPath = ""; releaseAmbience(); }
+                if (player == music) { skipFailedMusic(); }
                 else if (player == menuLoop) { menuLoop = null; player.release(); }
                 else if (player == loadingEffect) releaseLoadingEffect();
-                else if (!failBroadcast(player)) { effects.remove(player); player.release(); }
+                else if (!failLayer(player) && !failBroadcast(player)) { effects.remove(player); player.release(); }
             }
         }
     }
     private void releaseMusic() { if (music != null) { music.release(); music = null; } }
-    private void releaseAmbience() { if (ambience != null) { ambience.release(); ambience = null; } }
     private void stopAll() {
         releaseLoadingEffect();
         if (menuLoop != null) { menuLoop.release(); menuLoop = null; }
         for(DialogueVoice voice:voices)releaseDialogue(voice,true);
-        releaseMusic(); releaseAmbience();
+        releaseMusic();
+        for(AmbientLayer layer:layers.values()) if(layer.player!=null) { layer.player.release();layer.player=null; }
+        layers.clear();
         for (Broadcast b : broadcasts) b.release();
         for (MediaPlayer player : effects) player.release();
         effects.clear();

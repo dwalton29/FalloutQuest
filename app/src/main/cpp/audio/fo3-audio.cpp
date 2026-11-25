@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <android/log.h>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -27,6 +28,7 @@ namespace {
 constexpr int RadioConversationEvent=19;
 constexpr int LoadingEffectEvent=20;
 constexpr int VoiceEffectEvent=21;
+constexpr int ListenerEvent=22;
 struct Event {
   Event() = default;
   Event(int k, uint32_t form, bool enabled, std::string editor = {})
@@ -39,6 +41,7 @@ struct Event {
   fo3pipdata::SessionState state;
   std::vector<std::string> paths;
   std::array<float,4> volumes{1,.3f,1,1};
+  Listener listener;
   unsigned dialogueLane=0;
   uint32_t radioTopic=0;
   bool intercom=false;
@@ -123,7 +126,7 @@ bool Playable(const std::string &p) {
 void Push(Event e) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
   if (!runtime.worker.joinable() || runtime.stop ||
-      (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16 || e.kind==VoiceEffectEvent)))
+      (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16 || e.kind==VoiceEffectEvent||e.kind==ListenerEvent)))
     return;
   if(e.kind==LoadingEffectEvent){
     if(e.name.empty()){
@@ -138,7 +141,7 @@ void Push(Event e) {
     runtime.cv.notify_one();
     return;
   }
-  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16 || e.kind==17 || e.kind==18)
+  if (e.kind == ListenerEvent || e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16 || e.kind==17 || e.kind==18)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
                        [&](const Event &old) { return old.kind == e.kind; }),
@@ -168,20 +171,19 @@ void Worker() {
   }
   auto cls = env->GetObjectClass(runtime.activity);
   auto volumes=env->GetMethodID(cls,"audioVolumes","(FFFF)V");
+  auto layerMethod=env->GetMethodID(cls,"audioLayer","(JLjava/lang/String;FF)V");
   auto movie=env->GetMethodID(cls,"audioMovie","(ZZ)V");
   auto loadingEffect = env->GetMethodID(cls,"audioLoadingEffect","(Ljava/lang/String;FJ)V");
   auto menuLoop = env->GetMethodID(cls,"audioMenuLoop","(Ljava/lang/String;F)V");
   auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;F)V"),
        effect = env->GetMethodID(cls, "audioEffect", "(Ljava/lang/String;FF)V"),
-       ambient =
-           env->GetMethodID(cls, "audioAmbient", "(Ljava/lang/String;F)V"),
        broadcast =
            env->GetMethodID(cls, "audioBroadcast", "(Ljava/lang/String;II)V"),
        active = env->GetMethodID(cls, "audioActive", "(Z)V"),
        dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;IIZ)V"),
        dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
-  if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
-      !broadcast || !dialogue || !dialogueGain || !menuLoop || !loadingEffect || !volumes || !movie) {
+  if (env->ExceptionCheck() || !music || !effect || !active ||
+      !broadcast || !dialogue || !dialogueGain || !menuLoop || !loadingEffect || !volumes || !movie || !layerMethod) {
     __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
                         "AUDIO JNI bridge unavailable");
     env->ExceptionClear();
@@ -244,7 +246,17 @@ void Worker() {
   std::unordered_map<std::string, size_t> extractedSizes;
   std::deque<std::string> recentFiles;
   std::vector<std::string> broadcastFiles[2];
-  std::string ambientFile;
+  struct Layer {std::string path;float gain=0,pan=0,peak=0;bool wanted=false;};
+  std::unordered_map<uint64_t,Layer> layers;
+  auto sendLayer=[&](uint64_t key,const std::string& path,float gain,float pan){
+    auto str=env->NewStringUTF(path.c_str());
+    env->CallVoidMethod(runtime.activity,layerMethod,jlong(key),str,gain,pan);
+    env->DeleteLocalRef(str);if(env->ExceptionCheck())env->ExceptionClear();
+  };
+  auto clearLayers=[&]{
+    for(const auto& pair:layers)sendLayer(pair.first,"",0,0);
+    layers.clear();
+  };
   std::array<std::string,2> dialogueFiles;
   size_t cacheBytes = 0;
   const auto archives = SoundArchives(fo3assets::FalloutDataPath(""));
@@ -356,10 +368,11 @@ void Worker() {
       path.c_str(),sourceArchive.c_str(),bytes.size(),bytes.size()>=4&&std::memcmp(bytes.data(),"OggS",4)==0);
 
     auto protectedFile = [&](const std::string &target) {
-      if (target == dialogueFiles[0] || target == dialogueFiles[1] || target == ambientFile ||
+      if (target == dialogueFiles[0] || target == dialogueFiles[1] ||
           std::find(recentFiles.begin(), recentFiles.end(), target) !=
               recentFiles.end())
         return true;
+      for(const auto& pair:layers)if(pair.second.path==target)return true;
       for (auto &files : broadcastFiles)
         if (std::find(files.begin(), files.end(), target) != files.end())
           return true;
@@ -395,22 +408,18 @@ void Worker() {
   };
   for(const auto& entry:catalog.sounds)
     if(IsLoadingScreenEffect(entry.second.path))resolve(entry.second.path,true);
-  auto sound = [&](uint32_t id, jmethodID method,float distance=-1,float pan=0) {
+  auto sound = [&](uint32_t id,float distance,float pan) {
     auto s = catalog.sounds.find(id);
     if (s == catalog.sounds.end() || s->second.path.empty() || IsLoadingScreenEffect(s->second.path)) {
-      if (method == ambient)
-        call(method, "", 1, true);
       return;
     }
     const float gain=s->second.GainAt(distance);
-    if(method==effect&&gain<=0)return;
+    if(gain<=0)return;
     auto path = resolve(s->second.path);
-    if (method == ambient)
-      ambientFile = path;
     if (path.empty() && missing.insert(s->second.path).second)
       __android_log_print(ANDROID_LOG_WARN, "FalloutQuest",
                           "AUDIO missing effect: %s", s->second.path.c_str());
-    call(method,path,gain,true,pan);
+    call(effect,path,gain,true,pan);
   };
   uint32_t cell = UINT32_MAX;
   std::string previousMusic;
@@ -451,6 +460,55 @@ void Worker() {
                           error.c_str());
     playBroadcast(paths, 0);
   };
+  using Clock=std::chrono::steady_clock;
+  auto lastMix=Clock::now(),lastRoll=lastMix;
+  std::unordered_set<uint64_t> audibleMarkers;
+  auto mixEnvironment=[&](const Listener& ear){
+    auto voices=catalog.Environment(ear);
+    const auto now=Clock::now();
+    const float dt=std::clamp(std::chrono::duration<float>(now-lastMix).count(),0.f,.5f);
+    lastMix=now;
+    const bool roll=now-lastRoll>=std::chrono::seconds(1);
+    if(roll)lastRoll=now;
+    std::unordered_set<uint64_t> markers;
+    for(const auto& v:voices)if(!v.loop){
+      const bool placed=(v.key>>32)==1;
+      if(placed)markers.insert(v.key);
+      const bool play=placed?!audibleMarkers.count(v.key):roll&&std::uniform_real_distribution<float>(0,20000000)(random)<v.chance;
+      if(play){
+        const auto& asset=catalog.sounds.at(v.sound);
+        const auto file=resolve(asset.path);
+        const float pan=!placed&&asset.positional?std::uniform_real_distribution<float>(-1,1)(random):v.pan;
+        if(!file.empty())call(effect,file,v.gain,true,pan);
+      }
+    }
+    audibleMarkers.swap(markers);
+    voices.erase(std::remove_if(voices.begin(),voices.end(),[](const auto& v){return !v.loop;}),voices.end());
+    std::sort(voices.begin(),voices.end(),[](const auto& a,const auto& b){
+      const bool bedA=(a.key>>32)==2,bedB=(b.key>>32)==2;
+      if(bedA!=bedB)return bedA;
+      return a.gain==b.gain?a.key<b.key:a.gain>b.gain;
+    });
+    if(voices.size()>8)voices.resize(8);
+    for(auto& pair:layers)pair.second.wanted=false;
+    for(const auto& v:voices){
+      auto inserted=layers.try_emplace(v.key);
+      auto& layer=inserted.first->second;
+      if(inserted.second)layer.path=resolve(catalog.sounds.at(v.sound).path);
+      layer.wanted=true;layer.pan=v.pan;layer.peak=std::max(layer.peak,v.gain);
+      const float step=dt*layer.peak/5.f;
+      layer.gain+=std::clamp(v.gain-layer.gain,-step,step);
+    }
+    for(auto i=layers.begin();i!=layers.end();){
+      auto& layer=i->second;
+      if(!layer.wanted)layer.gain=std::max(0.f,layer.gain-dt*layer.peak/5.f);
+      if(!layer.wanted&&(layer.gain<=0||layers.size()>16)){
+        sendLayer(i->first,"",0,0);i=layers.erase(i);continue;
+      }
+      if(!layer.path.empty())sendLayer(i->first,layer.path,layer.gain,layer.pan);
+      ++i;
+    }
+  };
   while (true) {
     Event e;
     {
@@ -461,6 +519,10 @@ void Worker() {
         break;
       e = runtime.events.front();
       runtime.events.pop_front();
+    }
+    if(e.kind==ListenerEvent){
+      if(e.listener.cell==cell&&cell!=DeathCell&&cell!=TitleCell)mixEnvironment(e.listener);
+      continue;
     }
     if(e.kind==18){env->CallVoidMethod(runtime.activity,movie,jboolean((e.id&2)!=0),jboolean((e.id&4)!=0));if(env->ExceptionCheck())env->ExceptionClear();continue;}
     if(e.kind==17){env->CallVoidMethod(runtime.activity,volumes,e.volumes[0],e.volumes[1],e.volumes[2],e.volumes[3]);if(env->ExceptionCheck())env->ExceptionClear();continue;}
@@ -541,6 +603,9 @@ void Worker() {
       env->CallVoidMethod(runtime.activity, active, jboolean(e.active));
       if (env->ExceptionCheck())
         env->ExceptionClear();
+      if(!e.active||e.id==TitleCell||e.id==DeathCell){
+        clearLayers();audibleMarkers.clear();
+      }
       if (cell != e.id) {
         cell = e.id;
         const bool dead=cell==DeathCell;
@@ -565,7 +630,6 @@ void Worker() {
                                   playlist.begin(), playlist.end(), '\n')));
           call(music, playlist, cell==TitleCell?2.f:1.f, true);
         }
-        sound(dead||cell==TitleCell?0:catalog.AmbientForCell(cell), ambient);
         if(dead){
           definitions.reset();
           radio={};
@@ -630,8 +694,9 @@ void Worker() {
         if(variants.empty())resolve(asset->second.path);else for(const auto&path:variants)resolve(path);
       }
     }else if (id)
-      sound(id,effect,e.distance,e.pan);
+      sound(id,e.distance,e.pan);
   }
+  clearLayers();
   playBroadcast({}, 0);
   playBroadcast({}, 1);
   env->CallVoidMethod(runtime.activity, active, jboolean(false));
@@ -689,6 +754,9 @@ void Shutdown() {
 }
 void Movie(uint8_t flags){Push({18,flags,true});}
 void Volumes(const std::array<float,4>& values){Event e{17,0,true};e.volumes=values;Push(std::move(e));}
+void UpdateListener(Listener listener){
+  Event event{ListenerEvent,0,true};event.listener=std::move(listener);Push(std::move(event));
+}
 void Context(uint32_t cell, bool active) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
   if (!runtime.worker.joinable() || runtime.stop ||
@@ -702,7 +770,7 @@ void Context(uint32_t cell, bool active) {
   if (!active)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
-                       [](const Event &e) { return e.kind < 6 || e.kind==11; }),
+                       [](const Event &e) { return e.kind < 6 || e.kind==11 || e.kind==ListenerEvent; }),
         runtime.events.end());
   runtime.events.erase(
       std::remove_if(runtime.events.begin(), runtime.events.end(),

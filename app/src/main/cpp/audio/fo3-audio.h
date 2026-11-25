@@ -1,5 +1,6 @@
 #pragma once
 #include "pipboy/fo3-radio-runtime.h"
+#include "fo3-audio-catalog.h"
 #include <cstdint>
 #include <array>
 #include <jni.h>
@@ -7,6 +8,7 @@
 #include <string>
 #include "fo3-dialogue-face.h"
 namespace fo3audio {
+void UpdateListener(Listener listener);
 // Catalog outlives the audio worker (application session). Mutations are copied
 // into bounded queue messages; worker never reads mutable Player state.
 // Token-isolated actor speech. Completion includes asset/decode failures; no timers.
