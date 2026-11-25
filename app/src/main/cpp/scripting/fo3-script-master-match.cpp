@@ -350,7 +350,9 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     if(!coversConditions(e.conditions,e.conditionVariables)||!coversConditions(e.questConditions,e.questConditionVariables))
       return fail("condition variable binding coverage differs");
     for(const auto* bindings:{&e.commandVariables,&e.expressionVariables,&e.conditionVariables,&e.questConditionVariables})for(const auto& binding:*bindings){
-      const bool indexed=bindings==&e.conditionVariables||bindings==&e.questConditionVariables;
+      if(binding.referenceSlot&&(bindings!=&e.commandVariables||binding.owner!=e.owner||
+          binding.script!=e.localScript||!binding.ownerName.empty()))return fail("invalid reference-local owner");
+      const bool indexed=binding.referenceSlot||bindings==&e.conditionVariables||bindings==&e.questConditionVariables;
       if(!binding.owner||!binding.script||(binding.quest?bool(binding.base):!binding.base)||
           (!indexed&&binding.ownerName.empty())||binding.variableName.empty()||Lower(binding.ownerName)!=binding.ownerName||
           Lower(binding.variableName)!=binding.variableName||binding.ownerName.find('.')!=std::string::npos||
@@ -483,7 +485,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
           [](const auto& entry,const std::string& name){return entry.first<name;});
         if(slot==script->second.variables.end()||Lower(slot->second)!=binding->variableName||
             binding->variableName.find('.')!=std::string::npos||declared==declarations.end()||
-            declared->first!=binding->variableName||declared->second!=1)
+            declared->first!=binding->variableName||declared->second!=(binding->referenceSlot?2u:1u))
           return fail("qualified variable numeric slot differs");
       }
     }

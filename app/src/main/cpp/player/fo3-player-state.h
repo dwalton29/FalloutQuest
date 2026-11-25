@@ -385,9 +385,10 @@ struct ScriptVariableBinding {
   uint32_t owner=0,script=0,index=0,base=0;
   bool quest=false;
   std::string ownerName,variableName;
+  bool referenceSlot=false;
   bool operator==(const ScriptVariableBinding& b) const noexcept {
     return owner==b.owner&&script==b.script&&index==b.index&&base==b.base&&quest==b.quest&&
-      ownerName==b.ownerName&&variableName==b.variableName;
+      referenceSlot==b.referenceSlot&&ownerName==b.ownerName&&variableName==b.variableName;
   }
 };
 struct ScriptExecution {

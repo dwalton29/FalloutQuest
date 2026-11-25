@@ -423,6 +423,23 @@ static void PersistentReferenceState() {
   assert(!p.CanPickup(200)&&p.CanLootContainer(300));
   std::remove(path.c_str());
 }
+static void ReferenceLocalBranches(){
+  auto c=Catalog();const uint32_t target=0xfa000001u;
+  c.pipboy.formNames["placedactor"]=target;c.references[target].valid=true;
+  auto& script=c.pipboy.scripts[101];script.variables[7]="Listener";
+  script.source="scn Q\nref Listener\nBegin GameMode\nEnd";
+  fo3player::Player player(c);std::string error;
+  fo3pipdata::ResultScript body;
+  body.source="if 1\nset Listener to placedactor\nelse\nset Listener to 0\nendif";
+  const auto key=(uint64_t(20)<<32)|7;
+  assert(player.ExecuteDialogueResult(body,error,20));
+  assert(player.Snapshot().pipboy.referenceVariables.at(key)==target);
+  const auto path="/tmp/fq-ref-local-"+std::to_string(getpid());
+  assert(player.Save(path,error));fo3player::Player restored(c);assert(restored.Restore(path,error));unlink(path.c_str());
+  assert(restored.Snapshot().pipboy.referenceVariables.at(key)==target);
+  body.source="set Listener to 0";
+  assert(restored.ExecuteDialogueResult(body,error,20)&&!restored.Snapshot().pipboy.referenceVariables.count(key));
+}
 static void ResultBytecodeBranches(){
   auto catalog=Catalog();
   catalog.globals[400]=0;catalog.pipboy.formNames["testglobal"]=400;
@@ -783,6 +800,7 @@ static void CompiledProgramsRemainLive() {
 }
 int main(int argc,char** argv){
   ResultBytecodeBranches();
+  ReferenceLocalBranches();
   AdditionalQuestPoints();
   CompiledProgramsRemainLive();
   Parsing();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();

@@ -126,6 +126,14 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
     Put(b,0x3154534d); // MST1: player miscellaneous statistics.
     Put(b,s.bobbleheadsFound);
   }
+  if(!s.referenceVariables.empty()){
+    Put(b,0x52454631); // REF1. Form IDs retain all 32 bits.
+    std::vector<uint64_t> slots;
+    for(const auto& row:s.referenceVariables)slots.push_back(row.first);
+    std::sort(slots.begin(),slots.end());
+    Put(b,slots.size());
+    for(auto key:slots){Put(b,uint32_t(key>>32));Put(b,uint32_t(key));Put(b,s.referenceVariables.at(key));}
+  }
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -253,9 +261,17 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
       if(!d.transmitters.count(id)||!s.silentRadios.insert(id).second)return fail();
     }
   }
-  if(r.ok&&r.at<n){
-    if(r.U()!=0x3154534d)return fail();
+  if(r.ok&&n-r.at>=4&&fo3esm::ReadU32(p+r.at)==0x3154534d){
+    r.U();
     s.bobbleheadsFound=r.U();
+  }
+  if(r.ok&&r.at<n){
+    if(r.U()!=0x52454631)return fail();
+    const auto count=r.Count(100000);
+    for(uint32_t i=0;i<count&&r.ok;++i){
+      const auto owner=r.U(),slot=r.U(),form=r.U();
+      if(!owner||!slot||!form||!s.referenceVariables.emplace((uint64_t(owner)<<32)|slot,form).second)return fail();
+    }
   }
   if (!r.ok || r.at != n ||
       (s.selectedQuest &&

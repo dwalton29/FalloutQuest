@@ -398,7 +398,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::SetActorAIValue||c.type==C::RewardXP||c.type==C::RewardKarma||c.type==C::ShowMessage||c.type==C::ShowBarterMenu||c.type==C::AddItem||c.type==C::RemoveItem)&&!c.expression.empty())){
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::SayTo||c.type==C::SetActorAIValue||c.type==C::RewardXP||c.type==C::RewardKarma||c.type==C::ShowMessage||c.type==C::ShowBarterMenu||c.type==C::AddItem||c.type==C::RemoveItem)&&!c.expression.empty())){
       float v;
       if(!fo3script::Expression(*this,owner,c.expression,error,scriptId,nullptr,true).Evaluate(v))return false;
       // Capture resolvable original bindings without demanding capabilities
@@ -656,7 +656,34 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;action.flags=c.value!=0;ok=QueueScriptAction(std::move(action));}break;}
     case C::ScriptPackage:ok=ScriptPackage(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,c.value!=0);break;
     case C::StartConversation:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,true);break;
-    case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,false,c.value!=0,0,c.noTargetLook);break;
+    case C::SetReference:{
+      uint32_t form=c.form;
+      if(c.expression=="getself")form=owner;
+      else if(c.expression=="getactionref")form=scriptActivator_;
+      else if(c.expression=="getlinkedref"){
+        const auto ref=catalog_->pipboy.targets.find(owner);
+        form=ref==catalog_->pipboy.targets.end()?0:ref->second.linkedReference;
+      }
+      auto& locals=state_.pipboy.referenceVariables;
+      auto old=locals.find(c.variable);
+      if(form){
+        if(old==locals.end()&&locals.size()>=100000){ok=false;break;}
+        if(old==locals.end()||old->second!=form){locals[c.variable]=form;++revision_;}
+      }else if(old!=locals.end()){locals.erase(old);++revision_;}
+      break;
+    }
+    case C::SayTo:{
+      uint32_t target=c.index;
+      if(c.targetLocal){
+        const auto slot=state_.pipboy.referenceVariables.find(c.targetLocal);
+        if(slot==state_.pipboy.referenceVariables.end()){error="SayTo listener is unset";return false;}
+        target=slot->second;
+      }
+      value=c.noTargetLook?1.f:0.f;
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok)ok=QueueScriptSpeech(c.form,uint32_t(c.variable),target,false,c.value!=0,0,value!=0);
+      break;
+    }
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
@@ -769,13 +796,21 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     case C::Unavailable:error="unsupported executed command: "+c.expression;return false;
     case C::DefaultActivate:{
-      if(!c.variable){ok=QueueScriptDefaultActivate(c.form,c.index?c.index:scriptActivator_);break;}
+      auto resolve=[&](uint64_t slot,uint32_t fallback){
+        if(!slot)return fallback;
+        const auto found=state_.pipboy.referenceVariables.find(slot);
+        return found==state_.pipboy.referenceVariables.end()?0u:found->second;
+      };
+      const auto receiver=resolve(c.receiverLocal,c.form);
+      const auto activator=resolve(c.targetLocal,c.index?c.index:scriptActivator_);
+      if(!receiver||(c.targetLocal&&!activator)){error="Activate reference is unset";return false;}
+      if(!c.variable){ok=QueueScriptDefaultActivate(receiver,activator);break;}
       if(scriptActivationDepth_>=8){error="nested activation depth exceeded";return false;}
-      if(c.index!=PlayerRef&&!catalog_->actorPlacements.count(c.index)){error="activation actor unavailable";return false;}
-      bool disabled=true;if(!ReferenceDisabled(c.form,disabled,error)||disabled){ok=false;break;}
-      if(!HasReferenceEvent(c.form,"OnActivate"))break; // No event is a native no-op with flag 1.
+      if(activator!=PlayerRef&&!catalog_->actorPlacements.count(activator)){error="activation actor unavailable";return false;}
+      bool disabled=true;if(!ReferenceDisabled(receiver,disabled,error)||disabled){ok=false;break;}
+      if(!HasReferenceEvent(receiver,"OnActivate"))break; // No event is a native no-op with flag 1.
       struct ActivationScope {unsigned& depth;ActivationScope(unsigned& d):depth(d){++depth;}~ActivationScope(){--depth;}} scope(scriptActivationDepth_);
-      ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(c.form).base),"OnActivate",c.form,c.index,error);break;
+      ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(receiver).base),"OnActivate",receiver,activator,error);break;
     }
     case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
     case C::NoActivationSound:ok=SetNoActivationSound(c.form);break;

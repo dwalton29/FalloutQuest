@@ -54,7 +54,7 @@ template<class Locals> inline bool ConsistentScriptLocalDeclarations(
     const auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
     std::istringstream words(line);std::string op,name;if(!(words>>op))continue;
     op=Lower(op);if(op=="begin")break;
-    const unsigned kind=op=="ref"?2u:
+    const unsigned kind=(op=="ref"||op=="reference")?2u:
       (op=="short"||op=="int"||op=="long"||op=="float")?1u:0u;
     if(!kind)continue;
     if(!(words>>name))return false;

@@ -1,5 +1,6 @@
 #include "npc/fo3-npc-combat.h"
-#include "dialogue/fo3-dialogue-conditions.h"
+#include "dialogue/fo3-dialogue-session.h"
+#include "dialogue/fo3-dialogue-selection.h"
 #include "ui/pause/fo3-debug-menu.h"
 #include "scripting/fo3-script-master-match.h"
 #include <cassert>
@@ -38,6 +39,57 @@ static void Original(const char* path){
   Check(returned.DispatchReferenceEvent(trigger,"OnTriggerEnter",fo3player::PlayerRef,error)==fo3player::ScriptEventResult::Executed,error);
   for(int i=0;i<24;++i)returned.PumpReferenceGameMode(.25,{trigger});
   assert(returned.Snapshot().actorFactions==before&&returned.Snapshot().pipboy.quests.at(ld).stage==50);
+  // Actual deaths run the shared mutant OnDeath script. The second starts
+  // the quest's timed conversation; the GameMode script chooses its listener.
+  {
+    fo3player::Player battle(returned);
+    battle.SetScriptPlayerLocation(placed.x,placed.y,placed.z,placed.cell,placed.world);
+    const auto other=c.pipboy.formNames.at("mq01citysupermutant02ref");
+    const auto pistol=c.pipboy.formNames.at("weap10mmpistol");
+    for(const auto actor:{mutant,other}){
+      Check(battle.ApplyAttack(fo3player::PlayerRef,pistol,actor,10000),"ambush mutant hit");
+      assert(battle.ActorHealth(actor)==0);
+    }
+    Check(battle.Snapshot().pipboy.quests.at(mq).stage==55,"second ambush death should start Sarah's scene");
+    const auto speaker=c.pipboy.formNames.at("mq01vargasref"),listener=sarah;
+    const auto topic=c.pipboy.formNames.at("mq01lyonspridevargas");
+    std::string diagnostic;battle.SetScriptEventDiagnostic([&](const std::string& msg){if(msg.find(std::to_string(c.pipboy.quests.at(mq).script))!=std::string::npos)diagnostic=msg;});
+    const auto key=fo3dialogue::VariableKey(c.pipboy,"mq01.targetref");assert(key);
+    unsigned spoken=0;
+    for(unsigned n=0;n<500&&battle.Snapshot().pipboy.quests.at(mq).stage==55;++n){
+      battle.SetScriptRuntimeClock(.1*n,.1);
+      battle.PumpWorldAwareGameMode(.1,{},[&](auto plan){return battle.CommitScriptTransaction(*plan);});
+      fo3script::Action action;
+      while(battle.PollScriptAction(action)){
+        if(action.kind!=fo3script::ActionKind::SayTo)continue;
+        if(!spoken)assert(action.reference==speaker&&action.form==topic&&action.flags==listener&&
+                          action.forceSubtitle&&!action.noTargetLook&&action.info==0x1ecaf);
+        ++spoken;fo3dialogue::Context ctx;ctx.player=&battle;ctx.talking=true;
+        Check(fo3dialogue::ReferenceContext(battle,action.reference,ctx.speaker)&&
+              fo3dialogue::ReferenceContext(battle,action.flags,ctx.target),"scene speaker and listener");
+        fo3dialogue::Session speech;
+        Check(speech.StartSelectedTopic(action.form,action.info,ctx,battle),"start authored Brotherhood INFO");
+        unsigned responses=0;
+        while(speech.phase==fo3dialogue::Phase::Speaking){
+          assert(++responses<32);speech.AudioDone(speech.audioToken,true,ctx,battle);
+        }
+        Check(speech.infoCompleted,"Brotherhood INFO completion");
+        if(battle.HasReferenceEvent(action.reference,"SayToDone")){
+          auto done=battle.PrepareReferenceEventTransaction(action.reference,"SayToDone",action.flags,error,
+              fo3player::ScriptProgramCapture::EnteredPrograms,action.form);
+          Check(bool(done),error);Check(battle.CommitScriptTransaction(*done),error);
+        }
+        if(spoken==1){
+          assert(battle.Snapshot().pipboy.referenceVariables.at(key)==listener);
+          Check(battle.Save(save,error),error);Check(battle.Restore(save,error),error);
+          assert(battle.Snapshot().pipboy.referenceVariables.at(key)==listener);
+          battle.SetScriptPlayerLocation(placed.x,placed.y,placed.z,placed.cell,placed.world);
+        }
+      }
+    }
+    Check(spoken>=3&&battle.Snapshot().pipboy.quests.at(mq).stage==56,"Brotherhood exchange stalled after "+std::to_string(spoken)+" lines: "+diagnostic);
+    std::cout<<"Original Chevy Chase ambush deaths, "<<spoken<<" Brotherhood speech actions and stage 56 after mid-exchange reload passed\n";
+  }
   // Original Behemoth weapon filter, through canonical attack/damage dispatch.
   // This isolates receipt of a hit; it does not simulate its scripted entrance,
   // explosion projectiles, bus destruction, or the full GNR battle.
