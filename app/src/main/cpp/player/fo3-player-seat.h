@@ -1,7 +1,11 @@
 #pragma once
 #include "npc/fo3-furniture.h"
 namespace fo3seat {
-struct Pose {std::array<float,3> eye{};float yaw=0,bodyDrop=0;};
+inline bool Usable(const fo3furniture::Slot& slot){
+ const auto marker=slot.marker.reference;
+ return slot.program&&!slot.sleep&&!slot.idleMarker&&(marker==11||marker==12||marker==14||marker==15||marker==16);
+}
+struct Pose {std::array<float,3> eye{};float yaw=0,bodyDrop=0;std::array<float,3> actorOrigin{};};
 // Quest comfort policy: commit a camera relocation only at full black.
 class State {
 public:
@@ -43,6 +47,7 @@ inline bool Targets(const fo3furniture::Slot& slot,const fo3anim::Skeleton& skel
   fo3anim::Pose pose;fo3anim::BindClip(skeleton,clip,pose);if(!fo3anim::Sample(skeleton,clip,time,pose,nullptr,fo3anim::RootPolicy::Furniture,root,fo3anim::Playback::Clamp))return false;
   const auto local=fo3anim::Point(pose.delta[size_t(head)],bindEye);out.eye=fo3anim::Point(alignment,local);
   const auto orientation=pose.accumulation>=0?fo3anim::Multiply(alignment,fo3anim::ToMatrix(pose.local[size_t(pose.accumulation)])):alignment;
+  out.actorOrigin={orientation[12],orientation[13],orientation[14]};
   out.yaw=std::atan2(-orientation[4],orientation[5]);return true;
  };
  if(!eye(program.loop,0,&loopRoot,sit)||!eye(program.exit,(program.exit.stop-program.exit.start)/program.exit.frequency,&retained,stand))return false;

@@ -317,6 +317,16 @@ bool Player::Use(uint64_t id,std::string* reason) {
   return false;
 }
 
+bool Player::DispelIngestible(uint32_t source){
+  if(!catalog_->pipboy.aid.count(source))return false;
+  auto& active=state_.activeAid;const auto count=active.size();
+  active.erase(std::remove_if(active.begin(),active.end(),[&](const ActiveAid& effect){
+    return effect.source==source;
+  }),active.end());
+  if(active.size()!=count){ClampAidResources();++revision_;}
+  return true;
+}
+
 void Player::AdvanceAid(double seconds) {
   if(state_.activeAid.empty()||!std::isfinite(seconds)||seconds<=0)return;
   using namespace fo3pipdata;

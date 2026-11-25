@@ -651,7 +651,7 @@ struct GpuObject {
     // the conjugated NIF-node delta here, preserving the authored child pivot.
     // Q24.0's whole-object hinge remains only as a fallback for door NIFs that
     // genuinely have no embedded Open/Close controller sequence.
-    float scriptDiffuseOffset[2]{};
+    float scriptDiffuseRows[2][4]{};
     float q2400DoorTransform[16]{
         1,0,0,0,
         0,1,0,0,
@@ -819,7 +819,7 @@ GLint gDiffuseLocation = -1;
 GLint gNormalLocation = -1;
 GLint gGlossinessLocation = -1;
 GLint gNormalStrengthLocation = -1;
-GLint gMaterialAlphaLocation = -1,gScriptDiffuseOffsetLocation=-1;
+GLint gMaterialAlphaLocation = -1,gScriptDiffuseRowULocation=-1,gScriptDiffuseRowVLocation=-1;
 GLint gAlphaTestLocation = -1;
 GLint gAlphaThresholdLocation = -1;
 GLint gGlowLocationQ1020 = -1;
@@ -1644,7 +1644,8 @@ GLuint CreateQ6HProgram() {
             visible += projected.z - bias <= texture(uShadowMap, projected.xy + vec2( halfTexel.x,  halfTexel.y)).r ? 1.0 : 0.0;
             return visible * 0.25;
         }
-        uniform vec2 uScriptDiffuseOffset;
+        uniform vec4 uScriptDiffuseRowU;
+        uniform vec4 uScriptDiffuseRowV;
         void main() {
             if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
                 vPosition.y < uWaterReflectionPlaneYQ2090) {
@@ -1683,7 +1684,8 @@ GLuint CreateQ6HProgram() {
                         : (1.0 - q2021DetailWeight);
             }
 
-            vec4 diffuseTexel = texture(uDiffuse, vUv+uScriptDiffuseOffset);
+            vec3 uv = vec3(vUv,1.0);
+            vec4 diffuseTexel = texture(uDiffuse,vUv+vec2(dot(uv,uScriptDiffuseRowU.xyz),dot(uv,uScriptDiffuseRowV.xyz)));
             vec3 baseColor = diffuseTexel.rgb * mix(vec3(1.0), vColor.rgb, uUseVertexColor);
             float alpha = diffuseTexel.a * uMaterialAlpha * mix(1.0, vColor.a, uUseVertexAlpha);
             if (uNoLightingFalloff > 0.5) {
@@ -3469,7 +3471,8 @@ bool InitializeScene() {
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
     gNormalStrengthLocation = glGetUniformLocation(gProgram, "uNormalStrength");
     gMaterialAlphaLocation = glGetUniformLocation(gProgram, "uMaterialAlpha");
-    gScriptDiffuseOffsetLocation=glGetUniformLocation(gProgram,"uScriptDiffuseOffset");
+    gScriptDiffuseRowULocation=glGetUniformLocation(gProgram,"uScriptDiffuseRowU");
+    gScriptDiffuseRowVLocation=glGetUniformLocation(gProgram,"uScriptDiffuseRowV");
     gAlphaTestLocation = glGetUniformLocation(gProgram, "uAlphaTest");
     gAlphaThresholdLocation = glGetUniformLocation(gProgram, "uAlphaThreshold");
     gGlowLocationQ1020 = glGetUniformLocation(gProgram, "uGlow");
@@ -5302,6 +5305,9 @@ bool ProcessQ74TransitionRequest() {
         }
         CancelFo3NotePlayback();
         gPlayerSession = std::move(prepared.playerSession);
+        gPlayerSession->player.SetInventoryScriptPublisher([](auto plan){
+            std::string error;return gPlayerSession&&PublishFo3DialogueReferences(gPlayerSession->player,*plan,error);
+        });
         gFo3ResidentSavePending=false;
         const auto& p = gPlayerSession->player;
         Q6H_LOGI("PLAYER STATE READY: level=%u HP=%.1f/%.1f AP=%.1f/%.1f weight=%.2f/%.1f stacks=%zu items=%zu saveBlocked=%d",
@@ -7893,7 +7899,8 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false,
                  object.externalEmittanceColorQ1380);
     glUniform1f(gNormalStrengthLocation, object.realNormal ? 1.0f : 0.0f);
     glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
-    glUniform2f(gScriptDiffuseOffsetLocation,object.scriptDiffuseOffset[0],object.scriptDiffuseOffset[1]);
+    glUniform4fv(gScriptDiffuseRowULocation,1,object.scriptDiffuseRows[0]);
+    glUniform4fv(gScriptDiffuseRowVLocation,1,object.scriptDiffuseRows[1]);
     glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
     glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
     const auto diffuse=genePreview?gFo3AppearanceTexture:
@@ -8304,7 +8311,8 @@ bool Q1030InitializeRenderProgramOnly() {
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
     gNormalStrengthLocation = glGetUniformLocation(gProgram, "uNormalStrength");
     gMaterialAlphaLocation = glGetUniformLocation(gProgram, "uMaterialAlpha");
-    gScriptDiffuseOffsetLocation=glGetUniformLocation(gProgram,"uScriptDiffuseOffset");
+    gScriptDiffuseRowULocation=glGetUniformLocation(gProgram,"uScriptDiffuseRowU");
+    gScriptDiffuseRowVLocation=glGetUniformLocation(gProgram,"uScriptDiffuseRowV");
     gAlphaTestLocation = glGetUniformLocation(gProgram, "uAlphaTest");
     gAlphaThresholdLocation = glGetUniformLocation(gProgram, "uAlphaThreshold");
 

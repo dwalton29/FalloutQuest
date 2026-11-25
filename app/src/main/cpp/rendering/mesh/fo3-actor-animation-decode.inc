@@ -297,17 +297,34 @@ static bool DecodeProperty(const std::vector<uint8_t>& bytes,const NifHeader& h,
      !(controller==INVALID_REF&&type=="NiVisController"))return false;
   const bool emitter=type=="NiPSysEmitterCtlr";
   const bool boolean=type=="NiVisController"||(emitter&&BlockType(h,interpolator)=="NiBoolInterpolator"),color=type=="NiMaterialColorController";
-  const bool texture=type=="NiTextureTransformController";
-  if(!boolean&&!color&&!emitter&&!texture&&type!="NiAlphaController")return false;
+  const bool texture=type=="NiTextureTransformController",emittance=type=="BSMaterialEmittanceMultController";
+  if(!boolean&&!color&&!emitter&&!texture&&!emittance&&type!="NiAlphaController")return false;
   if(BlockType(h,interpolator)!=(boolean?"NiBoolInterpolator":color?"NiPoint3Interpolator":"NiFloatInterpolator"))return false;
   out.kind=emitter?(boolean?PropertyKind::EmitterActive:PropertyKind::EmitterRate):(boolean?PropertyKind::Visibility:PropertyKind::Alpha);
   if(texture){
     Cursor control(BlockData(bytes,h,controller),h.blockSizes[controller]);
     uint8_t shaderMap=0;uint32_t slot=0,operation=0;
-    if(!control.Skip(30)||!control.U8(shaderMap)||!control.U32(slot)||!control.U32(operation)||
-       control.remaining()||shaderMap||slot||operation>1)return false;
-    out.kind=operation?PropertyKind::DiffuseOffsetV:PropertyKind::DiffuseOffsetU;
+    uint32_t target=INVALID_REF;
+    if(!control.Skip(22)||!control.U32(target)||!control.Skip(4)||!control.U8(shaderMap)||!control.U32(slot)||!control.U32(operation)||
+       control.remaining()||shaderMap||slot||operation>4)return false;
+    static constexpr PropertyKind member[]={PropertyKind::DiffuseOffsetU,PropertyKind::DiffuseOffsetV,
+      PropertyKind::DiffuseRotation,PropertyKind::DiffuseScaleU,PropertyKind::DiffuseScaleV};
+    out.kind=member[operation];
+    if(target>=h.numBlocks)return false;
+    if(BlockType(h,target)=="NiTexturingProperty"){
+      Cursor textureProperty(BlockData(bytes,h,target),h.blockSizes[target]);
+      uint32_t maps=0;uint8_t hasBase=0,hasTransform=0;
+      if(!ParseObjectNetPrefix(textureProperty)||!textureProperty.Skip(2)||!textureProperty.U32(maps)||!maps||
+         !textureProperty.U8(hasBase)||!hasBase||!textureProperty.Skip(6)||!textureProperty.U8(hasTransform))return false;
+      if(hasTransform){
+        auto& t=out.diffuse;
+        if(!textureProperty.F32(t.offset[0])||!textureProperty.F32(t.offset[1])||
+           !textureProperty.F32(t.scale[0])||!textureProperty.F32(t.scale[1])||!textureProperty.F32(t.rotation)||
+           !textureProperty.U32(t.method)||t.method>2||!textureProperty.F32(t.center[0])||!textureProperty.F32(t.center[1]))return false;
+      }
+    }
   }
+  if(emittance)out.kind=PropertyKind::EmissiveMultiplier;
   if(color){
     if(h.blockSizes[controller]!=32)return false;
     Cursor control(BlockData(bytes,h,controller),h.blockSizes[controller]);uint16_t role=0;

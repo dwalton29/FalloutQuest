@@ -1016,7 +1016,7 @@ bool Player::Add(uint32_t form, int32_t count, float condition) {
     return true;
   }
   for (auto &s : state_.inventory)
-    if (s.formId == form && s.condition == condition && !s.equipped) {
+    if (s.formId == form && s.condition == condition && !s.equipped && !s.equipmentLocked && !s.scriptInstance && !s.ownership.explicitOwner) {
       if (count > INT32_MAX - s.count)
         return false;
       s.count += count;
@@ -1034,7 +1034,7 @@ bool Player::Remove(uint64_t id, int32_t count) {
   auto &v = state_.inventory;
   const auto it = std::find_if(v.begin(), v.end(),
                                [&](const Stack &s) { return s.id == id; });
-  if (it == v.end() || count <= 0 || count > it->count ||
+  if (it == v.end() || count <= 0 || count > it->count || (it->equipped&&it->equipmentLocked) ||
       (IsQuestObject(it->formId) ||
        catalog_->items.at(it->formId).cannotDrop))
     return false;
@@ -1054,30 +1054,40 @@ bool Player::Equip(uint64_t id,bool scripted) {
   if (it->equipped)
     return true;
   const Item &item = catalog_->items.at(it->formId);
+  if(!scripted&&(it->equipmentLocked||std::any_of(v.begin(),v.end(),[&](const Stack& stack){
+    return stack.equipped&&stack.equipmentLocked&&Conflicts(item,catalog_->items.at(stack.formId));
+  })))return false;
   const bool split = it->count > 1;
   if (split && (v.size() >= MaxStacks || state_.nextStackId == UINT64_MAX))
     return false;
   Stack remainder = *it;
   if (split) {
     remainder.id = state_.nextStackId++;
+    remainder.scriptInstance.reset();
     --remainder.count;
     it->count = 1;
   }
+  std::vector<std::pair<uint64_t,uint32_t>> removed;
   for (auto &s : v)
-    if (s.equipped && Conflicts(item, catalog_->items.at(s.formId)))
-      s.equipped = false;
+    if (s.equipped && Conflicts(item, catalog_->items.at(s.formId))){
+      if(catalog_->eventBaseScripts.count(s.formId))removed.emplace_back(s.id,s.formId);
+      s.equipped = false;s.equipmentLocked=false;
+    }
   it->equipped = true;
   if (split)
     v.push_back(remainder);
   ++revision_;
-  return true;
+  for(const auto& old:removed)if(!DispatchEquipmentEvent(old.first,old.second,"OnUnequip"))return false;
+  return DispatchEquipmentEvent(id,item.formId,"OnEquip");
 }
 bool Player::Unequip(uint64_t id) {
   for (auto &s : state_.inventory)
     if (s.id == id) {
       if (s.equipped) {
+        if(s.equipmentLocked)return false;
         s.equipped = false;
         ++revision_;
+        return DispatchEquipmentEvent(id,s.formId,"OnUnequip");
       }
       return true;
     }
@@ -1601,7 +1611,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload, s.formId);
     Put32(payload, static_cast<uint32_t>(s.count));
     PutFloat(payload, s.condition);
-    payload.push_back(s.equipped ? 1 : 0);
+    payload.push_back((s.equipped?1:0)|(s.equipmentLocked?2:0));
   }
   Put32(payload, catalog_->worldFingerprint);
   Put32(payload, static_cast<uint32_t>(state_.collected.size()));
@@ -1691,10 +1701,14 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,form);
     payload.push_back(state_.questObjectFlags.at(form)?1u:0u);
   }
-  // v13 sparse ownership metadata belongs only to still-uncollected contents.
+  // Stable stack IDs preserve explicit ownership through scripted inventory transfers.
   std::vector<const Stack*> ownedContents;
   for(uint32_t id:containerIds)for(const auto& stack:state_.containers.at(id))
     if(stack.ownership.explicitOwner)ownedContents.push_back(&stack);
+  const auto ownedContainerCount=ownedContents.size();
+  for(const auto& stack:state_.inventory)
+    if(stack.ownership.explicitOwner)ownedContents.push_back(&stack);
+  const bool hasPlayerOwnership=ownedContents.size()!=ownedContainerCount;
   Put32(payload,static_cast<uint32_t>(ownedContents.size()));
   for(const auto* stack:ownedContents){Put64(payload,stack->id);Put32(payload,stack->ownership.owner);
     Put32(payload,static_cast<uint32_t>(stack->ownership.rank));Put32(payload,stack->ownership.global);}
@@ -1707,7 +1721,13 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasObjectDamage=!state_.objectDamage.empty();
+  const bool hasEquipmentLocks=std::any_of(state_.inventory.begin(),state_.inventory.end(),[](const Stack& stack){return stack.equipmentLocked;});
+  std::map<uint64_t,const ItemScriptInstance*> itemScripts;
+  auto collectScript=[&](const Stack& stack){if(stack.scriptInstance)itemScripts.emplace(stack.id,stack.scriptInstance.get());};
+  for(const auto& stack:state_.inventory)collectScript(stack);
+  for(const auto& container:state_.containers)for(const auto& stack:container.second)collectScript(stack);
+  for(const auto& weapon:state_.worldWeapons)collectScript(weapon.instance);
+  const bool hasObjectDamage=!itemScripts.empty()||hasEquipmentLocks||hasPlayerOwnership||!state_.objectDamage.empty();
   const bool hasLimbs=hasObjectDamage||hasActorApparel||!state_.actorLimbDamage.empty();
   const bool hasAid=hasLimbs||!state_.activeAid.empty()||!state_.addictions.empty();
   const bool hasAppearance=hasAid||state_.appearance.race||state_.appearanceDraft.race;
@@ -2028,7 +2048,17 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(damage.size()));
     for(const auto& object:damage){Put32(payload,object.first);PutFloat(payload,object.second);}
   }
-  Put32(bytes, hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(!itemScripts.empty()){
+    Put32(payload,0x31534949); // IIS1, locals belong to an individual inventory instance.
+    Put32(payload,uint32_t(itemScripts.size()));
+    for(const auto& [id,instance]:itemScripts){
+      Put64(payload,id);Put32(payload,instance->reference);
+      Put32(payload,uint32_t(instance->numbers.size()));Put32(payload,uint32_t(instance->references.size()));
+      for(const auto& [slot,value]:instance->numbers){Put32(payload,slot);PutFloat(payload,value);}
+      for(const auto& [slot,value]:instance->references){Put32(payload,slot);Put32(payload,value);}
+    }
+  }
+  Put32(bytes, !itemScripts.empty() ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -2088,7 +2118,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 39))
+      (version < 1 || version > 42))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2122,12 +2152,14 @@ bool Player::Restore(const std::string &path, std::string &error) {
   for (uint32_t i = 0; i < count; ++i) {
     const auto *s = p + 20 + i * 21;
     Stack stack{U64(s), fo3esm::ReadU32(s + 8), I32(s + 12),
-                fo3esm::ReadF32(s + 16), s[20] != 0};
+                fo3esm::ReadF32(s + 16), (s[20]&1) != 0};
+    stack.equipmentLocked=(s[20]&2)!=0;
     const auto item = catalog_->items.find(stack.formId);
     if (!stack.id || stack.id >= next.nextStackId ||
         !ids.insert(stack.id).second || item == catalog_->items.end() ||
         stack.count <= 0 || !std::isfinite(stack.condition) ||
-        stack.condition < 0 || stack.condition > 1 || s[20] > 1 ||
+        stack.condition < 0 || stack.condition > 1 || s[20] > (version>=41?3:1) ||
+        (stack.equipmentLocked&&!CanEquip(item->second,true)) ||
         (item->second.maxCondition == 0 && stack.condition != 1) ||
         (stack.equipped &&
          (stack.count != 1 || !CanEquip(item->second,true) ||
@@ -2355,9 +2387,10 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=13){
         if(payload.size()-at<4)return fail("Missing ownership extension");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
-        if(n>30000||(version>=14 ? payload.size()-at<20ull*n+8 : payload.size()-at!=20ull*n))return fail("Invalid ownership extension size");
+        if(n>(version>=40?40000u:30000u)||(version>=14 ? payload.size()-at<20ull*n+8 : payload.size()-at!=20ull*n))return fail("Invalid ownership extension size");
         std::unordered_map<uint64_t,Stack*> stacks;
         for(auto& container:next.containers)for(auto& stack:container.second)stacks.emplace(stack.id,&stack);
+        if(version>=40)for(auto& stack:next.inventory)stacks.emplace(stack.id,&stack);
         std::unordered_set<uint64_t> seen;
         for(uint32_t i=0;i<n;++i,at+=20){
           const auto id=U64(p+at);auto found=stacks.find(id);
@@ -2720,7 +2753,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=39){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314a424f)return fail("Missing object damage");
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(count>catalog_->references.size()||payload.size()-at!=size_t(count)*8)return fail("Invalid object damage count");
+        if(count>catalog_->references.size()||(version>=42?payload.size()-at<size_t(count)*8+8:payload.size()-at!=size_t(count)*8))return fail("Invalid object damage count");
         for(uint32_t i=0;i<count;++i,at+=8){
           const auto ref=fo3esm::ReadU32(p+at);const auto damage=fo3esm::ReadF32(p+at+4);
           const auto placed=catalog_->references.find(ref);
@@ -2729,6 +2762,40 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(def==catalog_->destructibles.end()||!std::isfinite(damage)||damage<0||damage>def->second.health||
              (damage==0&&(def->second.stages.front().healthPercent!=100||!(def->second.stages.front().flags&1)))||
              !next.objectDamage.emplace(ref,damage).second)return fail("Invalid object damage");
+        }
+      }
+      if(version>=42){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31534949)return fail("Missing inventory script instances");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>50000||payload.size()-at<size_t(count)*20)return fail("Invalid inventory script count");
+        std::unordered_map<uint64_t,Stack*> stacks;
+        for(auto& stack:next.inventory)stacks.emplace(stack.id,&stack);
+        for(auto& container:next.containers)for(auto& stack:container.second)stacks.emplace(stack.id,&stack);
+        for(auto& weapon:next.worldWeapons)stacks.emplace(weapon.instance.id,&weapon.instance);
+        std::unordered_set<uint32_t> runtimeRefs;
+        for(uint32_t i=0;i<count;++i){
+          if(payload.size()-at<20)return fail("Truncated inventory script instance");
+          auto stack=stacks.find(U64(p+at));auto instance=std::make_shared<ItemScriptInstance>();
+          instance->reference=fo3esm::ReadU32(p+at+8);
+          const auto numbers=fo3esm::ReadU32(p+at+12),refs=fo3esm::ReadU32(p+at+16);at+=20;
+          if(stack==stacks.end()||stack->second->scriptInstance||instance->reference<=0xff000000u||
+             !runtimeRefs.insert(instance->reference).second||catalog_->references.count(instance->reference))
+            return fail("Invalid inventory script identity");
+          const auto binding=catalog_->eventBaseScripts.find(stack->second->formId);
+          if(binding==catalog_->eventBaseScripts.end()||!catalog_->pipboy.scripts.count(binding->second))
+            return fail("Missing original inventory script");
+          const auto& vars=catalog_->pipboy.scripts.at(binding->second).variables;
+          const uint64_t slots=uint64_t(numbers)+refs;
+          if(slots>vars.size()||slots>(payload.size()-at)/8)return fail("Invalid inventory script locals");
+          for(uint64_t n=0;n<slots;++n,at+=8){
+            const auto slot=fo3esm::ReadU32(p+at);const auto var=vars.find(slot);
+            if(var==vars.end()||!fo3script::DeclaredLocalKey(catalog_->pipboy,instance->reference,binding->second,var->second,n>=numbers))return fail("Invalid inventory script slot");
+            if(n<numbers){
+              const auto value=fo3esm::ReadF32(p+at+4);
+              if(!std::isfinite(value)||!instance->numbers.emplace(slot,value).second)return fail("Invalid inventory numeric local");
+            }else if(!instance->references.emplace(slot,fo3esm::ReadU32(p+at+4)).second)return fail("Duplicate inventory reference local");
+          }
+          stack->second->scriptInstance=std::move(instance);
         }
       }
       if(at!=payload.size())return fail("Trailing player save data");

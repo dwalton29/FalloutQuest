@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -105,6 +106,11 @@ struct TheftEvent {
   // No fabricated witness/detection result; later crime perception consumes this.
 };
 struct KarmaEvent {float amount=0,requested=0;};
+struct ItemScriptInstance {
+  uint32_t reference=0;
+  std::map<uint32_t,float> numbers;
+  std::map<uint32_t,uint32_t> references;
+};
 struct Stack {
   uint64_t id = 0;
   uint32_t formId = 0;
@@ -115,6 +121,8 @@ struct Stack {
   uint16_t loadedRounds = 0;
   bool needsAction = false;
   OwnershipData ownership{};
+  bool equipmentLocked=false;
+  std::shared_ptr<const ItemScriptInstance> scriptInstance{};
 };
 struct WorldWeapon {
   Stack instance;
@@ -393,13 +401,14 @@ struct ActorCensusReport {
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported, Pending };
 class Player;
 class ScriptTransactionPlan;
-enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo,TerminalEntry,PackageResult};
+enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo,TerminalEntry,PackageResult,InventoryEvent};
 enum class DialogueScriptPhase : uint8_t {Begin,End,Both};
 enum class ScriptProgramCapture : uint8_t {None,EnteredPrograms};
 struct ScriptProgramOrigin {
   ScriptProgramKind kind=ScriptProgramKind::UnboundResult;
   uint32_t record=0,item=0,sourceLine=0,topic=0,filterForm=0;
   uint16_t stage=0;
+  uint32_t inventoryBase=0;uint64_t inventoryStack=0;
   std::string event;
 };
 // Immutable evidence of entered programs, not authority to admit world changes.
@@ -590,6 +599,7 @@ public:
   bool KillActor(uint32_t reference);
   bool SetActorAlert(uint32_t reference,bool alert);
   bool ScriptEquipActorItem(uint32_t reference,uint32_t form,bool locked);
+  bool ScriptEquippedItem(uint32_t actor,uint32_t form,bool& equipped)const;
   int32_t ScriptItemCount(uint32_t reference,uint32_t form) const;
   bool ScriptActorDetectedPlayer(uint32_t reference) const {return scriptDetection_.count(reference)!=0;}
   void SetScriptActorDetectedPlayer(uint32_t reference,bool detected){
@@ -647,11 +657,11 @@ public:
   // evaluation to capture provenance.
   bool PumpWorldAwareGameMode(double realSeconds,const std::vector<uint32_t>& resident,
       const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode=false);
-  void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius=0);
+  void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius=0,const std::array<float,3>* actorOrigin=nullptr);
   void SetScriptPlayerHeading(float sceneYaw);
   bool ScriptHeadingAngle(uint32_t reference,uint32_t target,float& degrees) const;
   bool ScriptDistance(float& distance) const;
-  float ScriptPlayerHeight()const{return scriptPlayerPosition_[2];}
+  float ScriptPlayerHeight()const{return scriptPlayerActorOrigin_[2];}
   uint32_t ScriptActivator() const { return scriptActivator_; }
   uint32_t ScriptReference() const { return scriptReference_; }
   int ScriptButton() const;
@@ -659,8 +669,8 @@ public:
   int32_t ItemCount(uint32_t form) const;
   bool ScriptRemoveItem(uint32_t form,int32_t count,uint32_t receiver=PlayerRef);
   bool ScriptAddItem(uint32_t receiver,uint32_t form,int32_t count,bool silent=false,float condition=1);
-  bool ScriptRemoveAllItems();
-  bool ScriptEquipItem(uint32_t form,bool equip);
+  bool ScriptRemoveAllItems(uint32_t source=PlayerRef,uint32_t destination=0,bool keepOwnership=false,bool silent=false);
+  bool ScriptEquipItem(uint32_t form,bool equip,bool lock=false);
   bool IsQuestObject(uint32_t form) const;
   bool SetQuestObject(uint32_t form,bool quest);
   bool RewardKarma(float amount);
@@ -722,6 +732,9 @@ public:
   size_t PendingScriptMessageCount() const {return pendingScriptMessages_.size();}
   bool SubmitScriptMessageButton(uint32_t owner,int index);
   bool PollScriptSound(uint32_t& out);
+  void SetInventoryScriptPublisher(std::function<bool(std::unique_ptr<ScriptTransactionPlan>)> publisher){
+    inventoryScriptPublisher_=std::move(publisher);
+  }
   void SetScriptEventDiagnostic(std::function<void(const std::string&)> diagnostic) {
     eventDiagnostic_=std::move(diagnostic);
   }
@@ -762,6 +775,7 @@ public:
   uint32_t RadiationSickness() const;
   bool WithdrawalActive(uint32_t spell) const;
   bool SetAddiction(uint32_t spell,bool enabled);
+  bool DispelIngestible(uint32_t source);
   void AdvanceAid(double seconds);
   bool CanUse(uint64_t stack,std::string* reason=nullptr) const;
   bool Use(uint64_t stack,std::string* reason=nullptr);
@@ -895,6 +909,11 @@ private:
   friend struct Session;
   explicit Player(std::shared_ptr<const Catalog> catalog);
   struct ScriptCandidateTag {};
+  std::function<bool(std::unique_ptr<ScriptTransactionPlan>)> inventoryScriptPublisher_;
+  bool inventoryEventCandidate_=false;
+  unsigned inventoryEventDepth_=0;
+  bool DispatchEquipmentEvent(uint64_t stack,uint32_t form,const char* event);
+  bool RunEquipmentEvent(uint64_t stack,uint32_t script,const char* event,std::string& error);
   bool MakeScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner,ScriptMessage& out)const;
   Player(const Player& source,ScriptCandidateTag);
   std::unique_ptr<ScriptTransactionPlan> PrepareScriptTransaction(
@@ -902,7 +921,7 @@ private:
   void SwapScriptPayload(Player& other) noexcept;
   bool ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept;
   bool RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error,uint32_t filterForm=0,bool* requestsTalk=nullptr);
+                            uint32_t activator,std::string& error,uint32_t filterForm=0,bool* requestsTalk=nullptr,uint32_t inventoryBase=0,uint64_t inventoryStack=0);
   bool CanOpenDoorImpl(uint32_t actor,uint32_t reference,bool sourceDelegated) const;
   bool ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
                             uint32_t reference,bool& disabled,std::string& error) const;
@@ -952,7 +971,7 @@ private:
   mutable bool q230GameModeQuestIndexReady_=false;
   mutable std::vector<uint32_t> q230GameModeQuestIds_;
   uint32_t scriptActivator_=0,scriptReference_=0,scriptPlayerCell_=0,scriptPlayerWorld_=0;
-  std::array<float,3> scriptPlayerPosition_{};
+  std::array<float,3> scriptPlayerPosition_{},scriptPlayerActorOrigin_{};
   float scriptPlayerTriggerRadius_=0;
   bool scriptPlayerPositionKnown_=false;
   float scriptPlayerHeading_=0;

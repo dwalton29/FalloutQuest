@@ -57,6 +57,30 @@ static void Dispatch() {
   p.PumpQuestGameMode(0.10);p.PumpQuestGameMode(0.16);
   assert(p.Snapshot().pipboy.quests.at(20).stage==10);
 }
+static void EquipmentInstanceEvents(){
+  auto c=Catalog();
+  c.items[40].formId=40;c.items[40].kind=fo3player::ItemKind::Armour;c.items[40].bipedMask=4;
+  auto& script=c.pipboy.scripts[103];script.variables={{1,"uses"},{2,"wearer"}};
+  script.source="scn Wearable\nshort uses\nref wearer\nBegin OnEquip Player\nset uses to uses + 1\nset wearer to GetActionRef\nEnd\nBegin OnUnequip Player\nset uses to uses + 10\nset wearer to 0\nEnd";
+  c.eventBaseScripts[40]=103;c.eventPrograms[103]=fo3script::ParseEvents(script);
+  fo3player::Player p(c);p.SetScriptEventDiagnostic([](const auto& message){std::cerr<<message<<std::endl;});
+  assert(p.Add(40,2));const auto first=p.Snapshot().inventory.front().id;
+  assert(p.Equip(first));auto second=p.Snapshot().inventory.back().id;
+  assert(first!=second&&p.Equip(second));
+  auto scoped=[&](const fo3player::Player& player,uint64_t id){
+    for(const auto& item:player.Snapshot().inventory)if(item.id==id)return item.scriptInstance;
+    return std::shared_ptr<const fo3player::ItemScriptInstance>{};
+  };
+  auto a=scoped(p,first),b=scoped(p,second);
+  assert(a&&b&&a->reference!=b->reference&&a->numbers.at(1)==11&&b->numbers.at(1)==1);
+  assert(a->references.empty()&&b->references.at(2)==fo3player::PlayerRef);
+  assert(p.Snapshot().pipboy.dialogueVariables.empty()&&p.Snapshot().pipboy.referenceVariables.empty());
+  char save[]="/tmp/fq-equipment-XXXXXX";int fd=mkstemp(save);assert(fd>=0);close(fd);
+  std::string error;assert(p.Save(save,error));fo3player::Player restored(c);
+  if(!restored.Restore(save,error)){std::cerr<<error<<std::endl;std::abort();}unlink(save);
+  assert(scoped(restored,first)->reference==a->reference&&scoped(restored,first)->numbers.at(1)==11);
+  assert(restored.Unequip(second)&&scoped(restored,second)->numbers.at(1)==11);
+}
 static void WeaponFilteredHit(){
   auto c=Catalog();c.items[40].formId=40;c.items[40].kind=fo3player::ItemKind::Weapon;c.items[40].weapon.valid=true;
   c.items[41]=c.items[40];c.items[41].formId=41;c.pipboy.formNames["specialweapon"]=40;
@@ -803,7 +827,7 @@ int main(int argc,char** argv){
   ReferenceLocalBranches();
   AdditionalQuestPoints();
   CompiledProgramsRemainLive();
-  Parsing();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
+  Parsing();EquipmentInstanceEvents();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

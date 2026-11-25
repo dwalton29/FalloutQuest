@@ -750,14 +750,26 @@ void Animate(){
             fo3anim::Matrix scene{};
             if(delta&&fo3dooranim::ModelDeltaToScene(object.q2016PlacementMatrix,FO3_UNITS_PER_METRE,*delta,scene))std::copy(scene.begin(),scene.end(),object.q2400DoorTransform);
             bool visible=true;for(int i=bone;i>=0;i=asset.hierarchy.bones[size_t(i)].parent)visible=visible&&state.visible[size_t(i)];object.scriptVisible=visible;
+            fo3anim::DiffuseTransform diffuse;bool hasDiffuse=false;
             for(const auto& property:state.pose.properties)if(property.bone==bone){
                 using K=fo3anim::PropertyKind;
-                if(property.kind==K::DiffuseOffsetU)object.scriptDiffuseOffset[0]=property.value[0];
-                if(property.kind==K::DiffuseOffsetV)object.scriptDiffuseOffset[1]=property.value[0];
+                if(property.kind>=K::DiffuseOffsetU&&property.kind<=K::DiffuseRotation){
+                    if(!hasDiffuse){diffuse=property.diffuse;hasDiffuse=true;}
+                    switch(property.kind){
+                    case K::DiffuseOffsetU: diffuse.offset[0]=property.value[0];break;
+                    case K::DiffuseOffsetV: diffuse.offset[1]=property.value[0];break;
+                    case K::DiffuseScaleU: diffuse.scale[0]=property.value[0];break;
+                    case K::DiffuseScaleV: diffuse.scale[1]=property.value[0];break;
+                    case K::DiffuseRotation: diffuse.rotation=property.value[0];break;
+                    default: break;
+                    }
+                }
+                if(property.kind==K::EmissiveMultiplier)object.emissiveMult=std::max(0.f,property.value[0]);
                 if(property.kind==K::Alpha)object.materialAlpha=std::clamp(property.value[0],0.f,1.f);
                 if(property.kind==K::Emissive)std::copy_n(property.value.begin(),3,object.emissiveColor);
                 if(property.kind==K::Specular)std::copy_n(property.value.begin(),3,object.specularColor);
             }
+            if(hasDiffuse)diffuse.ShaderRows(object.scriptDiffuseRows);
         }
         const double duration=clip.frequency>0?double(clip.stop-clip.start)/clip.frequency:0;
         const bool ended=clip.cycle==2&&elapsed>=duration;

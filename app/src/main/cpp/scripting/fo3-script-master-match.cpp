@@ -53,7 +53,7 @@ bool Same(const std::vector<fo3pipdata::Condition>& a,const std::vector<fo3pipda
 bool Same(const Execution& a,const Execution& b) noexcept {
   const auto& x=a.origin;const auto& y=b.origin;
   return x.kind==y.kind&&x.record==y.record&&x.item==y.item&&x.sourceLine==y.sourceLine&&
-    x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&x.filterForm==y.filterForm&&a.owner==b.owner&&
+    x.topic==y.topic&&x.stage==y.stage&&x.inventoryBase==y.inventoryBase&&x.inventoryStack==y.inventoryStack&&x.event==y.event&&x.filterForm==y.filterForm&&a.owner==b.owner&&
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
     a.reference==b.reference&&a.terminalLinkedReference==b.terminalLinkedReference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
@@ -64,13 +64,30 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.conditionGlobals==b.conditionGlobals&&a.questConditionGlobals==b.questConditionGlobals&&
     a.commandGlobals==b.commandGlobals&&a.expressionGlobals==b.expressionGlobals;
 }
+bool EquipmentChild(const Execution& parent,const Execution& child){
+  if(child.activator!=fo3player::PlayerRef||child.reference!=child.owner)return false;
+  std::istringstream lines(parent.program.source);std::string line;
+  while(std::getline(lines,line)){
+    const auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
+    std::istringstream row(Lower(line));std::string op,item;if(!(row>>op))continue;
+    if(op=="player."){std::string verb;if(!(row>>verb))continue;op+=verb;}
+    if(op=="player.removeallitems"&&child.origin.event=="onunequip")return true;
+    if(op!="player.equipitem"&&op!="player.unequipitem")continue;
+    if(!(row>>item))continue;
+    for(const auto& binding:parent.commandForms){
+      if(binding.second!=item||binding.first!=child.origin.inventoryBase)continue;
+      if((op=="player.equipitem")== (child.origin.event=="onequip"))return true;
+    }
+  }
+  return false;
+}
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
     if(e.parent==Execution::NoParent){
       depth=0;
-      if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::TerminalEntry||e.origin.kind==Kind::PackageResult){if(e.reference!=e.owner)return false;}
+      if(e.origin.kind==Kind::InventoryEvent||e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::TerminalEntry||e.origin.kind==Kind::PackageResult){if(e.reference!=e.owner)return false;}
       else if(e.reference||e.activator)return false;
     }else{
       if(e.parent>=n)return false;
@@ -79,6 +96,7 @@ bool Contexts(const std::vector<Execution>& programs){
       if(!depth)return false;
       const auto& parent=programs[e.parent];
       if(e.origin.kind==Kind::QuestStageItem){if(e.reference!=parent.reference||e.activator!=parent.activator)return false;}
+      else if(e.origin.kind==Kind::InventoryEvent){if(!EquipmentChild(parent,e))return false;}
       else if(e.origin.kind!=Kind::ReferenceEvent||!ActivationChild(parent,e))return false;
     }
     if(depth==active.size())return false;
@@ -89,6 +107,7 @@ bool Contexts(const std::vector<Execution>& programs){
 const char* Type(const Execution& e){
   const auto& o=e.origin;
   if(!o.record)return nullptr;
+  if(o.kind!=Kind::InventoryEvent&&(o.inventoryBase||o.inventoryStack))return nullptr;
   if(o.filterForm&&(o.kind!=Kind::ReferenceEvent||(o.event!="onhitwith"&&o.event!="onpackagestart"&&o.event!="onpackagedone"&&o.event!="onpackagechange")))return nullptr;
   if(!e.localScript&&!e.localVariables.empty())return nullptr;
   for(size_t n=1;n<e.localVariables.size();++n)
@@ -105,6 +124,10 @@ const char* Type(const Execution& e){
     case Kind::TerminalEntry:
       return e.owner&&o.topic&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)&&
         !e.owningQuest&&e.questConditions.empty()&&e.activator==fo3player::PlayerRef?"TERM":nullptr;
+    case Kind::InventoryEvent:
+      if(!o.inventoryBase||!o.inventoryStack||e.owner<=0xff000000u||e.activator!=fo3player::PlayerRef||
+         (o.event!="onequip"&&o.event!="onunequip"))return nullptr;
+      [[fallthrough]];
     case Kind::ReferenceEvent:
       return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic&&
         !e.owningQuest&&e.conditions.empty()&&e.questConditions.empty()?"SCPT":nullptr;
@@ -268,7 +291,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptGlobals(e.commandGlobals.size(),evidenceBytes)||!ChargeScriptGlobals(e.expressionGlobals.size(),evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
-    if(e.origin.kind==Kind::ReferenceEvent){
+    if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::InventoryEvent){
       fo3pipdata::Script source;source.source=e.container.source;source.compiled=e.container.compiled;
       const auto events=ParseEvents(source);
       if(!events.error.empty())return fail("malformed event source");
@@ -368,6 +391,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       variableScripts[binding.script].push_back(&binding);
     }
     wanted[programs[n].origin.record].push_back(n);
+    if(e.origin.kind==Kind::InventoryEvent)bases[e.origin.inventoryBase].push_back(n);
     if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo||e.origin.kind==Kind::TerminalEntry||e.origin.kind==Kind::PackageResult)owners[e.owner].push_back(n);
   }
   fo3pipdata::Definitions terminalGraph;
@@ -576,6 +600,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         }
         else {
           if(pass==1){
+            if(programs[index].origin.kind==Kind::InventoryEvent&&type!="ARMO"&&type!="WEAP")return fail("inventory event base is not equippable");
             if(programs[index].origin.kind==Kind::TerminalEntry&&type!="TERM")return fail("terminal owner is not TERM");
             const auto& placement=placementTypes[index];
             if((placement=="ACHR"&&type!="NPC_")||(placement=="ACRE"&&type!="CREA")||
@@ -586,7 +611,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
             if(requiredSpeakers[index]&&requiredSpeakers[index]!=id)
               return fail("dialogue speaker differs from original INFO ANAM");
           }
-          if(programs[index].origin.kind==Kind::ReferenceEvent&&association!=programs[index].origin.record)
+          if((programs[index].origin.kind==Kind::ReferenceEvent||programs[index].origin.kind==Kind::InventoryEvent)&&association!=programs[index].origin.record)
             return fail("script owner SCRI differs from original master");
         }
       }

@@ -5,8 +5,7 @@ uint32_t Fo3PlayerSeatReference(){return gPlayerSeat.seated?gPlayerSeat.referenc
 static size_t Fo3PlayerSeatSlot(uint32_t reference,bool requireFree=false){
  if(!gPlayerSeat.scene)return SIZE_MAX;
  for(size_t i=0;i<gPlayerSeat.scene->slots.size();++i){const auto& s=gPlayerSeat.scene->slots[i];
-  if(s.reference!=reference||!s.program||s.sleep||s.idleMarker||
-     (s.marker.reference!=11&&s.marker.reference!=12&&s.marker.reference!=14&&s.marker.reference!=15))continue;
+  if(s.reference!=reference||!fo3seat::Usable(s))continue;
   if(!requireFree||!gPlayerSeat.scene->reservations->owners.count(fo3furniture::ReservationKey(reference,s.seat)))return i;
  }return SIZE_MAX;
 }

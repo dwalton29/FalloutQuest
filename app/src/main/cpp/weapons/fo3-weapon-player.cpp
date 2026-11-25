@@ -50,13 +50,13 @@ bool Player::PickupWeapon(uint32_t reference) {
 }
 bool Player::DropWeapon(uint64_t id, const fo3weapon::WorldPose &pose) {
   const auto *s = Weapon(id);
-  if (!s || s->count != 1 || !fo3weapon::ValidPose(pose) ||
+  if (!s || (s->equipped&&s->equipmentLocked) || s->count != 1 || !fo3weapon::ValidPose(pose) ||
       state_.worldWeapons.size() >= 10000) return false;
   const auto &item = catalog_->items.at(s->formId);
   if (!item.weapon.Physical() || !item.playable || item.script ||
       item.questItem || item.cannotDrop) return false;
   Stack instance = *s;
-  instance.equipped = false;
+  instance.equipped = false;instance.equipmentLocked=false;
   state_.worldWeapons.push_back({instance, pose});
   const auto it = std::find_if(state_.inventory.begin(), state_.inventory.end(),
                              [&](const Stack &v) {return v.id == id;});
@@ -579,6 +579,15 @@ bool Player::SetActorHostile(uint32_t reference,uint32_t target) {
   if(old!=state_.actors.end())a=old->second;
   else {a.cell=t->second.cell;a.world=t->second.world;a.position={t->second.x,t->second.y,t->second.z};}
   a.hostile=target;return UpdateActor(reference,a);
+}
+bool Player::ScriptEquippedItem(uint32_t actor,uint32_t form,bool& equipped)const{
+  const auto* contents=actor==PlayerRef?&state_.inventory:ContainerContents(actor);
+  if(!contents)return false;
+  const auto* weapon=actor==PlayerRef?EquippedWeapon():ActorWeapon(actor);
+  equipped=(weapon&&weapon->formId==form)||std::any_of(contents->begin(),contents->end(),[&](const auto& stack){
+    return stack.formId==form&&stack.equipped;
+  });
+  return true;
 }
 const Stack* Player::ActorWeapon(uint32_t reference) const {
   const auto* c=ContainerContents(reference);if(!c)return nullptr;

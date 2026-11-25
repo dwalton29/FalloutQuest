@@ -104,6 +104,7 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       if(eat&&m.reference==12){enter="chairrightsit";loop="chairdynamicidle";exit="chairrightstand";}
       if(eat&&m.reference==14){enter="chairfrontsit";loop="chairdynamicidle";exit="chairfrontstand";}
       if(eat&&m.reference==15){enter="sitdownstool";loop="stooldynamicidle";exit="standupstoolnormal";}
+      if(eat&&m.reference==16){enter="podenter";loop="podsitidle3rdperson";exit="podexit";}
       if(eat&&m.reference==17){enter="floorsitenter";loop="floorsitdynamicidle";exit="floorexit";}
       const auto loadProgram=[&](auto& cache,const char* begin,const char* idle,const char* end)->std::shared_ptr<const Program>{
         if(!begin)return {};

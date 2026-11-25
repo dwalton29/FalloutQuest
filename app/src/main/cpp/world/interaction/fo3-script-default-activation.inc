@@ -28,6 +28,11 @@ bool DeliverFo3ScriptDefaultActivation(uint32_t reference,uint32_t activator){
         if(door!=player.Definitions().references.end())fo3audio::Open(door->second.base);
         FlushFo3PlayerState();return true;
     }
+    const auto object=player.Definitions().references.find(reference);
+    if(object!=player.Definitions().references.end()&&player.Definitions().pipboy.furniture.count(object->second.base)){
+        bool disabled=true;std::string error;
+        return player.ReferenceDisabled(reference,disabled,error)&&!disabled&&BeginFo3PlayerSit(reference);
+    }
     if(player.CanScriptActivateContainer(reference)){
         if(!player.OpenScriptContainer(reference))return false;
         FlushFo3PlayerState();return true;

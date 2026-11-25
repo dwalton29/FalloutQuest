@@ -122,6 +122,7 @@ static void AidTests() {
   c.pipboy.magic[16]={MagicDetrimental|MagicRecover,MagicValue,5,0,UINT32_MAX,0,"Reduced Strength"};
   c.pipboy.magic[18]={0,MagicScript,UINT32_MAX,800,UINT32_MAX,0,"Unsupported"};
   c.pipboy.aid[11].effects={{12,20,0,0,0,16,{}}};
+  c.pipboy.formNames["healthtonic"]=15;
   c.pipboy.aid[13].effects={{14,2,0,10,0,5,{}}};
   c.pipboy.aid[15].effects={{12,5,0,10,0,16,{}}};
   c.pipboy.aid[17].effects={{12,20,0,0,0,16,{}},{18,0,0,0,0,0,{}}};
@@ -161,6 +162,10 @@ static void AidTests() {
   if(!restored.Restore(save,error)){std::cerr<<error<<'\n';std::abort();}
   unlink(save.c_str());
   assert(restored.Health()==85&&restored.CarryCapacity()==210&&!restored.WithdrawalActive(20));
+  fo3pipdata::ResultScript dispel;dispel.source="Player.Dispel HealthTonic";
+  assert(p.ExecuteDialogueResult(dispel,error)&&p.ExecuteDialogueResult(dispel,error));
+  p.AdvanceAid(10);
+  assert(p.Health()==85&&p.WithdrawalActive(20));
   restored.AdvanceAid(10);
   assert(restored.Health()==100&&restored.EffectiveSpecial(0)==3&&restored.WithdrawalActive(20));
 }

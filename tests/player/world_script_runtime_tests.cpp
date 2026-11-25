@@ -18,7 +18,7 @@ struct GpuObject {
  std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;int q2401AnimationBone=1;
  float q2016PlacementMatrix[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
  std::string baseRecordType{};
- float q2400DoorTransform[16]{},scriptDiffuseOffset[2]{},materialAlpha=1,emissiveColor[3]{},specularColor[3]{};
+ float q2400DoorTransform[16]{},scriptDiffuseRows[2][4]{},emissiveMult=1,materialAlpha=1,emissiveColor[3]{},specularColor[3]{};
 };
 std::vector<GpuObject> gObjects;
 bool Fo3WorldReferenceHidden(uint32_t){return false;}
@@ -52,6 +52,8 @@ uint64_t gQ230NpcResidenceRevision=0;
 ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
 bool Q2400FindSwingDoorObject(uint32_t){return !defaultTeleport.valid;}
 namespace fo3audio {void Open(uint32_t){}void Close(uint32_t){}}
+static uint32_t occupiedSeat=0;
+bool BeginFo3PlayerSit(uint32_t ref){occupiedSeat=ref;return true;}
 #include "world/interaction/fo3-script-default-activation.inc"
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
 void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
@@ -280,7 +282,59 @@ static void OriginalSecretDoor(const char* path){
  Check(!player.PrepareActivationTransaction(parent,fo3player::PlayerRef,error,8),"activation chains remain bounded");
  std::cout<<"Original tunnel switch: XAPR link, half-second delay, action reference, secret OnActivate and door opening passed\n";
 }
+bool LoadQuestObjectClips(const std::string&,std::vector<fo3script::AnimationSequence>&);
+static void OriginalVault112Access(const char* master,const std::string& meshes){
+ fo3player::Catalog c;std::string error;Check(fo3player::LoadCatalog(master,c,error),"Vault 112 catalogue");
+ gPlayerSession=std::make_unique<fo3player::Session>(c);auto& player=gPlayerSession->player;
+ player.RegisterOriginalActors();
+ const auto id=[&](const char* name){return c.pipboy.formNames.at(name);};
+ const uint32_t outer=id("smithcaseygarageextdoor"),hatch=id("vault112secrethatchref"),gear=id("vgeardoorr112ref");
+ const auto enter=[&](uint32_t door){
+   Check(player.CanOpenDoor(door),"real load door access");
+   const auto& link=c.doorTeleports.at(door);Check(link.valid,"real load door destination");
+   const auto& target=c.pipboy.targets.at(link.destinationDoorRefFormId);
+   gCurrentCellFormId=target.cell;gExteriorWorldspaceQ1890=target.world;
+   player.SetScriptPlayerLocation(link.x,link.y,link.z,target.cell,target.world);
+ };
+ enter(outer);Check(gCurrentCellFormId==c.pipboy.targets.at(hatch).cell,"entered Smith Casey's Garage");
+ auto models=std::make_shared<fo3script::AnimationRegistry>();
+ const uint32_t garageSwitch=0xac3bc,panel=0x4ec6f;
+ for(const auto& model:std::vector<std::pair<uint32_t,std::string>>{
+      {hatch,"dungeons/utility/rooms/utlrmstairshatch01.nif"},{gear,"dungeons/vaultruined/doors/vgeardoorr112.nif"},
+      {garageSwitch,"clutter/electricalswitch02.nif"},{panel,"dungeons/vault/accessories/controlpanelvault01.nif"}}){
+   Check(LoadQuestObjectClips(meshes+"/"+model.second,(*models)[model.first]),model.second.c_str());
+ }
+ player.SetScriptAnimationRegistry(models);defaultTeleport={};localOpen=false;
+ fo3worldscript::ResetSpeech();fo3worldscript::parentActivations.clear();fo3worldscript::seconds=0;
+ player.SetScriptRuntimeClock(0,0);
+ const auto activate=[&](uint32_t reference){
+   auto plan=player.PrepareActivationTransaction(reference,fo3player::PlayerRef,error);
+   if(!plan)std::cerr<<"activation "<<std::hex<<reference<<std::dec<<" "<<error<<std::endl;
+   Check(plan&&player.CommitScriptTransaction(*plan),"commit real activation");
+   fo3worldscript::Actions();
+ };
+ Check(player.IsActivationParent(hatch,garageSwitch),"switch is an original activation parent");
+ activate(garageSwitch);
+ for(int tick=1;tick<=5;++tick){fo3worldscript::seconds=tick*.25;player.SetScriptRuntimeClock(tick*.25,.25);fo3worldscript::Actions();}
+ if(player.ScriptOpenState(hatch)!=1){
+   auto child=player.PrepareActivationTransaction(hatch,garageSwitch,error);
+   std::cerr<<"Garage hatch state "<<player.ScriptOpenState(hatch)<<" queued parents "<<fo3worldscript::parentActivations.size()<<" original child "<<(child?"prepared":error)<<std::endl;
+ }
+ Check(player.ScriptOpenState(hatch)==1,"garage switch opened remote hatch");
+ enter(0x18617);Check(gCurrentCellFormId==c.pipboy.targets.at(gear).cell,"entered Vault 112");
+ localOpen=false;activate(panel);
+ for(int tick=1;tick<=100&&player.ScriptOpenState(gear)!=1;++tick){
+   fo3worldscript::seconds=2+tick*.25;player.SetScriptRuntimeClock(fo3worldscript::seconds,.25);
+   auto plan=player.PrepareReferenceEventTransaction(panel,"GameMode",0,error);
+   if(!plan)std::cerr<<"vault control panel: "<<error<<std::endl;
+   Check(plan&&player.CommitScriptTransaction(*plan),"original gear control script");
+   fo3worldscript::Actions();
+ }
+ Check(player.ScriptOpenState(gear)==1,"Vault 112 control panel opened gear door");
+ std::cout<<"Smith Casey's Garage exterior link, switch, delayed hatch, Vault 112 load door and gear control opened in original-data replay\n";
+}
 int main(int argc,char** argv){try{
+ if(argc==4&&std::string(argv[3])=="vault112"){OriginalVault112Access(argv[1],argv[2]);return 0;}
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
  c.references[10].base=100;c.references[10].cell=1;c.pipboy.targets[10].cell=1;
  c.pipboy.triggerPrimitives[10]={{2,2,2},1,true};c.eventBaseScripts[100]=200;c.pipboy.objectReferenceScripts[10]={200,100};
@@ -561,5 +615,6 @@ int main(int argc,char** argv){try{
   Check(fo3worldscript::parentActivations.empty(),"cyclic activation data cannot keep dispatching indefinitely");
  }
  if(argc>1){OriginalCombatVoice(argv[1]);OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);OriginalHallwayIntervention(argv[1]);OriginalSecretDoor(argv[1]);}
+ if(argc>2)OriginalVault112Access(argv[1],argv[2]);
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

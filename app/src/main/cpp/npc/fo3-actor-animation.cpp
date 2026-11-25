@@ -5,6 +5,27 @@
 #include <functional>
 
 namespace fo3anim {
+void DiffuseTransform::ShaderRows(float (&rows)[2][4]) const {
+  const float c=std::cos(rotation),s=std::sin(rotation);
+  const auto apply=[&](float u,float v){
+    if(method==1){ // 3ds Max: center * scale * rotate * translate * inverse(center).
+      u+=offset[0]-center[0]; v+=offset[1]-center[1];
+      return std::array<float,2>{center[0]+scale[0]*(c*u-s*v),center[1]+scale[1]*(s*u+c*v)};
+    }
+    u=u*scale[0]+offset[0]; v=v*scale[1]+offset[1];
+    if(method==2)v=1-v; // Maya's V axis is inverted about the unit square.
+    u-=center[0]; v-=center[1];
+    return std::array<float,2>{center[0]+c*u-s*v,center[1]+s*u+c*v};
+  };
+  const auto origin=apply(0,0),u=apply(1,0),v=apply(0,1);
+  for(int axis=0;axis<2;++axis){
+    // Store differences from identity so an untouched draw uses zero defaults.
+    rows[axis][0]=u[axis]-origin[axis]-(axis==0);
+    rows[axis][1]=v[axis]-origin[axis]-(axis==1);
+    rows[axis][2]=origin[axis];
+  }
+}
+
 Matrix Identity() { return {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; }
 Matrix Multiply(const Matrix &a, const Matrix &b) {
   Matrix m{};
@@ -381,7 +402,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
       if(!property.values.keys.empty())value=property.values.keys.front().value;
       for(const auto& key:property.values.keys){if(key.time>time)break;value=key.value;}
     }else if(!property.values.keys.empty())value=Evaluate(property.values,time,c.start,c.stop,false);
-    if(p.propertyBones[i]>=0)p.properties.push_back({p.propertyBones[i],property.kind,value});
+    if(p.propertyBones[i]>=0)p.properties.push_back({p.propertyBones[i],property.kind,value,property.diffuse});
   }
   const auto skeletonStarted=std::chrono::steady_clock::now();
   if(timings) timings->clipUs=std::chrono::duration<double,std::micro>(skeletonStarted-started).count();

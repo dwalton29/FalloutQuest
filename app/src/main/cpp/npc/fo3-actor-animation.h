@@ -43,14 +43,21 @@ struct Track {
   Channel translation, rotation, scale;
   std::array<Channel, 3> xyzRotation;
 };
-enum class PropertyKind { Visibility, Alpha, Emissive, Specular,EmitterRate,EmitterActive,DiffuseOffsetU,DiffuseOffsetV };
+enum class PropertyKind { Visibility, Alpha, Emissive, Specular,EmitterRate,EmitterActive,DiffuseOffsetU,DiffuseOffsetV,DiffuseScaleU,DiffuseScaleV,DiffuseRotation,EmissiveMultiplier };
+struct DiffuseTransform {
+  std::array<float,2> offset{}, scale{1,1}, center{};
+  float rotation=0;
+  uint32_t method=1;
+  void ShaderRows(float (&rows)[2][4]) const;
+};
 struct PropertyTrack {
+  DiffuseTransform diffuse;
   std::string bone;
   PropertyKind kind=PropertyKind::Visibility;
   std::array<float,4> base{};
   Channel values;
 };
-struct PropertyValue {int bone=-1;PropertyKind kind=PropertyKind::Visibility;std::array<float,4> value{};};
+struct PropertyValue {int bone=-1;PropertyKind kind=PropertyKind::Visibility;std::array<float,4> value{}; DiffuseTransform diffuse;};
 struct TextKey {
   float time = 0;
   std::string text;

@@ -2077,7 +2077,8 @@ private:
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
                         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
                         gSceneFloorZQ1730+(bodyCentreY-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
-                        gCurrentCellFormId,gExteriorWorldspaceQ1890,GetFo3PlayerCollisionRadius()*FO3_UNITS_PER_METRE_Q715);
+                        gCurrentCellFormId,gExteriorWorldspaceQ1890,GetFo3PlayerCollisionRadius()*FO3_UNITS_PER_METRE_Q715,
+                        gPlayerSeat.seated?&gPlayerSeat.sitting.actorOrigin:nullptr);
                     scriptPlayer.SetScriptPlayerHeading(gQ210Head[3]);
                     if(!scriptMenu)fo3worldscript::SpeechTick();
                     if(!scriptMenu&&!Fo3PipboyFocus())

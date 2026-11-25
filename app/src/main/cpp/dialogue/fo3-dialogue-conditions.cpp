@@ -129,10 +129,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 161:if(!who.packageKnown){error="package not executing";return false;}value=who.package==c.a;return true;
   case 182:{
     if(!d.formNames.empty()&&!p.Definitions().items.count(c.a)){error="equipped item unavailable";return false;}
-    value=0;
-    if(pc){for(const auto& s:state.inventory)if(s.formId==c.a&&s.equipped){value=1;break;}return true;}
-    const auto* contents=p.ContainerContents(who.reference);if(!contents){error="NPC equipped inventory unavailable";return false;}
-    for(const auto& s:*contents){if(s.formId==c.a&&s.equipped){value=1;break;}}
+    bool equipped=false;
+    if(!p.ScriptEquippedItem(pc?fo3player::PlayerRef:who.reference,c.a,equipped)){error="equipped inventory unavailable";return false;}
+    value=equipped;
     return true;
   }
   case 255:{

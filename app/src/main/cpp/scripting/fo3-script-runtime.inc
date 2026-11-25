@@ -30,9 +30,9 @@ class Expression {
       animationGroup=tokens[at++];
     if(syntaxOnly){
       size_t arguments=0;
-      if(query=="gethasnote"||query=="getinworldspace"||query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
+      if(query=="getequipped"||query=="gethasnote"||query=="getinworldspace"||query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
          query=="getpermanentactorvalue"||query=="getpcmiscstat"||query=="getisid"||
-         query=="getdetected"||query=="getiscurrentpackage"||query=="iscombattarget"||
+         query=="getdetected"||query=="getiscurrentpackage"||query=="iscombattarget"||query=="iskiller"||
          query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="getdeadcount"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getincellparam"||query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
@@ -94,6 +94,11 @@ class Expression {
     if(dot==std::string::npos&&(t=="player"||t=="getactionref"||t=="getself"||t=="getlinkedref")){
       value=float(form(t));return true;
     }
+    if(query=="isactor"){
+      const auto target=dot==std::string::npos?owner:form(t.substr(0,dot));
+      value=target==fo3player::PlayerRef||p.Definitions().actorPlacements.count(target)!=0;
+      return true;
+    }
     if(query=="getdetected"||query=="getiscurrentpackage"||query=="getisid"||query=="iscombattarget"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing actor query argument");
@@ -115,6 +120,16 @@ class Expression {
       if(p.ActorHealth(id)<0)return Fail("actor query reference unavailable");
       // The resident life model currently has alive and dead states.
       value=query=="getcombattarget"&&actor!=p.Snapshot().actors.end()?float(actor->second.hostile):0.f;return true;
+    }
+    if(query=="getequipped"){
+      const auto actor=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at>=tokens.size())return Fail("GetEquipped needs an item");
+      const auto item=form(tokens[at++]);
+      if(!p.Definitions().items.count(item))return Fail("equipped item unavailable");
+      bool equipped=false;
+      if(!p.ScriptEquippedItem(actor,item,equipped))return Fail("equipped inventory unavailable");
+      value=equipped;
+      return true;
     }
     if(query=="getitemcount"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -467,7 +482,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(quest!=catalog_->pipboy.quests.end())questConditions=&quest->second.conditions;
     }
     const fo3pipdata::ResultScript* container=nullptr;
-    if(origin.kind==ScriptProgramKind::ReferenceEvent||
+    if(origin.kind==ScriptProgramKind::ReferenceEvent||origin.kind==ScriptProgramKind::InventoryEvent||
         (origin.kind==ScriptProgramKind::QuestStageItem&&scriptId)){
       const auto found=catalog_->pipboy.scripts.find(scriptId);
       if(found!=catalog_->pipboy.scripts.end())container=&found->second;
@@ -644,6 +659,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     }
     case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
+    case C::Dispel:ok=c.form==PlayerRef&&DispelIngestible(c.index);break;
     case C::ChangeSpell:ok=c.form==PlayerRef&&SetAddiction(c.index,c.value!=0);break;
     case C::ActorValueDamage:ok=ChangeActorValueDamage(c.form,c.index,c.value,c.variable!=0);break;
     case C::ModifyActorValue:ok=ModifyActorValue(c.form,c.index,int(c.value));break;
@@ -739,10 +755,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
         if(ok){pendingScriptItems_.push_back({c.form,1});++scriptEffectRevision_;}
       }
       break;
-    case C::RemoveAllItems:ok=ScriptRemoveAllItems();break;
+    case C::RemoveAllItems:ok=ScriptRemoveAllItems(c.form,c.index,c.value!=0,c.variable!=0);break;
     case C::EquipItem:case C::UnequipItem:
       ok=c.type==C::EquipItem&&c.variable?ScriptEquipActorItem(c.index,c.form,c.value!=0):
-          ScriptEquipItem(c.form,c.type==C::EquipItem);break;
+          ScriptEquipItem(c.form,c.type==C::EquipItem,c.value!=0);break;
     case C::PipboyReset:case C::RadioRefresh:{fo3script::Action action;action.kind=c.type==C::PipboyReset?fo3script::ActionKind::PipboyReset:fo3script::ActionKind::RadioRefresh;ok=QueueScriptAction(std::move(action));break;}
     case C::TuneRadio:ok=TuneRadio(c.form);break;
     case C::RadioOff:ok=TuneRadio(0);break;
@@ -903,7 +919,7 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
   error="event transaction changed before publication";return false;
 }
 bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error,uint32_t filterForm,bool* requestsTalk) {
+                            uint32_t activator,std::string& error,uint32_t filterForm,bool* requestsTalk,uint32_t inventoryBase,uint64_t inventoryStack) {
   error.clear();
   const auto def=catalog_->eventPrograms.find(scriptId);
   if(def==catalog_->eventPrograms.end()) {error="script definition unavailable";return false;}
@@ -934,7 +950,8 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
       return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
-    ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::ReferenceEvent;
+    ScriptProgramOrigin origin;origin.kind=inventoryBase?ScriptProgramKind::InventoryEvent:ScriptProgramKind::ReferenceEvent;
+    origin.inventoryBase=inventoryBase;origin.inventoryStack=inventoryStack;
     origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.sourceLine;origin.filterForm=filterForm;
     if(!RunScript(body,owner,0,budget,error,scriptId,std::move(origin),requestsTalk)){
       error="line "+std::to_string(block.sourceLine)+": "+error;
@@ -975,9 +992,12 @@ float Player::QuestScriptDelay(uint32_t quest)const{
 } // namespace fo3player
 
 namespace fo3player {
-void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius){
+void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius,const std::array<float,3>* actorOrigin){
   if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)||!std::isfinite(triggerRadius)||triggerRadius<0)return;
-  scriptPlayerPosition_={x,y,z};scriptPlayerTriggerRadius_=triggerRadius;scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;TouchMerchantCells(cell);
+  // Trigger volumes use the body centre, while reference queries use the
+  // KF accumulation root of a seated actor, independently of tracked head pose.
+  if(actorOrigin&&!std::all_of(actorOrigin->begin(),actorOrigin->end(),[](float v){return std::isfinite(v);}))return;
+  scriptPlayerPosition_={x,y,z};scriptPlayerActorOrigin_=actorOrigin?*actorOrigin:scriptPlayerPosition_;scriptPlayerTriggerRadius_=triggerRadius;scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;TouchMerchantCells(cell);
 }
 void Player::SetScriptPlayerHeading(float yaw){
   scriptPlayerHeadingKnown_=std::isfinite(yaw);
@@ -1019,7 +1039,7 @@ bool Player::ScriptDistance(float& distance) const {
   if(!scriptPlayerPositionKnown_||found==catalog_->pipboy.targets.end())return false;
   const auto& ref=found->second;
   if(ref.cell!=scriptPlayerCell_ && (!ref.world||ref.world!=scriptPlayerWorld_))return false;
-  const double dx=double(ref.x)-scriptPlayerPosition_[0],dy=double(ref.y)-scriptPlayerPosition_[1],dz=double(ref.z)-scriptPlayerPosition_[2];
+  const double dx=double(ref.x)-scriptPlayerActorOrigin_[0],dy=double(ref.y)-scriptPlayerActorOrigin_[1],dz=double(ref.z)-scriptPlayerActorOrigin_[2];
   const double d=std::sqrt(dx*dx+dy*dy+dz*dz);
   if(!std::isfinite(d)||d>std::numeric_limits<float>::max())return false;
   distance=float(d);return true;
@@ -1104,28 +1124,154 @@ bool Player::ScriptRemoveItem(uint32_t form,int32_t count,uint32_t receiver){
   }
   ++revision_;return true;
 }
-bool Player::ScriptRemoveAllItems(){
-  auto& items=state_.inventory;const auto size=items.size();
-  items.erase(std::remove_if(items.begin(),items.end(),[&](const Stack& stack){
+bool Player::ScriptRemoveAllItems(uint32_t source,uint32_t destination,bool keepOwnership,bool silent){
+  // The enclosing script transaction owns the staged inventories, including
+  // any leveled contents first realized by this command.
+  auto prepare=[&](uint32_t ref){
+    if(ref==PlayerRef)return true;
+    const auto placed=catalog_->references.find(ref);
+    return placed!=catalog_->references.end()&&PrepareInventory(ref,catalog_->actorInventories.count(placed->second.base)!=0);
+  };
+  if(!prepare(source)||(destination&&!prepare(destination)))return false;
+  if(source==destination)return true;
+  auto inventory=[&](uint32_t ref)->std::vector<Stack>& {
+    return ref==PlayerRef?state_.inventory:state_.containers.at(ref);
+  };
+  auto& from=inventory(source);
+  const auto movable=[&](const Stack& stack){
     const auto& item=catalog_->items.at(stack.formId);
-    // Original RemoveAllItems without a destination preserves quest objects and
-    // unplayable biped equipment (notably the player's Pip-Boy).
-    return !IsQuestObject(stack.formId)&&!(item.kind==ItemKind::Armour&&!item.playable&&item.bipedMask);
-  }),items.end());
-  if(items.size()!=size)++revision_;
+    return !(source==PlayerRef&&IsQuestObject(stack.formId))&&
+           !(item.kind==ItemKind::Armour&&!item.playable&&item.bipedMask);
+  };
+  if(source==PlayerRef){
+    std::vector<std::pair<uint64_t,uint32_t>> unequipped;
+    for(auto& stack:from)if(stack.equipped&&movable(stack)&&catalog_->eventBaseScripts.count(stack.formId)){
+      stack.equipped=false;
+      unequipped.emplace_back(stack.id,stack.formId);
+    }
+    for(const auto& item:unequipped)if(!DispatchEquipmentEvent(item.first,item.second,"OnUnequip"))return false;
+  }
+  const auto count=static_cast<size_t>(std::count_if(from.begin(),from.end(),movable));
+  if(!count)return true;
+  if(destination){
+    auto& to=inventory(destination);
+    if(count>10000-to.size())return false;
+    if(source==PlayerRef&&destination!=PlayerRef){
+      size_t total=count;
+      for(const auto& contents:state_.containers)total+=contents.second.size();
+      if(total>30000)return false;
+    }
+    to.reserve(to.size()+count);
+  }
+  auto* actor=state_.actors.Edit(source);
+  for(const auto& stack:from){
+    if(!movable(stack))continue;
+    if(actor&&actor->equippedWeapon==stack.id){actor->equippedWeapon=0;actor->weaponLocked=false;}
+    if(!destination)continue;
+    auto transferred=stack;
+    transferred.equipped=false;transferred.equipmentLocked=false;
+    if(!keepOwnership)transferred.ownership={};
+    inventory(destination).push_back(transferred);
+    if(destination==PlayerRef&&!silent&&pendingScriptItems_.size()<128){
+      pendingScriptItems_.push_back({stack.formId,stack.count});++scriptEffectRevision_;
+    }
+  }
+  from.erase(std::remove_if(from.begin(),from.end(),movable),from.end());
+  ++revision_;
   return true;
 }
-bool Player::ScriptEquipItem(uint32_t form,bool equip){
+bool Player::DispatchEquipmentEvent(uint64_t stack,uint32_t form,const char* event){
+  const auto script=catalog_->eventBaseScripts.find(form);
+  if(script==catalog_->eventBaseScripts.end())return true;
+  const auto def=catalog_->eventPrograms.find(script->second);
+  if(def==catalog_->eventPrograms.end())return true;
+  const auto name=fo3script::Lower(event);
+  if(std::none_of(def->second.blocks.begin(),def->second.blocks.end(),[&](const auto& b){return b.event==name;}))return true;
+  std::string error;
+  if(inventoryEventCandidate_){
+    if(RunEquipmentEvent(stack,script->second,event,error))return true;
+  }else{
+    auto plan=PrepareScriptTransaction([&](Player& candidate,std::string& e){
+      return candidate.RunEquipmentEvent(stack,script->second,event,e);
+    },error,bool(inventoryScriptPublisher_));
+    if(plan&&!plan->HasReferenceChanges()&&CommitScriptTransaction(*plan))return true;
+    if(plan&&plan->HasReferenceChanges()){
+      if(inventoryScriptPublisher_&&inventoryScriptPublisher_(std::move(plan)))return true;
+      error="inventory script world publication unavailable";
+    }
+  }
+  LogScriptEventError(script->second,event,error);
+  // Like combat events, an unsupported handler cannot reverse a user's
+  // physical action. An enclosing script can still roll its transaction back.
+  return !inventoryEventCandidate_;
+}
+bool Player::RunEquipmentEvent(uint64_t stack,uint32_t script,const char* event,std::string& error){
+  if(inventoryEventDepth_>=8){error="equipment event nesting exceeded";return false;}
+  auto findStack=[&]() -> Stack* {
+    for(auto& s:state_.inventory)if(s.id==stack)return &s;
+    for(auto& container:state_.containers)for(auto& s:container.second)if(s.id==stack)return &s;
+    for(auto& weapon:state_.worldWeapons)if(weapon.instance.id==stack)return &weapon.instance;
+    return nullptr;
+  };
+  auto* current=findStack();if(!current){error="inventory instance no longer present";return false;}
+  auto instance=std::make_shared<ItemScriptInstance>();
+  if(current->scriptInstance)*instance=*current->scriptInstance;
+  else{
+    // FF is the engine's dynamic-reference namespace. Resolve collisions
+    // independently of save stack ID width, including held and stored copies.
+    std::unordered_set<uint32_t> used;
+    auto remember=[&](const Stack& s){if(s.scriptInstance)used.insert(s.scriptInstance->reference);};
+    for(const auto& s:state_.inventory)remember(s);
+    for(const auto& c:state_.containers)for(const auto& s:c.second)remember(s);
+    for(const auto& w:state_.worldWeapons)remember(w.instance);
+    uint32_t slot=uint32_t(stack&0x00ffffffu);
+    while(!slot||used.count(0xff000000u|slot)||catalog_->references.count(0xff000000u|slot))slot=(slot+1)&0x00ffffffu;
+    instance->reference=0xff000000u|slot;
+  }
+  if(scriptReference_==instance->reference){error="recursive inventory event";return false;}
+  current->scriptInstance=instance;
+  const uint64_t owner=uint64_t(instance->reference)<<32;
+  for(const auto& v:instance->numbers)state_.pipboy.dialogueVariables[owner|v.first]=v.second;
+  for(const auto& v:instance->references)state_.pipboy.referenceVariables[owner|v.first]=v.second;
+  ++inventoryEventDepth_;
+  const bool ok=RunSourceEventDirect(script,event,instance->reference,PlayerRef,error,0,nullptr,current->formId,stack);
+  --inventoryEventDepth_;
+  // The interpreter uses reference-and-slot keys. Move this instance's
+  // locals back into its stack before publishing or serializing player state.
+  for(const auto& slot:catalog_->pipboy.scripts.at(script).variables){
+    const uint64_t key=owner|slot.first;
+    auto n=state_.pipboy.dialogueVariables.find(key);
+    if(n!=state_.pipboy.dialogueVariables.end()){instance->numbers[slot.first]=n->second;state_.pipboy.dialogueVariables.erase(n);}
+    else instance->numbers.erase(slot.first);
+    auto ref=state_.pipboy.referenceVariables.find(key);
+    if(ref!=state_.pipboy.referenceVariables.end()){instance->references[slot.first]=ref->second;state_.pipboy.referenceVariables.erase(ref);}
+    else instance->references.erase(slot.first);
+  }
+  if(auto* saved=findStack())saved->scriptInstance=std::move(instance);
+  return ok;
+}
+bool Player::ScriptEquipItem(uint32_t form,bool equip,bool lock){
   const auto item=catalog_->items.find(form);
   if(item==catalog_->items.end()||!(item->second.kind==ItemKind::Weapon||(item->second.kind==ItemKind::Armour&&item->second.bipedMask)))return false;
-  if(!equip){for(auto& stack:state_.inventory)if(stack.formId==form&&stack.equipped){stack.equipped=false;++revision_;}return true;}
-  // Resolve a base form to its canonical saved instance; never add a missing item.
+  if(!equip){
+    std::vector<uint64_t> removed;
+    for(auto& stack:state_.inventory)if(stack.formId==form&&(stack.equipped||stack.equipmentLocked!=lock)){
+      if(stack.equipped)removed.push_back(stack.id);
+      stack.equipped=false;stack.equipmentLocked=lock;++revision_;
+    }
+    for(auto id:removed)if(!DispatchEquipmentEvent(id,form,"OnUnequip"))return false;
+    return true;
+  }
   uint64_t selected=0;float condition=-1;
   for(const auto& stack:state_.inventory)if(stack.formId==form){
-    if(stack.equipped)return true;
+    if(stack.equipped){selected=stack.id;break;}
     if(stack.condition>condition){selected=stack.id;condition=stack.condition;}
   }
-  return selected&&Equip(selected,true);
+  if(!selected||!Equip(selected,true))return false;
+  for(auto& stack:state_.inventory)if(stack.id==selected&&stack.equipmentLocked!=lock){
+    stack.equipmentLocked=lock;++revision_;break;
+  }
+  return true;
 }
 bool Player::MakeScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner,ScriptMessage& request)const{
   const auto m=catalog_->pipboy.messages.find(form);
@@ -1223,7 +1369,15 @@ bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
     }
   }
   if(catalog_->activatorBases.count(base)&&catalog_->activationChildren.count(reference))return parents();
-  if(reference!=scriptReference_)return false;
+  if(catalog_->pipboy.furniture.count(base)&&activator==PlayerRef){
+    bool disabled=true;std::string error;
+    if(!ReferenceDisabled(reference,disabled,error)||disabled)return false;
+    fo3script::Action seat;seat.kind=fo3script::ActionKind::DefaultActivate;seat.reference=reference;seat.flags=activator;
+    return QueueScriptAction(std::move(seat))&&parents();
+  }
+  // A control panel may delegate a linked door's native action. Door
+  // access and the original activator are checked here and again at delivery.
+  if(reference!=scriptReference_&&!catalog_->doorBases.count(base))return false;
   if(placed!=catalog_->references.end()&&catalog_->items.count(placed->second.base)){
     // Commit inventory, world removal, and the rest of OnActivate together.
     if(activator!=PlayerRef||pendingScriptItems_.size()>=128||!PickupPlacedItem(reference,true))return false;
@@ -1556,7 +1710,7 @@ void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t
 
 namespace fo3player {
 bool Player::ScriptReferenceLocation(uint32_t id,fo3pipdata::Location& out)const{
-  if(id==PlayerRef){if(!scriptPlayerPositionKnown_)return false;out={scriptPlayerCell_,scriptPlayerWorld_,scriptPlayerPosition_[0],scriptPlayerPosition_[1],0};return true;}
+  if(id==PlayerRef){if(!scriptPlayerPositionKnown_)return false;out={scriptPlayerCell_,scriptPlayerWorld_,scriptPlayerActorOrigin_[0],scriptPlayerActorOrigin_[1],0};return true;}
   const auto actor=state_.actors.find(id);
   if(actor!=state_.actors.end()){const auto& a=actor->second;out={a.cell,a.world,a.position[0],a.position[1],a.yaw};return true;}
   const auto placed=catalog_->pipboy.targets.find(id);if(placed==catalog_->pipboy.targets.end())return false;

@@ -1,7 +1,9 @@
 #include "mq01_test_conversation.h"
+#include "scripting/fo3-script-master-match.h"
 #include "ui/pause/fo3-debug-menu.h"
 #include "ui/terminal/fo3-terminal-state.h"
 bool LoadQuestObjectClips(const std::string&,std::vector<fo3script::AnimationSequence>&);
+bool SitInQuestFurniture(const fo3pipdata::Definitions&,uint32_t,const std::string&,uint8_t&,std::array<float,3>&,std::array<float,3>&);
 #include <cassert>
 #include <iostream>
 #include <unistd.h>
@@ -11,7 +13,9 @@ bool LoadQuestObjectClips(const std::string&,std::vector<fo3script::AnimationSeq
 // gates; subsequent progression is owned by original INFO results.
 static void Original(const char* path,const std::string& meshRoot){
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
-  const auto save="/tmp/fq-mq01-progression-"+std::to_string(getpid());
+  char savePath[]="/tmp/fq-mq01-progression-XXXXXX";
+  const int fd=mkstemp(savePath);assert(fd>=0);close(fd);
+  const std::string save(savePath);
   fo3player::Player first(catalog);first.RegisterOriginalActors();assert(first.Add(0xf,100));
   // A direct-world-spawn save has no Escape handoff. Exercise the actual
   // generic debug menu rather than synthesising a post-Escape quest snapshot.
@@ -29,7 +33,7 @@ static void Original(const char* path,const std::string& meshRoot){
     assert(first.ItemCount(0xf)==0&&first.Snapshot().pipboy.quests.at(0x14e87).stage==40);
     assert(first.Snapshot().pipboy.quests.at(0x14e87).objectives.at(40).displayed);
   }
-  assert(first.Save(save,error));fo3player::Player travelled(catalog);assert(travelled.Restore(save,error));
+  assert(first.Save(save,error));fo3player::Player travelled(catalog);if(!travelled.Restore(save,error)){std::cerr<<"Failed to restore Moriarty save: "<<error<<std::endl;std::abort();}
   assert(travelled.Snapshot().pipboy.quests.at(0x14e87).stage==40&&travelled.ItemCount(0xf)==0);
   // Return to Megaton before continuing. Greeting/said-once state survives;
   // simply opening another conversation cannot charge Moriarty's fee again.
@@ -289,6 +293,116 @@ static void Original(const char* path,const std::string& meshRoot){
   fo3player::Player listened(catalog);assert(listened.Restore(save,error));unlink(save.c_str());
   assert(listened.Snapshot().pipboy.quests.at(pursuits).stage==60);
   std::cout<<"Dad's journal end result displayed Vault 112 objective and survived reload\n";
+
+  if(!meshRoot.empty()){
+    const auto suit=id("vaultsuit112"),shell=id("mq04playerpodshellref"),chair=id("mq04playerpod");
+    const auto& pod=catalog.pipboy.targets.at(shell);
+    listened.SetScriptPlayerLocation(pod.x,pod.y,pod.z,pod.cell,pod.world);
+    {
+      Conversation robot(listened,id("mq03robobrain01"));robot.Start();
+      assert(listened.ItemCount(suit)==1&&listened.Snapshot().pipboy.quests.at(pursuits).stage==65);
+    }
+    // Vault 112 can also be discovered before Three Dog or Doctor Li.
+    fo3player::Player explorer(catalog);explorer.RegisterOriginalActors();
+    {
+      Conversation robot(explorer,id("mq03robobrain01"));robot.Start();
+      assert(explorer.ItemCount(suit)==1&&explorer.Snapshot().pipboy.quests.at(pursuits).stage==65);
+      const auto& gear=explorer.Snapshot().inventory;
+      auto provided=std::find_if(gear.begin(),gear.end(),[&](const auto& stack){return stack.formId==suit;});
+      assert(provided!=gear.end()&&explorer.Equip(provided->id)&&explorer.Snapshot().pipboy.quests.at(pursuits).stage==70);
+    }
+    auto animations=std::make_shared<fo3script::AnimationRegistry>();
+    assert(LoadQuestObjectClips(meshRoot+"/furniture/tlpodplayer01.nif",(*animations)[shell]));
+    listened.SetScriptAnimationRegistry(animations);
+    auto activate=[&](uint32_t ref){
+      auto plan=listened.PrepareActivationTransaction(ref,fo3player::PlayerRef,error);
+      if(!plan)std::cerr<<"Pod activation "<<std::hex<<ref<<std::dec<<": "<<error<<std::endl;
+      assert(plan&&listened.CommitScriptTransaction(*plan));
+    };
+    activate(shell);
+    fo3player::ScriptMessage noSuit;
+    assert(listened.PollScriptMessage(noSuit)&&noSuit.form==id("mq04podnosuitmessage"));
+    const auto& inventory=listened.Snapshot().inventory;
+    const auto clothes=std::find_if(inventory.begin(),inventory.end(),[&](const auto& stack){return stack.formId==suit;});
+    assert(clothes!=inventory.end()&&listened.Equip(clothes->id));
+    const auto suitOn=fo3dialogue::VariableKey(catalog.pipboy,"MQ03.SuitOn");
+    assert(listened.Snapshot().pipboy.quests.at(pursuits).stage==70);
+    assert(listened.Snapshot().pipboy.dialogueVariables.at(suitOn)==1);
+    activate(shell);
+    bool opening=false;assert(listened.ScriptAnimationPlaying(shell,opening,"Forward")&&opening);
+    activate(chair);
+    bool delegated=false;fo3script::Action action;
+    while(listened.PollScriptAction(action))
+      if(action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==chair)delegated=true;
+    assert(delegated);
+    uint8_t seatMarker=0;std::array<float,3> seatedEye{},actorOrigin{};
+    assert(SitInQuestFurniture(catalog.pipboy,chair,meshRoot,seatMarker,seatedEye,actorOrigin));
+    const auto& placement=catalog.pipboy.targets.at(chair);
+    listened.SetScriptPlayerLocation(seatedEye[0],seatedEye[1],(seatedEye[2]+placement.z)*.5f,placement.cell,placement.world,0,&actorOrigin);
+    listened.SetFurnitureUse(chair,seatMarker,3);
+    const auto chairState=fo3dialogue::VariableKey(catalog.pipboy,"MQ04.PlayerInChair");
+    for(int tick=1;tick<=66;++tick){
+      listened.SetScriptRuntimeClock(tick*.25,.25);
+      auto plan=listened.PrepareReferenceEventTransaction(chair,"GameMode",0,error);
+      if(!plan)std::cerr<<"Vault 112 chair tick: "<<error<<std::endl;
+      assert(plan&&listened.CommitScriptTransaction(*plan));
+      if(tick==1){
+        bool closing=false;
+        if(!listened.ScriptAnimationPlaying(shell,closing,"Backward")||!closing)
+          std::cerr<<"Seated origin "<<actorOrigin[0]<<","<<actorOrigin[1]<<","<<actorOrigin[2]<<" eye "<<seatedEye[0]<<","<<seatedEye[1]<<","<<seatedEye[2]<<" chair "<<placement.x<<","<<placement.y<<","<<placement.z<<" chair var "<<(listened.Snapshot().pipboy.dialogueVariables.count(chairState)?listened.Snapshot().pipboy.dialogueVariables.at(chairState):0)<<std::endl;
+        assert(closing);
+        assert(listened.Snapshot().pipboy.dialogueVariables.at(chairState)==1);
+      }
+    }
+    assert(listened.Snapshot().pipboy.dialogueVariables.at(chairState)==2);
+    std::cout<<"Original pod chair marker, close animation, and 14-second countdown reached the simulation handoff\n";
+    const auto simulation=id("mq04");
+    const auto simScript=catalog.pipboy.quests.at(simulation).script;
+    listened.SetScriptEventDiagnostic([&](const std::string& diagnostic){
+      if(diagnostic.find("SCPT "+std::to_string(simScript)+" ")!=std::string::npos)std::cerr<<diagnostic<<std::endl;
+    });
+    auto runSimulation=[&](int tick){
+      listened.SetScriptRuntimeClock(17+tick*.25,.25);
+      listened.PumpWorldAwareGameMode(.25,{},[&](auto plan){
+        fo3script::ScriptMasterMatch match;std::atomic<bool> cancel{false};
+        if(!fo3script::MatchScriptProgramsToMaster(path,plan->ExecutedScripts(),match,cancel,error)){
+          std::cerr<<"Vault 112 world publication: "<<error<<std::endl;return false;
+        }
+        return listened.CommitScriptTransaction(*plan);
+      });
+    };
+    for(int tick=0;tick<4&&!listened.Snapshot().playerMove.pending;++tick)runSimulation(tick);
+    const auto entry=listened.Snapshot().playerMove;
+    assert(entry.pending&&entry.marker==id("mq04startbench")&&entry.world==id("tranquilitylane"));
+    assert(listened.Snapshot().pipboy.dialogueVariables.at(suitOn)==0);
+    const auto outfit=id("mq04playeroutfit");
+    bool wearing=false;assert(listened.ScriptEquippedItem(fo3player::PlayerRef,outfit,wearing)&&wearing);
+    listened.SetFurnitureUse(0,0,0);
+    listened.SetScriptPlayerLocation(entry.position[0],entry.position[1],entry.position[2],entry.cell,entry.world);
+    listened.AcknowledgePlayerMove();
+    for(int tick=4;tick<48;++tick)runSimulation(tick);
+    assert(listened.Snapshot().pipboy.quests.at(pursuits).stage==200&&listened.Snapshot().pipboy.quests.at(simulation).stage==5);
+    std::cout<<"Original simulation entry equipped the outfit, completed Scientific Pursuits and started Tranquility Lane\n";
+    // Returning belongings from the same original storage is independently exercised.
+    fo3pipdata::ResultScript transfer;
+    const auto locker=id("mq04playercontainerref");
+    auto stored=listened.ContainerContents(locker);
+    assert(stored&&!stored->empty());
+    const auto belongings=*stored;
+    assert(listened.Save(save,error));
+    fo3player::Player returning(catalog);assert(returning.Restore(save,error));unlink(save.c_str());
+    transfer.source="MQ04PlayerContainerRef.RemoveAllItems Player";
+    assert(returning.ExecuteDialogueResult(transfer,error)&&returning.ContainerContents(locker)->empty());
+    assert(returning.Snapshot().pipboy.quests.at(pursuits).stage==200&&returning.Snapshot().pipboy.quests.at(simulation).stage==5);
+    const auto& returned=returning.Snapshot().inventory;
+    for(const auto& stack:belongings){
+      const auto it=std::find_if(returned.begin(),returned.end(),[&](const auto& current){return current.id==stack.id;});
+      assert(it!=returned.end()&&it->formId==stack.formId&&it->count==stack.count&&it->condition==stack.condition&&
+             it->loadedRounds==stack.loadedRounds&&it->needsAction==stack.needsAction&&!it->equipped);
+    }
+    std::cout<<"Vault 112 storage preserved inventory identities, condition and weapon state through save and return\n";
+    std::cout<<"Vault 112 robot supplied the suit, shell checked equipped gear, and chair delegated native seating\n";
+  }
 
 }
 int main(int argc,char** argv){if(argc>1)Original(argv[1],argc>2?argv[2]:"");else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}

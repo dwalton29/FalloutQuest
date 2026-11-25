@@ -197,6 +197,10 @@ static void ScriptInventory(){
   c.references[101].base=201;c.containers[201].valid=true;
   c.references[102].base=202;c.actorInventories[202].valid=true;c.weapons.actors[202]={};
   c.pipboy.transmitters[300]={};c.globals[401]=2;c.pipboy.formNames["amount"]=401;
+  c.pipboy.formNames["ownedchest"]=103;c.references[103].base=203;
+  c.factionFlags[401]=0;
+  LootEntry owned;owned.form=14;owned.owner=401;owned.count=2;
+  c.containers[203].entries.push_back(owned);
   Player p(c);std::string error;
   const auto run=[&](const std::string& source){fo3pipdata::ResultScript result;result.source=source;const bool ok=p.ExecuteDialogueResult(result,error);Check(ok,source+"\n"+error);};
   run("player.AddItem Wrist 1 1\nplayer.EquipItem Wrist 0 1\nplayer.AddItem QuestItem 1 1\nplayer.AddItem Suit 2 1\nplayer.EquipItem Suit 0 1\nplayer.AddItem Gift 3 1\nplayer.AddItem Gun 1 1\nplayer.EquipItem Gun");
@@ -219,6 +223,17 @@ static void ScriptInventory(){
   run("Dad.AddItemHealthPercent Gun Amount .25\nplayer.AddItemHealthPercent Gun 1 .9 1");
   bool quarter=false;for(const auto& stack:*p.ContainerContents(102))if(stack.formId==15){assert(stack.condition==.25f);quarter=true;}assert(quarter);
   for(const auto& stack:p.Snapshot().inventory)if(stack.formId==15)assert(std::abs(stack.condition-.9f)<.001f);
+  const auto weapon=std::find_if(p.Snapshot().inventory.begin(),p.Snapshot().inventory.end(),[](const auto& stack){return stack.formId==15;})->id;
+  run("player.RemoveAllItems Dresser");
+  assert(!p.ItemCount(15)&&p.ItemCount(11)==1&&p.ItemCount(12)==1);
+  const auto stored=p.ContainerContents(101);
+  assert(std::any_of(stored->begin(),stored->end(),[&](const auto& stack){return stack.id==weapon&&std::abs(stack.condition-.9f)<.001f;}));
+  Check(p.Save(save,error),error);Check(p.Restore(save,error),error);unlink(save.c_str());
+  run("Dresser.RemoveAllItems Player 0 1");
+  const auto& recovered=p.Snapshot().inventory;
+  assert(std::any_of(recovered.begin(),recovered.end(),[&](const auto& stack){return stack.id==weapon&&std::abs(stack.condition-.9f)<.001f;}));
+  assert(p.ContainerContents(101)->empty()&&!p.PollScriptItemNotice(notice)&&p.ItemCount(14)==1);
+  run("player.RemoveItem Gift 1");
   run("player.UnequipItem Gun 0 1\nplayer.RemoveItem Gun 100\nDad.RemoveItem Gift 100\nplayer.AddItem Gift 0");
   assert(!p.ItemCount(15));
   run("player.AddItem Gift 1");assert(p.PollScriptItemNotice(notice)&&notice.form==14&&notice.count==1);
@@ -230,7 +245,25 @@ static void ScriptInventory(){
   assert(p.CommitScriptTransaction(*plan)&&p.ItemCount(13)==1&&!p.ItemCount(14));
   assert(p.RollbackScriptTransaction(*plan)&&p.ItemCount(14)==1&&!p.ItemCount(13)&&!p.PollScriptAction(action));
   end.source="UnknownOperation";assert(!p.PrepareDialogueTransaction(begin,end,error));assert(p.ItemCount(14)==1&&!p.ItemCount(13));
-  for(const char* source:{"player.EquipItem Suit 1", "player.UnequipItem Suit 1", "player.RemoveAllItems Dresser", "player.AddItem Gift 1 2"}){
+  run("OwnedChest.RemoveAllItems Player 1 1");
+  const auto ownedItem=[&](){
+    const auto& inventory=p.Snapshot().inventory;
+    return std::find_if(inventory.begin(),inventory.end(),[](const auto& stack){return stack.ownership.explicitOwner;});
+  };
+  assert(ownedItem()!=p.Snapshot().inventory.end()&&ownedItem()->ownership.owner==401);
+  const auto ownedId=ownedItem()->id;
+  Check(p.Save(save,error),error);Check(p.Restore(save,error),error);unlink(save.c_str());
+  assert(ownedItem()!=p.Snapshot().inventory.end()&&ownedItem()->id==ownedId&&ownedItem()->ownership.owner==401);
+  run("Player.RemoveAllItems Dresser 0 1");
+  assert(std::none_of(p.ContainerContents(101)->begin(),p.ContainerContents(101)->end(),[](const auto& stack){return stack.ownership.explicitOwner;}));
+  run("player.AddItem Suit 1 1\nplayer.EquipItem Suit 1 1");
+  auto suit=std::find_if(p.Snapshot().inventory.begin(),p.Snapshot().inventory.end(),[](const Stack& stack){return stack.formId==13;})->id;
+  assert(!p.Unequip(suit));
+  Check(p.Save(save,error),error);Check(p.Restore(save,error),error);unlink(save.c_str());
+  assert(!p.Unequip(suit));
+  run("player.UnequipItem Suit 1 1");assert(!p.Equip(suit));
+  run("player.EquipItem Suit 0 1");assert(p.Unequip(suit)&&p.Equip(suit));
+  for(const char* source:{"player.EquipItem Suit 2", "player.UnequipItem Suit 2", "player.RemoveAllItems Unknown", "player.AddItem Gift 1 2"}){
     fo3pipdata::ResultScript invalid;invalid.source=source;assert(!p.ExecuteDialogueResult(invalid,error));
   }
 }

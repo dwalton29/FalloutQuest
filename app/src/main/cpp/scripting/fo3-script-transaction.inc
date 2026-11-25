@@ -7,7 +7,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       state_(source.state_),scriptRandomInitial_(source.scriptRandomInitial_),revision_(source.revision_),furnitureRef_(source.furnitureRef_),furnitureMarker_(source.furnitureMarker_),sittingState_(source.sittingState_),sneaking_(source.sneaking_),actorPoseRevisions_(source.actorPoseRevisions_),scriptActorMoves_(source.scriptActorMoves_),
       scriptActivator_(source.scriptActivator_),scriptReference_(source.scriptReference_),
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
-      scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerTriggerRadius_(source.scriptPlayerTriggerRadius_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
+      scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerActorOrigin_(source.scriptPlayerActorOrigin_),scriptPlayerTriggerRadius_(source.scriptPlayerTriggerRadius_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
       scriptPlayerHeading_(source.scriptPlayerHeading_),scriptPlayerHeadingKnown_(source.scriptPlayerHeadingKnown_),
       scriptEffectRevision_(source.scriptEffectRevision_),
       scriptFurniture_(source.scriptFurniture_),scriptFurnitureRevision_(source.scriptFurnitureRevision_),
@@ -22,7 +22,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingLocationNotices_(source.pendingLocationNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),scriptOpenedContainer_(source.scriptOpenedContainer_),containerInteraction_(source.containerInteraction_),
-      containerKarmaCommitted_(source.containerKarmaCommitted_),eventDiagnostic_(source.eventDiagnostic_) {}
+      containerKarmaCommitted_(source.containerKarmaCommitted_),eventDiagnostic_(source.eventDiagnostic_) {inventoryEventCandidate_=true;}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
     const std::function<bool(Player&,std::string&)>& execute,std::string& error,bool capturePrograms) const {
   error.clear();
@@ -261,7 +261,7 @@ bool Player::ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const n
   return scriptFurnitureRevision_==candidate.scriptFurnitureRevision_ &&
     scriptPlayerHeadingKnown_==candidate.scriptPlayerHeadingKnown_ && scriptPlayerHeading_==candidate.scriptPlayerHeading_ &&
     scriptPlayerPositionKnown_==candidate.scriptPlayerPositionKnown_ &&
-    scriptPlayerPosition_==candidate.scriptPlayerPosition_ && scriptPlayerTriggerRadius_==candidate.scriptPlayerTriggerRadius_ && scriptPlayerCell_==candidate.scriptPlayerCell_ &&
+    scriptPlayerPosition_==candidate.scriptPlayerPosition_ && scriptPlayerActorOrigin_==candidate.scriptPlayerActorOrigin_ && scriptPlayerTriggerRadius_==candidate.scriptPlayerTriggerRadius_ && scriptPlayerCell_==candidate.scriptPlayerCell_ &&
     scriptPlayerWorld_==candidate.scriptPlayerWorld_ && scriptActivator_==candidate.scriptActivator_ &&
     scriptReference_==candidate.scriptReference_;
 }

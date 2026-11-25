@@ -227,7 +227,7 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   const Stack transferred=*s;
   const auto ownership=ContainerStackOwnership(id,stack);
   BeginContainerInteraction(id);
-  if (catalog_->items.at(s->formId).kind == ItemKind::Weapon) {
+  if (catalog_->items.at(s->formId).kind == ItemKind::Weapon || s->scriptInstance) {
     if (state_.inventory.size() >= 10000 || s->count != 1)
       return false;
     auto actor=state_.actors.find(id);

@@ -53,6 +53,7 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     for(const auto& var:sc->second.variables)if(lower(var.second)==token){
       auto key=VariableKey(d,owner,var.first,d.quests.count(owner)!=0,forms);
       if(key&&forms)forms->variables.back().referenceSlot=true;
+      if(!key&&(owner>>24)==0xff)key=fo3script::DeclaredLocalKey(d,owner,scriptId,token,true);
       return key;
     }
     return 0;
@@ -461,7 +462,8 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       cmd.type=CommandType::PlaySound3D;
       cmd.index=op=="playsound3d"?owner:form(op.substr(0,op.size()-12));
       if(!cmd.index||!(in>>a)||(cmd.form=form(a))==0){error="invalid PlaySound3D receiver or sound";return false;}
-    } else if(op=="playsound") {
+    } else if(op=="playsound"||(op.size()>10&&op.substr(op.size()-10)==".playsound")){
+      if(op!="playsound"&&!form(op.substr(0,op.size()-10))){error="invalid PlaySound caller";return false;}
       cmd.type=CommandType::PlaySound;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}
       if(in>>b){if(b!="0"&&b!="1"){error="invalid PlaySound wait flag";return false;}cmd.index=uint32_t(b=="1");}
@@ -490,7 +492,23 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
         else in.clear();
       }
     }
-    else if(op=="player.removeallitems")cmd.type=CommandType::RemoveAllItems;
+    else if(op=="removeallitems"||(op.size()>15&&op.substr(op.size()-15)==".removeallitems")){
+      cmd.type=CommandType::RemoveAllItems;
+      cmd.form=op=="removeallitems"?owner:form(op.substr(0,op.size()-15));
+      if(!cmd.form){error="unresolved RemoveAllItems source";return false;}
+      if(in>>a){
+        if(a!="0"&&!(cmd.index=form(a))){error="unresolved RemoveAllItems destination";return false;}
+        if(in>>b){
+          if(b!="0"&&b!="1"){error="invalid RemoveAllItems ownership flag";return false;}
+          cmd.value=b=="1";
+          if(in>>c){
+            if(c!="0"&&c!="1"){error="invalid RemoveAllItems message flag";return false;}
+            cmd.variable=c=="1";
+          }
+        }
+      }
+      in.clear();
+    }
     else if(op=="useweapon"||(op.size()>10&&op.substr(op.size()-10)==".useweapon")){
       const auto dot=op.find('.');cmd.type=CommandType::UseWeapon;
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
@@ -505,9 +523,8 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     else if(op=="player.equipitem"||op=="player.unequipitem"){
       cmd.type=op=="player.equipitem"?CommandType::EquipItem:CommandType::UnequipItem;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid equipment item";return false;}
-      // The childhood scripts use the native default/zero locking flag. Do not
-      // pretend to implement persistent No(Un)Equip restrictions by discarding it.
-      if(in>>b){if(b!="0"){error="unsupported equipment locking flag";return false;}
+      if(in>>b){if(b!="0"&&b!="1"){error="invalid equipment locking flag";return false;}
+        cmd.value=b=="1";
         if(in>>c){if(c!="0"&&c!="1"){error="invalid equipment message flag";return false;}cmd.index=c=="1";}
         else in.clear();
       }else in.clear();
@@ -517,6 +534,9 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       if(!cmd.index||!(in>>a)||!(cmd.form=form(a))){error="invalid actor equipment item";return false;}
       if(in>>b){if(b!="0"&&b!="1"){error="invalid equipment locking flag";return false;}cmd.value=b=="1";}
       else in.clear();
+    } else if(op=="dispel"||(op.size()>7&&op.substr(op.size()-7)==".dispel")){
+      cmd.type=CommandType::Dispel;cmd.form=op=="dispel"?owner:form(op.substr(0,op.size()-7));
+      if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){error="invalid dispel receiver or source";return false;}
     } else if(op=="addspell"||op=="removespell"||
         (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="addspell"||op.substr(op.find('.')+1)=="removespell"))){
       const auto dot=op.find('.');

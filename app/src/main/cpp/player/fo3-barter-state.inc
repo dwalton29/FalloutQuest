@@ -9,7 +9,7 @@ bool SameBarterStacks(const std::vector<Stack>& a,const std::vector<Stack>& b) {
   if(a.size()!=b.size())return false;
   for(size_t i=0;i<a.size();++i){const auto& x=a[i];const auto& y=b[i];
     if(x.id!=y.id||x.formId!=y.formId||x.count!=y.count||x.condition!=y.condition||
-       x.equipped!=y.equipped||x.loadedRounds!=y.loadedRounds||x.needsAction!=y.needsAction||
+       x.equipped!=y.equipped||x.equipmentLocked!=y.equipmentLocked||x.loadedRounds!=y.loadedRounds||x.needsAction!=y.needsAction||
        x.ownership.owner!=y.ownership.owner||x.ownership.global!=y.ownership.global||
        x.ownership.rank!=y.ownership.rank||x.ownership.explicitOwner!=y.ownership.explicitOwner||
        x.ownership.valid!=y.ownership.valid)return false;
@@ -72,7 +72,7 @@ bool Player::OpenBarter(uint32_t actor,int discount,BarterSession& out) {
 }
 bool Player::BarterItemAllowed(uint32_t actor,const Stack& s) const {
   auto found=catalog_->items.find(s.formId);
-  if(found==catalog_->items.end()||s.count<=0||s.formId==0xf||IsQuestObject(s.formId))return false;
+  if(found==catalog_->items.end()||s.count<=0||(s.equipped&&s.equipmentLocked)||s.formId==0xf||IsQuestObject(s.formId))return false;
   const auto& i=found->second;
   // Item scripts require OnAdd/OnDrop event support before being transferred.
   if(!i.playable||i.cannotDrop||i.script||!i.valueKnown||i.name.empty())return false;
@@ -174,7 +174,7 @@ bool Player::ConfirmBarter(BarterSession& session,std::string& error) {
   auto transfer=[&](std::vector<Stack>& src,std::vector<Stack>& dst,const BarterSelection& selected){
     auto it=std::find_if(src.begin(),src.end(),[&](const Stack& s){return s.id==selected.stack;});
     if(it==src.end()||dst.size()>=10000)return false;
-    Stack moved=*it;moved.count=selected.count;moved.equipped=false;moved.ownership={};
+    Stack moved=*it;moved.count=selected.count;moved.equipped=false;moved.equipmentLocked=false;moved.ownership={};
     if(it->count>selected.count){if(candidate.nextStackId==UINT64_MAX)return false;moved.id=candidate.nextStackId++;it->count-=selected.count;}
     else src.erase(it);
     dst.push_back(moved);return true;
