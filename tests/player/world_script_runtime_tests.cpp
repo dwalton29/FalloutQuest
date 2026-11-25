@@ -17,7 +17,8 @@ struct GpuObject {
  uint32_t refFormId=0;bool scriptAnimated=true,scriptVisible=true;
  std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;int q2401AnimationBone=1;
  float q2016PlacementMatrix[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
- float q2400DoorTransform[16]{},materialAlpha=1,emissiveColor[3]{},specularColor[3]{};
+ std::string baseRecordType{};
+ float q2400DoorTransform[16]{},scriptDiffuseOffset[2]{},materialAlpha=1,emissiveColor[3]{},specularColor[3]{};
 };
 std::vector<GpuObject> gObjects;
 bool Fo3WorldReferenceHidden(uint32_t){return false;}
@@ -97,6 +98,7 @@ void Start(const fo3script::Action& action,const fo3player::ExplosionDefinition&
 void Clear(){bursts.clear();}
 bool RefreshModels(fo3player::Player&,const std::unordered_set<uint32_t>&){return true;}
 }
+void UpdateFo3AnimatedLight(uint32_t,const std::array<float,3>&){}
 #include "scripting/fo3-world-script-runtime.inc"
 static void OriginalCombatVoice(const char* path){
  fo3player::Catalog c;std::string error;

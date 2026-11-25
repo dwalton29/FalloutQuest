@@ -43,7 +43,7 @@ struct Track {
   Channel translation, rotation, scale;
   std::array<Channel, 3> xyzRotation;
 };
-enum class PropertyKind { Visibility, Alpha, Emissive, Specular,EmitterRate,EmitterActive };
+enum class PropertyKind { Visibility, Alpha, Emissive, Specular,EmitterRate,EmitterActive,DiffuseOffsetU,DiffuseOffsetV };
 struct PropertyTrack {
   std::string bone;
   PropertyKind kind=PropertyKind::Visibility;

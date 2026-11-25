@@ -1,5 +1,7 @@
 #include "mq01_test_conversation.h"
 #include "ui/pause/fo3-debug-menu.h"
+#include "ui/terminal/fo3-terminal-state.h"
+bool LoadQuestObjectClips(const std::string&,std::vector<fo3script::AnimationSequence>&);
 #include <cassert>
 #include <iostream>
 #include <unistd.h>
@@ -7,7 +9,7 @@
 // Original-data checkpoint. The explicit developer entry action executes the
 // original first stage. Locations substitute for world traversal, not quest
 // gates; subsequent progression is owned by original INFO results.
-static void Original(const char* path){
+static void Original(const char* path,const std::string& meshRoot){
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
   const auto save="/tmp/fq-mq01-progression-"+std::to_string(getpid());
   fo3player::Player first(catalog);first.RegisterOriginalActors();assert(first.Add(0xf,100));
@@ -108,8 +110,27 @@ static void Original(const char* path){
   assert(commands[1].type==fo3dialogue::CommandType::RadioConversation&&commands[1].form==station&&!commands[1].index);
   assert(commands[2].type==fo3dialogue::CommandType::PlayGroup&&commands[2].form==relay&&commands[2].expression=="backward");
   auto sequences=std::make_shared<fo3script::AnimationRegistry>();
-  (*sequences)[relay]={{"Backward",1,false}};
-  (*sequences)[id("monumentosc")]={{"Forward",1,false}};
+  if(meshRoot.empty()){
+    (*sequences)[relay]={{"Backward",1,false}};
+    (*sequences)[id("monumentosc")]={{"Forward",1,false}};
+  }else{
+    const std::string monument="architecture/washingtonmonument/";
+    const std::vector<std::pair<const char*,std::string>> models={
+      {"mq02relaywithoutdish","clutter/questitems/mq02radiotower.nif"},
+      {"monumentosc",monument+"oscilloscope.nif"},{"washmonumentgate01ref",monument+"washmonumentgate01.nif"},
+      {"washingmonumentelevatorinsidepanel",monument+"elevatorcontrol01.nif"},
+      {"washdoorbase01",monument+"washelevatordoor01.nif"},{"elevatorshaft",monument+"washingtonmonelevatorshaft01.nif"},
+      {"washeshaftlight01ref",monument+"fxwashelvtrshaftlight01.nif"},
+      {"washeshaftlight02ref",monument+"fxwashelvtrshaftlight01.nif"},
+      {"washeshaftlight03ref",monument+"fxwashelvtrshaftlight01.nif"}
+    };
+    for(const auto& model:models){
+      const auto path=meshRoot+"/"+model.second;
+      if(!LoadQuestObjectClips(path,(*sequences)[id(model.first)])){
+        std::cerr<<"Could not register the original controller sequences in "<<path<<std::endl;std::abort();
+      }
+    }
+  }
   rewarded.SetScriptAnimationRegistry(sequences);
   auto runEvent=[&](uint32_t ref,const char* event,uint32_t actor){
     auto plan=rewarded.PrepareReferenceEventTransaction(ref,event,actor,error,fo3player::ScriptProgramCapture::EnteredPrograms);
@@ -137,7 +158,49 @@ static void Original(const char* path){
   chooseButton(dishRef,id("mq02dishmessage"),0);
   assert(rewarded.ItemCount(dish)==1&&rewarded.Snapshot().pipboy.quests.at(quest).stage==30);
   assert(rewarded.ReferenceDisabled(dishRef,disabled,error)&&disabled);
+  if(!meshRoot.empty()){
+    const auto terminalBase=id("mq02washingtonmonumentterminal"),gate=id("washmonumentgate01ref");
+    const auto& gatePosition=catalog.pipboy.targets.at(gate);
+    rewarded.SetScriptPlayerLocation(gatePosition.x,gatePosition.y,gatePosition.z,gatePosition.cell,gatePosition.world);
+    uint32_t terminalRef=0;float best=INFINITY;
+    for(const auto& placed:catalog.pipboy.targets){
+      if(placed.second.base!=terminalBase||placed.second.world!=gatePosition.world)continue;
+      const float distance=std::hypot(placed.second.x-gatePosition.x,placed.second.y-gatePosition.y);
+      if(distance<best){best=distance;terminalRef=placed.first;}
+    }
+    assert(terminalRef&&rewarded.TerminalPassword(terminalRef));
+    fo3terminal::Session terminal;terminal.Open(rewarded,terminalRef,0);
+    assert(terminal.page==fo3terminal::Session::Page::Menu&&!terminal.entries.empty());
+    auto open=rewarded.PrepareTerminalTransaction(terminalRef,terminal.menu,terminal.entries.front(),error);
+    if(!open)std::cerr<<"Monument access terminal: "<<error<<std::endl;
+    assert(open&&rewarded.CommitScriptTransaction(*open));
+    bool opening=false;
+    assert(rewarded.ScriptAnimationPlaying(gate,opening,"Forward")&&opening);
+  }
   arrive(id("mq02elevatorentrance"),40);
+  if(!meshRoot.empty()){
+    const auto panel=id("washingmonumentelevatorinsidepanel"),destination=id("mq02elevatorexit");
+    const auto& button=catalog.pipboy.targets.at(panel);
+    rewarded.SetScriptPlayerLocation(button.x,button.y,button.z,button.cell,button.world);
+    rewarded.SetScriptRuntimeClock(10.,.1);
+    auto press=rewarded.PrepareActivationTransaction(panel,fo3player::PlayerRef,error);
+    if(!press)std::cerr<<"Elevator control: "<<error<<std::endl;
+    assert(press&&rewarded.CommitScriptTransaction(*press));
+    bool shutting=false;assert(rewarded.ScriptAnimationPlaying(id("washdoorbase01"),shutting,"Backward")&&shutting);
+    std::unordered_set<uint32_t> moving;
+    for(unsigned tick=1;tick<=600&&!rewarded.Snapshot().playerMove.pending;++tick){
+      rewarded.SetScriptRuntimeClock(10.+.1*tick,.1);
+      runEvent(panel,"GameMode",0);
+      fo3script::Action action;
+      while(rewarded.PollScriptAction(action))if(action.kind==fo3script::ActionKind::PlayGroup)moving.insert(action.reference);
+    }
+    const auto move=rewarded.Snapshot().playerMove;
+    assert(move.pending&&move.marker==destination&&moving.count(id("elevatorshaft"))&&moving.count(panel));
+    for(const auto* light:{"washeshaftlight01ref","washeshaftlight02ref","washeshaftlight03ref"})assert(moving.count(id(light)));
+    rewarded.SetScriptPlayerLocation(move.position[0],move.position[1],move.position[2],move.cell,move.world);
+    rewarded.AcknowledgePlayerMove();
+    std::cout<<"Monument password opened the gate and original elevator animation completed the MoveTo handoff\n";
+  }
   const auto karma=rewarded.Snapshot().karma;
   chooseButton(relay,id("mq02relaybeforemessage"),0);
   assert(!rewarded.ItemCount(dish)&&rewarded.Snapshot().pipboy.quests.at(quest).stage==50);
@@ -151,6 +214,30 @@ static void Original(const char* path){
   fo3player::Player repaired(catalog);assert(repaired.Restore(save,error));unlink(save.c_str());
   assert(repaired.Snapshot().pipboy.tunedRadio==station&&repaired.Snapshot().pipboy.quests.at(quest).stage==50);
   std::cout<<"Original Museum dish and Washington Monument relay events passed through MQ02 stage 50\n";
+
+  {
+    // A player who finds Doctor Li before reporting the repair can take the
+    // alternative reward instead of directions to Rivet City.
+    fo3player::Player detour(repaired);
+    Conversation li(detour,id("doctorliref"));li.Start();
+    for(auto topic:{0x426fau,0x5f9bau,0x43df7u,0x43df4u,0x43df3u})li.Choose(topic);
+    assert(detour.Snapshot().pipboy.quests.at(id("mq03")).stage>=30);
+    Conversation deal(detour,dog);deal.Start();
+    auto chooseAvailable=[&](std::initializer_list<uint32_t> topics){
+      for(auto topic:topics){
+        if(std::any_of(deal.session.choices.begin(),deal.session.choices.end(),[&](const auto& choice){return choice.topic==topic;})){
+          deal.Choose(topic);return;
+        }
+      }
+      for(const auto& choice:deal.session.choices)std::cerr<<std::hex<<choice.topic<<" ";
+      std::cerr<<std::dec<<"missing GNR reward choice"<<std::endl;std::abort();
+    };
+    chooseAvailable({0x24450,0x2444f,0x3e578});
+    chooseAvailable({0xbc710,0xbc711,0x58fa6,0x58fa7});
+    assert(detour.Snapshot().pipboy.quests.at(quest).stage==200&&detour.ItemCount(id("mq02lootstashkey"))==1&&
+           detour.ItemCount(id("mq02weaponscache"))==1);
+    std::cout<<"Three Dog's alternate weapons cache reward unlocked after finding Doctor Li independently\n";
+  }
 
   {Conversation report(repaired,dog);report.Start();
    for(auto topic:{0x24450u,0x2444cu,0x2444du})report.Choose(topic);}
@@ -204,4 +291,4 @@ static void Original(const char* path){
   std::cout<<"Dad's journal end result displayed Vault 112 objective and survived reload\n";
 
 }
-int main(int argc,char** argv){if(argc>1)Original(argv[1]);else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}
+int main(int argc,char** argv){if(argc>1)Original(argv[1],argc>2?argv[2]:"");else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}

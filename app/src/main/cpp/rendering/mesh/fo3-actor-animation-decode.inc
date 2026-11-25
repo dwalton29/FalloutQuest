@@ -297,9 +297,17 @@ static bool DecodeProperty(const std::vector<uint8_t>& bytes,const NifHeader& h,
      !(controller==INVALID_REF&&type=="NiVisController"))return false;
   const bool emitter=type=="NiPSysEmitterCtlr";
   const bool boolean=type=="NiVisController"||(emitter&&BlockType(h,interpolator)=="NiBoolInterpolator"),color=type=="NiMaterialColorController";
-  if(!boolean&&!color&&!emitter&&type!="NiAlphaController")return false;
+  const bool texture=type=="NiTextureTransformController";
+  if(!boolean&&!color&&!emitter&&!texture&&type!="NiAlphaController")return false;
   if(BlockType(h,interpolator)!=(boolean?"NiBoolInterpolator":color?"NiPoint3Interpolator":"NiFloatInterpolator"))return false;
   out.kind=emitter?(boolean?PropertyKind::EmitterActive:PropertyKind::EmitterRate):(boolean?PropertyKind::Visibility:PropertyKind::Alpha);
+  if(texture){
+    Cursor control(BlockData(bytes,h,controller),h.blockSizes[controller]);
+    uint8_t shaderMap=0;uint32_t slot=0,operation=0;
+    if(!control.Skip(30)||!control.U8(shaderMap)||!control.U32(slot)||!control.U32(operation)||
+       control.remaining()||shaderMap||slot||operation>1)return false;
+    out.kind=operation?PropertyKind::DiffuseOffsetV:PropertyKind::DiffuseOffsetU;
+  }
   if(color){
     if(h.blockSizes[controller]!=32)return false;
     Cursor control(BlockData(bytes,h,controller),h.blockSizes[controller]);uint16_t role=0;
@@ -325,6 +333,34 @@ static bool DecodeProperty(const std::vector<uint8_t>& bytes,const NifHeader& h,
   }
   return !keys.remaining();
 }
+// The controller manager's palette maps the names retained by its sequences
+// to live AV objects. Export optimization can rename shapes or remove nodes.
+using SequenceNames=std::unordered_map<std::string,std::string>;
+static bool ReadSequenceNames(const std::vector<uint8_t>& bytes,const NifHeader& h,
+                              uint32_t manager,SequenceNames& names){
+  if(manager==INVALID_REF)return true;
+  if(manager>=h.numBlocks||BlockType(h,manager)!="NiControllerManager")return false;
+  Cursor controller(BlockData(bytes,h,manager),h.blockSizes[manager]);
+  uint32_t sequences=0,palette=INVALID_REF;
+  if(!controller.Skip(27)||!controller.U32(sequences)||sequences>h.numBlocks||
+     !controller.Skip(size_t(sequences)*4)||!controller.U32(palette))return false;
+  if(palette==INVALID_REF)return true;
+  if(palette>=h.numBlocks||BlockType(h,palette)!="NiDefaultAVObjectPalette")return false;
+  Cursor entries(BlockData(bytes,h,palette),h.blockSizes[palette]);
+  uint32_t count=0;
+  if(!entries.Skip(4)||!entries.U32(count)||count>entries.remaining()/8)return false;
+  for(uint32_t i=0;i<count;++i){
+    std::string alias;uint32_t target=0;
+    if(!entries.SizedString(alias)||!entries.U32(target))return false;
+    if(target==INVALID_REF)continue;
+    if(target>=h.numBlocks)return false;
+    Cursor av(BlockData(bytes,h,target),h.blockSizes[target]);uint32_t name=0;
+    if(!av.U32(name)||name>=h.strings.size())return false;
+    const auto [existing,inserted]=names.emplace(std::move(alias),h.strings[name]);
+    if(!inserted&&existing->second!=h.strings[name])return false;
+  }
+  return !entries.remaining();
+}
 static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::Clip> &out, bool allowOptionalEffects=false) {
   using namespace fo3anim;
   out.clear();
@@ -332,6 +368,7 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
   if (!ActorHeader(bytes, h) || h.userVersion != 11 ||
       (h.bsVersion < 24 || h.bsVersion > 34))
     return false;
+  std::unordered_map<uint32_t,SequenceNames> palettes;
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
     if (BlockType(h, block) != "NiControllerSequence")
       continue;
@@ -419,7 +456,17 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
       }
       if (tc.remaining()) return false;
     }
-    if (clip.tracks.empty()) return false;
+    if(allowOptionalEffects&&manager!=INVALID_REF){
+      auto [palette,inserted]=palettes.try_emplace(manager);
+      if(inserted&&!ReadSequenceNames(bytes,h,manager,palette->second))return false;
+      auto bind=[&](auto& channel){
+        const auto name=palette->second.find(channel.bone);
+        if(name!=palette->second.end())channel.bone=name->second;
+      };
+      for(auto& track:clip.tracks)bind(track);
+      for(auto& property:clip.properties)bind(property);
+    }
+    if (clip.tracks.empty()&&(!allowOptionalEffects||clip.properties.empty())) return false;
     out.push_back(std::move(clip));
   }
   return !out.empty();

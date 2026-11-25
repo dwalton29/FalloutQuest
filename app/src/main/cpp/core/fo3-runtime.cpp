@@ -651,6 +651,7 @@ struct GpuObject {
     // the conjugated NIF-node delta here, preserving the authored child pivot.
     // Q24.0's whole-object hinge remains only as a fallback for door NIFs that
     // genuinely have no embedded Open/Close controller sequence.
+    float scriptDiffuseOffset[2]{};
     float q2400DoorTransform[16]{
         1,0,0,0,
         0,1,0,0,
@@ -818,7 +819,7 @@ GLint gDiffuseLocation = -1;
 GLint gNormalLocation = -1;
 GLint gGlossinessLocation = -1;
 GLint gNormalStrengthLocation = -1;
-GLint gMaterialAlphaLocation = -1;
+GLint gMaterialAlphaLocation = -1,gScriptDiffuseOffsetLocation=-1;
 GLint gAlphaTestLocation = -1;
 GLint gAlphaThresholdLocation = -1;
 GLint gGlowLocationQ1020 = -1;
@@ -1643,6 +1644,7 @@ GLuint CreateQ6HProgram() {
             visible += projected.z - bias <= texture(uShadowMap, projected.xy + vec2( halfTexel.x,  halfTexel.y)).r ? 1.0 : 0.0;
             return visible * 0.25;
         }
+        uniform vec2 uScriptDiffuseOffset;
         void main() {
             if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
                 vPosition.y < uWaterReflectionPlaneYQ2090) {
@@ -1681,7 +1683,7 @@ GLuint CreateQ6HProgram() {
                         : (1.0 - q2021DetailWeight);
             }
 
-            vec4 diffuseTexel = texture(uDiffuse, vUv);
+            vec4 diffuseTexel = texture(uDiffuse, vUv+uScriptDiffuseOffset);
             vec3 baseColor = diffuseTexel.rgb * mix(vec3(1.0), vColor.rgb, uUseVertexColor);
             float alpha = diffuseTexel.a * uMaterialAlpha * mix(1.0, vColor.a, uUseVertexAlpha);
             if (uNoLightingFalloff > 0.5) {
@@ -2228,7 +2230,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     const auto q2401DoorAnimation =
         placement.baseRecordType=="DOOR"
             ? Q2401LoadDoorNifAnimation(placement.modelPath)
-            : (placement.baseRecordType=="ACTI"||placement.baseRecordType=="MSTT"||placement.baseRecordType=="FURN"?LoadFo3ObjectAnimation(placement.modelPath):std::shared_ptr<const fo3dooranim::Asset>{});
+            : (placement.baseRecordType=="ACTI"||placement.baseRecordType=="MSTT"||placement.baseRecordType=="FURN"||placement.baseRecordType=="LIGH"?LoadFo3ObjectAnimation(placement.modelPath):std::shared_ptr<const fo3dooranim::Asset>{});
 
     const bool animatedVisibility=bool(q2401DoorAnimation)&&placement.baseRecordType!="DOOR";
 
@@ -2253,7 +2255,8 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
     if (!cachedMeshes) {
         std::vector<Fo3StaticNifMesh> meshes;
-        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, referenceRoot, animatedVisibility)) return false;
+        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, referenceRoot, animatedVisibility)&&
+            !(placement.baseRecordType=="LIGH"&&q2401DoorAnimation))return false;
         auto candidate = std::make_shared<const std::vector<Fo3StaticNifMesh>>(
             std::move(meshes));
         bool inserted = false;
@@ -2276,6 +2279,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
     if(cachedMeshes->empty()) {
         CpuObject part;part.placement=placement;part.nonvisualResident=true;part.doorActivation=doorActivation;
+        if(placement.baseRecordType=="LIGH")part.q2401DoorAnimation=q2401DoorAnimation;
         outs.push_back(std::move(part));return true;
     }
     const auto rigidBody=PrepareFo3RigidBody(placement,*cachedMeshes);
@@ -2595,6 +2599,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         gpu={};gpu.refFormId=cpu.placement.refFormId;gpu.baseFormId=cpu.placement.baseFormId;
         gpu.editorId=cpu.placement.editorId;gpu.modelPath=cpu.placement.modelPath;
         gpu.baseRecordType=cpu.placement.baseRecordType;gpu.nonvisualResident=true;
+        gpu.q2401DoorAnimation=cpu.q2401DoorAnimation;gpu.scriptAnimated=bool(cpu.q2401DoorAnimation);
         gpu.scriptVisible=false;
         gpu.q1970GridX=cpu.placement.hasExteriorGrid?cpu.placement.gridX:static_cast<int32_t>(std::floor(cpu.placement.x/Q1890_EXTERIOR_CELL_SIZE));
         gpu.q1970GridY=cpu.placement.hasExteriorGrid?cpu.placement.gridY:static_cast<int32_t>(std::floor(cpu.placement.y/Q1890_EXTERIOR_CELL_SIZE));
@@ -3464,6 +3469,7 @@ bool InitializeScene() {
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
     gNormalStrengthLocation = glGetUniformLocation(gProgram, "uNormalStrength");
     gMaterialAlphaLocation = glGetUniformLocation(gProgram, "uMaterialAlpha");
+    gScriptDiffuseOffsetLocation=glGetUniformLocation(gProgram,"uScriptDiffuseOffset");
     gAlphaTestLocation = glGetUniformLocation(gProgram, "uAlphaTest");
     gAlphaThresholdLocation = glGetUniformLocation(gProgram, "uAlphaThreshold");
     gGlowLocationQ1020 = glGetUniformLocation(gProgram, "uGlow");
@@ -7887,6 +7893,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false,
                  object.externalEmittanceColorQ1380);
     glUniform1f(gNormalStrengthLocation, object.realNormal ? 1.0f : 0.0f);
     glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
+    glUniform2f(gScriptDiffuseOffsetLocation,object.scriptDiffuseOffset[0],object.scriptDiffuseOffset[1]);
     glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
     glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
     const auto diffuse=genePreview?gFo3AppearanceTexture:
@@ -8297,6 +8304,7 @@ bool Q1030InitializeRenderProgramOnly() {
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
     gNormalStrengthLocation = glGetUniformLocation(gProgram, "uNormalStrength");
     gMaterialAlphaLocation = glGetUniformLocation(gProgram, "uMaterialAlpha");
+    gScriptDiffuseOffsetLocation=glGetUniformLocation(gProgram,"uScriptDiffuseOffset");
     gAlphaTestLocation = glGetUniformLocation(gProgram, "uAlphaTest");
     gAlphaThresholdLocation = glGetUniformLocation(gProgram, "uAlphaThreshold");
 
@@ -15733,6 +15741,12 @@ fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 #include "world/interaction/fo3-interaction-runtime.inc"
 #include "player/fo3-player-seat-runtime.inc"
 #include "world/interaction/fo3-script-default-activation.inc"
+static void UpdateFo3AnimatedLight(uint32_t reference,const std::array<float,3>& position){
+    const auto light=std::find_if(gFo3InteriorLighting.lights.begin(),gFo3InteriorLighting.lights.end(),
+        [reference](const auto& value){return value.ref==reference;});
+    if(light==gFo3InteriorLighting.lights.end()||light->position==position)return;
+    light->position=position;gFo3LightPublication.Changed();
+}
 #include "scripting/fo3-world-script-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
 bool StartFo3DebugQuestEntry(fo3player::Player& player,uint32_t quest,std::string& error){

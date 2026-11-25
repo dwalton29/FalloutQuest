@@ -8,7 +8,7 @@ namespace fo3worldscript {
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
 struct Animation {
     std::shared_ptr<const fo3dooranim::Asset> asset;
-    int clip=-1;double started=0,lastCollision=-1,lastSound=-1,presentationTime=0;bool settled=false;
+    int clip=-1,lightBone=-1;double started=0,lastCollision=-1,lastSound=-1,presentationTime=0;bool settled=false;
     fo3anim::Pose pose;
     int appliedOpenState=-1;
     std::vector<bool> visible;
@@ -444,6 +444,7 @@ void Register(){
         for(const auto& clip:asset->clips)definitions.push_back({clip.name,clip.frequency>0?std::max(0.,double(clip.stop-clip.start)/clip.frequency):0,clip.cycle==0||clip.cycle==1});
         auto& state=animations[object.refFormId];
         if(state.asset!=asset){state={};state.asset=asset;state.visible.resize(asset->hierarchy.bones.size());
+            if(object.baseRecordType=="LIGH")state.lightBone=fo3anim::FindBone(asset->hierarchy,"AttachLight");
             for(size_t i=0;i<state.visible.size();++i)state.visible[i]=asset->hierarchy.bones[i].visible;}
         state.settled=false; // Reapply retained pose to newly published shapes.
     }
@@ -720,6 +721,14 @@ void Animate(){
         const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started+state.presentationTime);
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
         const auto* first=state.shapes.empty()?nullptr:&gObjects[state.shapes.front()];
+        if(first&&state.lightBone>=0){
+            const auto& bone=state.pose.global[size_t(state.lightBone)];
+            const auto& placement=first->q2016PlacementMatrix;
+            std::array<float,3> position{};
+            for(size_t i=0;i<position.size();++i)
+                position[i]=placement[12+i]+(placement[i]*bone[12]+placement[4+i]*bone[13]+placement[8+i]*bone[14])/FO3_UNITS_PER_METRE;
+            UpdateFo3AnimatedLight(first->refFormId,position);
+        }
         bool disabled=true;std::string soundError;
         // A controller sequence can survive a resident visual refresh. Only
         // the live placed object can emit its keys, from its authored origin.
@@ -743,6 +752,8 @@ void Animate(){
             bool visible=true;for(int i=bone;i>=0;i=asset.hierarchy.bones[size_t(i)].parent)visible=visible&&state.visible[size_t(i)];object.scriptVisible=visible;
             for(const auto& property:state.pose.properties)if(property.bone==bone){
                 using K=fo3anim::PropertyKind;
+                if(property.kind==K::DiffuseOffsetU)object.scriptDiffuseOffset[0]=property.value[0];
+                if(property.kind==K::DiffuseOffsetV)object.scriptDiffuseOffset[1]=property.value[0];
                 if(property.kind==K::Alpha)object.materialAlpha=std::clamp(property.value[0],0.f,1.f);
                 if(property.kind==K::Emissive)std::copy_n(property.value.begin(),3,object.emissiveColor);
                 if(property.kind==K::Specular)std::copy_n(property.value.begin(),3,object.specularColor);

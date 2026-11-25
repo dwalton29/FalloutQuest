@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 374
-        versionName '0.215.0-following-in-his-footsteps'
+        versionCode 375
+        versionName '0.216.0-galaxy-news-radio'
 
         ndk {
             abiFilters 'arm64-v8a'
