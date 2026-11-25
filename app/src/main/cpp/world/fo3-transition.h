@@ -48,6 +48,7 @@ bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest)
 bool HasPendingFo3CellTransitionRequestQ74() noexcept;
 void DiscardFo3PendingCellTransitionQ74() noexcept;
 bool QueueFo3SceneRefreshQ74(uint32_t cell,float x,float y,float z);
+bool QueueFo3WorldModelRefresh(uint32_t cell,uint32_t world,float x,float y,float z);
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId);
 
 // Consumed by the authored collision resolver on the frame after a successful

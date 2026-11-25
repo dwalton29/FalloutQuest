@@ -57,11 +57,11 @@ static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference
   if(reference==fo3player::PlayerRef){
     if(!initiator.runtime.CanTalk()||(initiator.source.creature&&!(initiator.source.actorBaseFlags&0x200000u))||
        gPlayerSession->player.ActorHealth(initiator.source.refFormId)<=0)return false;
-    if(!package)return !initiator.runtime.furniture.Active()&&DialogueCanStart(const_cast<Q230ActorVisual&>(initiator));
+    if(!package&&initiator.runtime.furniture.Active())return false;
     auto context=DialogueContext(initiator);
-    context.speaker.package=package;context.speaker.packageKnown=true;
+    if(package){context.speaker.package=package;context.speaker.packageKnown=true;}
     fo3dialogue::Session candidate;Q230PrepareNpcChat(candidate);
-    return candidate.CanActivate(context);
+    return candidate.CanStart(context);
   }
   const auto* partner=DialogueActor(reference);
   if(!partner||partner->runtime.offScene||!partner->runtime.CanTalk()||
@@ -108,7 +108,9 @@ static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
   }
   if(gPlayerSession->player.AnyScriptActorTalking())return false;
   if(listener==fo3player::PlayerRef){
-    auto* actor=DialogueActor(speaker);if(!actor||!Q230ChatEligible(*actor,listener)||!StartFo3Dialogue(speaker))return false;
+    auto* actor=DialogueActor(speaker);
+    if(!actor||actor->runtime.furniture.Active()||!Q230ChatEligible(*actor,listener,actor->aiPackage)||
+       !StartFo3Dialogue(speaker,0,fo3dialogue::GreetingInitiator::Actor))return false;
     const auto& scripted=gPlayerSession->player.Snapshot().scriptPackages;
     const auto list=scripted.find(speaker);
     if(list!=scripted.end()&&std::find(list->second.begin(),list->second.end(),actor->aiPackage)!=list->second.end())

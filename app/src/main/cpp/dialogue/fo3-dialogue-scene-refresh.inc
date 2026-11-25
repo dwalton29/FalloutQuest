@@ -5,10 +5,10 @@ bool PublishFo3DialogueSceneRefresh(fo3player::Player& player,
     fo3player::ScriptTransactionPlan& plan,std::string& error){
     const auto* candidate=plan.CandidateState();
     if(!candidate||!plan.HasReferenceChanges()||candidate->playerMove.pending||
-       !CanDeferFo3DialogueResult()||gExteriorWorldspaceQ1890||!player.CanCommitScriptTransaction(plan))return false;
+       !CanDeferFo3DialogueResult()||!player.CanCommitScriptTransaction(plan))return false;
     const auto snapshot=plan.CandidateReferences();
     if(!player.CommitScriptTransaction(plan))return false;
-    if(!QueueFo3SceneRefreshQ74(gCurrentCellFormId,gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730)){
+    if(!QueueFo3WorldModelRefresh(gCurrentCellFormId,gExteriorWorldspaceQ1890,gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730)){
         const bool restored=player.RollbackScriptTransaction(plan);
         gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(player.CaptureReferenceState());
         gFo3ScenePublication.Publish(gFo3ReferenceState);

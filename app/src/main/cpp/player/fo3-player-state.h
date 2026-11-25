@@ -257,6 +257,9 @@ struct State {
   std::unordered_map<uint64_t,float> actorAIValues; // reference + original actor-value ID
   std::unordered_map<uint32_t,uint16_t> actorSpawnLevels;
   std::unordered_map<uint64_t,uint32_t> actorTemplateChoices;
+  // Accumulated object damage, keyed by the original placed reference.
+  std::unordered_map<uint32_t,float> objectDamage;
+  uint64_t damageModelRevision=0; // Render cache generation, rebuilt on restore.
   std::unordered_map<uint32_t,bool> doorStates; // Script/activation open targets, not animation phases.
   // Staged world state. Script Enable/Disable stays unavailable until scene
   // publication is integrated; this overlay is never a success-only command.
@@ -290,7 +293,23 @@ struct BarterSession {
   std::vector<Stack> player,merchant;
   std::vector<BarterSelection> selections;
 };
+struct ExplosionDefinition {
+  std::string model;
+  float force=0,damage=0,radius=0,imageRadius=0,radiation=0,radiationTime=0,radiationRadius=0;
+  uint32_t light=0,sound=0,flags=0,impactData=0,sound2=0,imageModifier=0,placedObject=0,enchantment=0;
+};
+struct DestructionStage {
+  uint8_t healthPercent=0,index=0,modelStage=0,flags=0;
+  uint32_t selfDamage=0,explosion=0,debris=0,debrisCount=0;
+  std::string model;
+};
+struct DestructibleDefinition {
+  uint32_t health=0;
+  std::vector<DestructionStage> stages;
+};
 struct Catalog {
+  std::unordered_map<uint32_t,ExplosionDefinition> explosions;
+  std::unordered_map<uint32_t,DestructibleDefinition> destructibles;
   // Complete XTEL records, keyed by placed source door.
   std::unordered_map<uint32_t, Fo3DoorTeleport> doorTeleports;
   fo3weapon::Definitions weapons;
@@ -317,6 +336,9 @@ struct Catalog {
   std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
   std::unordered_set<uint32_t> messageActivatorBases;
   std::unordered_map<uint32_t,std::vector<uint32_t>> actorTriggerVolumes;
+  // Unfiltered handlers can inspect GetActionRef inside their bodies.
+  // The FormID is the owning worldspace outdoors and CELL indoors.
+  std::unordered_map<uint32_t,std::vector<uint32_t>> unfilteredActorTriggersBySpace;
   std::unordered_set<uint32_t> doorBases, activatorBases, authoredCorpseBases;
   bool AuthoredCorpse(uint32_t reference) const {
     const auto actor=actorPlacements.find(reference);
@@ -361,7 +383,8 @@ struct Catalog {
 };
 // All-or-nothing, single-master Fallout3.esm loader. No plugins, scripts or
 // save import.
-bool LoadCatalog(const std::string &esmPath, Catalog &out, std::string &error);
+using TriggerModelLoader=std::function<bool(const std::string&,fo3pipdata::TriggerPrimitive&)>;
+bool LoadCatalog(const std::string &esmPath, Catalog &out, std::string &error,const TriggerModelLoader& loadTrigger={});
 
 struct ActorCensusReport {
   size_t authored=0,registered=0,alreadyTracked=0,disabledOrConditional=0;
@@ -677,6 +700,9 @@ public:
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   void FinishScriptAnimation(uint32_t reference,const std::string& group);
   bool QueueScriptAction(fo3script::Action action);
+  bool QueueExplosion(uint32_t reference,uint32_t form);
+  const DestructionStage* ObjectDamageStage(uint32_t reference,bool requireModel=false) const;
+  bool DamageDestructible(uint32_t reference,float amount);
   bool QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon);
   std::unique_ptr<ScriptTransactionPlan> PrepareWeaponHitTransaction(uint32_t reference,uint32_t attacker,uint32_t weapon,
       std::string& error,ScriptProgramCapture capture=ScriptProgramCapture::None) const;
@@ -699,6 +725,8 @@ public:
   void SetScriptEventDiagnostic(std::function<void(const std::string&)> diagnostic) {
     eventDiagnostic_=std::move(diagnostic);
   }
+  std::unique_ptr<ScriptTransactionPlan> PrepareActorActivation(uint32_t reference,uint32_t activator,
+      bool& requestsTalk,std::string& error) const;
   bool PreviewDialogueResult(const fo3pipdata::ResultScript&,std::string&,uint32_t speaker=0) const;
   bool PreviewDialogueResults(const fo3pipdata::ResultScript&,const fo3pipdata::ResultScript&,std::string&,uint32_t speaker=0) const;
   bool ExecuteQuestStage(uint32_t,uint16_t,std::string&);
@@ -761,6 +789,7 @@ public:
   float WeaponDamage(uint64_t instance) const;
   float WeaponDamage(const Stack& instance) const;
   float ActorHealth(uint32_t reference) const;
+  bool ActorDeathState(uint32_t reference,bool& dead) const;
   bool ResetActorHealth(uint32_t reference);
   bool SetFactionRelation(uint32_t from,uint32_t to,bool ally,bool firstFlag=false,bool secondFlag=false);
   const std::unordered_map<uint32_t,int8_t>* ActorFactions(uint32_t reference) const;
@@ -862,7 +891,7 @@ public:
 
 private:
   bool TransferWeaponAmmo(uint64_t instance,const fo3weapon::Definition&,int32_t capacity,bool ready);
-  friend bool LoadCatalog(const std::string&,Catalog&,std::string&);
+  friend bool LoadCatalog(const std::string&,Catalog&,std::string&,const TriggerModelLoader&);
   friend struct Session;
   explicit Player(std::shared_ptr<const Catalog> catalog);
   struct ScriptCandidateTag {};
@@ -873,7 +902,7 @@ private:
   void SwapScriptPayload(Player& other) noexcept;
   bool ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept;
   bool RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error,uint32_t filterForm=0);
+                            uint32_t activator,std::string& error,uint32_t filterForm=0,bool* requestsTalk=nullptr);
   bool CanOpenDoorImpl(uint32_t actor,uint32_t reference,bool sourceDelegated) const;
   bool ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
                             uint32_t reference,bool& disabled,std::string& error) const;
@@ -903,7 +932,7 @@ private:
   uint32_t RadiationSickness(float rads) const;
   bool WithdrawalActive(const State&,uint32_t spell) const;
   void ClampAidResources();
-  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0,ScriptProgramOrigin origin={});
+  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0,ScriptProgramOrigin origin={},bool* requestsTalk=nullptr);
   bool SourceEventCompileReady(uint32_t,const char*,uint32_t,uint32_t,std::string&) const;
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
   bool EnsureQuestInstance(uint32_t);
@@ -942,7 +971,7 @@ private:
   std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;
   std::unordered_map<uint32_t,fo3script::AnimationRun> scriptAnimations_;
   std::unordered_set<uint32_t> scriptInsideTriggers_;
-  std::unordered_set<uint64_t> scriptActorInsideTriggers_;
+  std::unordered_map<uint32_t,std::unordered_set<uint32_t>> scriptActorInsideTriggers_;
   double scriptRuntimeSeconds_=0,scriptElapsedSeconds_=0;
   uint64_t scriptRuntimeGeneration_=0;
   std::vector<ScriptMessage> pendingScriptMessages_;
@@ -970,6 +999,7 @@ public:
   ScriptTransactionPlan(const ScriptTransactionPlan&)=delete;
   ScriptTransactionPlan& operator=(const ScriptTransactionPlan&)=delete;
   // Valid only while prepared; applied plans instead hold the displaced payload.
+  const Player* CandidatePlayer() const {return phase_==Phase::Prepared?candidate_.get():nullptr;}
   const State* CandidateState() const {return phase_==Phase::Prepared?&candidate_->Snapshot():nullptr;}
   bool HasReferenceChanges() const {return references_&&references_->HasChanges();}
   std::shared_ptr<const fo3world::ReferenceStateSnapshot> CandidateReferences() const {

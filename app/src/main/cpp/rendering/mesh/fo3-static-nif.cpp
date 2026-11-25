@@ -837,6 +837,11 @@ void ApplyTransforms(Fo3StaticNifMesh& mesh,
                      const NifTransform* rootFallback, bool referenceRoot = false) {
     const size_t parentCount=ancestors.size()-(referenceRoot&&!ancestors.empty()?1u:0u);
     const bool haveFullChain = !ancestors.empty();
+    auto& origin=mesh.geometryOriginInModel;
+    ApplyPoint(shape,origin[0],origin[1],origin[2]);
+    if(haveFullChain){
+        for(size_t p=0;p<parentCount;++p)ApplyPoint(ancestors[p],origin[0],origin[1],origin[2]);
+    }else if(rootFallback&&!referenceRoot)ApplyPoint(*rootFallback,origin[0],origin[1],origin[2]);
     // EGM deltas use raw geometry coordinates, just like the NIF vertices.
     // Preserve the full linear chain (including scale), without translation.
     for (int column = 0; column < 3; ++column) {
@@ -1642,7 +1647,17 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
         if (i < boneOffsets.size()) {
             pivotReady = Q211BindPositionFromSkinData(
                 nif, header, shape, boneOffsets[i], bone.bindPosition);
-            if (pivotReady) ++inverseBindPivots;
+            if (pivotReady) {
+                ++inverseBindPivots;
+                const auto& offset=boneOffsets[i];
+                auto& matrix=bone.geometryToBone;
+                for(int row=0;row<3;++row){
+                    for(int col=0;col<3;++col)matrix[4*col+row]=offset.rotation[3*row+col]*offset.scale;
+                    matrix[12+row]=offset.translation[row];
+                }
+                matrix[15]=1;
+                bone.hasGeometryToBone=std::all_of(matrix.begin(),matrix.end(),[](float v){return std::isfinite(v);});
+            }
         }
 
         // Diagnostic fallback only. A valid NiSkinData bone transform is the

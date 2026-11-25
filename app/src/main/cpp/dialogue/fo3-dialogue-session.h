@@ -2,6 +2,7 @@
 #include "fo3-dialogue-results.h"
 #include <random>
 namespace fo3dialogue {
+enum class GreetingInitiator { Player, Actor };
 enum class Phase { Inactive, Speaking, Choices, Results };
 struct Choice {uint32_t topic=0,info=0;std::string text;};
 struct Session {
@@ -33,7 +34,7 @@ struct Session {
   bool CanActivate(const Context&)const;
   bool StartTopic(uint32_t topic,const Context&,fo3player::Player&,bool conversation=false);
   bool StartSelectedTopic(uint32_t topic,uint32_t info,const Context&,fo3player::Player&,bool conversation=false);
-  bool Start(const Context&,fo3player::Player&);
+  bool Start(const Context&,fo3player::Player&,GreetingInitiator initiator=GreetingInitiator::Player);
   bool Choose(size_t,const Context&,fo3player::Player&);
   bool RequestGoodbye(const Context&,fo3player::Player&);
   bool AudioDone(uint32_t,bool,const Context&,fo3player::Player&);

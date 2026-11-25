@@ -150,6 +150,16 @@ static void OriginalCombatPolicies(const char* path) {
   std::cout<<"Original ambush script faction changes feed production NPC combat target acquisition\n";
 
 }
+static void CreatureInventoryWeapon(){
+  Prepare();
+  auto catalog=gPlayerSession->player.Definitions();
+  catalog.weapons.actors.at(43).creature=true;
+  gPlayerSession=std::make_unique<Session>(catalog);
+  auto& actor=gQ230NpcActors.front();actor.source.creature=true;
+  auto& player=gPlayerSession->player;
+  assert(player.PrepareActorInventory(42));
+  assert(Q230SelectWeapon(actor)&&player.ActorWeapon(42)->formId==10);
+}
 static void WeaponCommitAndMeleeTests(){
   Prepare();auto& actor=gQ230NpcActors[0];auto c=gPlayerSession->player.Definitions();
   auto melee=c.items.at(10);melee.formId=20;melee.weapon.animation=1;melee.weapon.ammo=0;melee.weapon.clip=0;
@@ -387,7 +397,7 @@ int main(int argc,char** argv){
   EndIdleRetirement();
   ScriptOrderedFists();
   ScriptOrderedFists(true);
-  WeaponCommitAndMeleeTests();CoverGeometryTests();ConcurrentWeaponTests();
+  CreatureInventoryWeapon();WeaponCommitAndMeleeTests();CoverGeometryTests();ConcurrentWeaponTests();
   {
     Prepare();auto& actor=gQ230NpcActors[0];actor.runtime.EndDialogue();actor.runtime.BeginCombat(0x14);
     actor.runtime.pendingAttack=true;actor.runtime.reloadUntil=20;actor.runtime.navigationDoor=77;

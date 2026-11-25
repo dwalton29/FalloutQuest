@@ -52,6 +52,7 @@ struct QActorSkin { fqskin::Mapping mapping;std::vector<fqskin::PaletteRow> pale
 struct Q230RigPart {
   QActorSkin skin;
   std::vector<int> bones;
+    std::vector<fo3anim::Matrix> sceneToBone;
   std::vector<std::array<float,3>> hitVertices;
   std::vector<uint8_t> hitRegions;
   std::vector<std::pair<std::array<float,3>,std::array<float,3>>> interactionBounds;
@@ -393,6 +394,20 @@ int main(int argc,char** argv) {
     assert(std::fabs(recorded[i * 18] - 0.02f) < 1e-5f);
     assert(std::fabs(recorded[i * 18 + 1] - 0.1f) < 1e-5f);
     assert(recorded[i * 18 + 12] == 0.25f);
+  }
+  // A worn mesh can have a different bind frame from the shared skeleton.
+  // Translate geometry by ten local units and verify the palette removes it
+  // before skinning. Placement here also scales the actor by two.
+  {
+    auto worn=part;worn.mesh.geometryOriginInModel[0]=10;
+    worn.mesh.skinBones[0].geometryToBone=actor.skeleton.inverseBind[0];
+    worn.mesh.skinBones[0].hasGeometryToBone=true;
+    worn.positionsGame[0].x+=20;
+    auto wearer=actor;wearer.rigs.clear();wearer.objects.clear();wearer.lastFrame=UINT64_MAX;
+    assert(Q230UploadActorPart(wearer,worn,20,30,40));
+    Q230UpdateActor(wearer);
+    assert(std::fabs(recorded[0]-.02f)<1e-5f&&std::fabs(recorded[1]-.1f)<1e-5f);
+    --uploads;
   }
   Q230UpdateActor(actor);
   assert(uploads == 1);

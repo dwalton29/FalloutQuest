@@ -121,7 +121,7 @@ static fo3anim::Clip Q230CreatureAttackClip(const std::string& root){
     attack=std::move(clip);
     return true;
   };
-  if(!load(root+"h2hattackright.kf")){
+  if(!load(root+"h2hattackright.kf")&&!load(root+"h2hattackright_a.kf")){
     std::vector<FalloutMeshIndexEntry> entries;
     ListFalloutMeshFilesByPrefix(root,entries);
     for(const auto& entry:entries){
@@ -132,16 +132,13 @@ static fo3anim::Clip Q230CreatureAttackClip(const std::string& root){
   }
   return clips.emplace(root,std::move(attack)).first->second;
 }
-void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
-  if(!catalog)return;
-  const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
-  if(actor.source.creature){
-    const auto* stats=fo3weapon::ActorStatistics(catalog->weapons,actor.source.baseFormId);
-    const auto fists=catalog->pipboy.formNames.find("fists");
+static void Q230CacheCreatureAttack(Q230ActorVisual& actor,const fo3player::Catalog& catalog,
+                                    const fo3weapon::Definitions::Actor* stats,const std::string& root) {
+    const auto fists=catalog.pipboy.formNames.find("fists");
     if(!stats||!stats->creature||stats->creatureDamage<=0||!stats->creatureReach||
-       fists==catalog->pipboy.formNames.end())return;
-    const auto item=catalog->items.find(fists->second);
-    if(item==catalog->items.end()||!item->second.weapon.valid)return;
+       fists==catalog.pipboy.formNames.end())return;
+    const auto item=catalog.items.find(fists->second);
+    if(item==catalog.items.end()||!item->second.weapon.valid)return;
     Q230CombatWeapon ready;
     ready.clips[1]=Q230CreatureAttackClip(root);
     if(ready.clips[1].tracks.empty())return;
@@ -153,7 +150,19 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     ready.definition.maxRange=stats->creatureReach*actor.source.scale;
     ready.definition.attackMult=ready.clips[1].frequency;
     ready.ready=true;actor.combatWeapons.emplace(fists->second,std::move(ready));
-    return;
+}
+void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog,
+                     const std::unordered_map<uint64_t,uint32_t>* templateChoices) {
+  if(!catalog)return;
+  const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
+  if(actor.source.creature){
+    auto selected=[&](uint32_t list){
+      if(!templateChoices)return uint32_t(0);
+      const auto it=templateChoices->find((uint64_t(actor.source.refFormId)<<32)|list);
+      return it==templateChoices->end()?0u:it->second;
+    };
+    const auto* stats=fo3weapon::ActorStatistics(catalog->weapons,actor.source.baseFormId,selected);
+    Q230CacheCreatureAttack(actor,*catalog,stats,root);
   }
   const auto candidates=fo3npc::CombatWeaponCandidates(actor.source,*catalog);
   Q6H_LOGI("NPC COMBAT CANDIDATES actor=%08X source=%zu weapons=%zu",
@@ -166,7 +175,7 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     if(!melee&&!d.Firearm())continue;
     if((d.flags2&0x41)||d.animation>=8)continue;
     const auto proj=catalog->weapons.projectiles.find(d.projectile);
-    if(!melee&&(proj==catalog->weapons.projectiles.end()||proj->second.type!=1||proj->second.explosion||proj->second.range<=0))continue;
+    if(!melee&&(proj==catalog->weapons.projectiles.end()||!proj->second.DirectFire()))continue;
     const std::string group=d.animation==1?"1hm":d.animation==2?"2hm":d.animation<=4?"1hp":d.animation==6?"2ha":"2hr";
     Q230CombatWeapon ready;ready.definition=d;std::vector<uint8_t> bytes;
     // WEAP DNAM byte 41 is the authored animation-group enum (xEdit FO3).
@@ -193,7 +202,8 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     Fo3WorldPlacement placement;placement.modelPath=item->second.model;placement.baseFormId=form;
     placement.baseRecordType="WEAP";placement.scale=1;
     std::vector<CpuObject> parts;
-    if(BuildCpuObjects(placement,parts))for(auto& part:parts)actor.parts.push_back(std::move(part));
+    if(!BuildCpuObjects(placement,parts)||parts.empty())continue;
+    for(auto& part:parts)actor.parts.push_back(std::move(part));
     for(size_t i=0;i<2;++i){
       const auto path=root+group+(i==0?"aimup.kf":"aimdown.kf");
       auto& aim=ready.aimVariants[i];
@@ -203,6 +213,7 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     ready.ready=true;actor.combatWeapons.emplace(form,std::move(ready));
     fo3audio::PreloadSound(d.fire3D);fo3audio::PreloadSound(d.equip);
   }
+  if(actor.source.creature)return;
   // Fists is the engine's weapon for an empty hand. Its original WEAP has
   // no model, and melee reach comes from the attack pose rather than DNAM range.
   const auto fists=catalog->pipboy.formNames.find("fists");
@@ -514,8 +525,6 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     rig.placement = Q230PlacementMatrix(part.placement);
     if (!fo3anim::Inverse(rig.placement, rig.inversePlacement))
       return false;
-    for (const auto &bone : part.mesh.skinBones)
-      rig.bones.push_back(fo3anim::FindBone(actor.skeleton, bone.name));
     if (!part.mesh.skinned) {
       const bool headPart = fo3appearance::HeadPart(actor.source, part.placement.modelPath);
       if(!part.mesh.attachmentBone.empty())
@@ -536,6 +545,22 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     fo3anim::Matrix inverseScene{};fo3anim::Inverse(scene,inverseScene);
     rig.scenePlacement=fo3anim::Multiply(scene,rig.placement);
     rig.inverseScenePlacement=fo3anim::Multiply(rig.inversePlacement,inverseScene);
+    auto geometryToModel=fo3anim::Identity();
+    for(size_t row=0;row<3;++row){
+      for(size_t col=0;col<3;++col)geometryToModel[col*4+row]=part.mesh.geometryDeltaToModel[row*3+col];
+      geometryToModel[12+row]=part.mesh.geometryOriginInModel[row];
+    }
+    fo3anim::Matrix modelToGeometry;
+    const bool invertible=fo3anim::Inverse(geometryToModel,modelToGeometry);
+    for(const auto& bone:part.mesh.skinBones){
+      const int index=fo3anim::FindBone(actor.skeleton,bone.name);
+      rig.bones.push_back(index);
+      // Vertices already include the shape transform. Undo it before applying
+      // this particular mesh's NiSkinData offset, including bind rotation.
+      auto modelToBone=index>=0?actor.skeleton.inverseBind[index]:fo3anim::Identity();
+      if(invertible&&bone.hasGeometryToBone)modelToBone=fo3anim::Multiply(bone.geometryToBone,modelToGeometry);
+      rig.sceneToBone.push_back(fo3anim::Multiply(modelToBone,rig.inverseScenePlacement));
+    }
     if (!PrepareExpandedVertexStreamQ1960(part, centerX, centerY, floorZ))
       return false;
     // FaceGen/morphed bind geometry is uploaded once, never rebuilt in update.
@@ -845,8 +870,12 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       const int index=rig.skin.mapping.sources[slot];
       const int bone=index<static_cast<int>(rig.bones.size()) ? rig.bones[index] : -1;
       auto delta=actor.dialogueRoot;
-      if(bone>=0)
-        delta=fo3anim::Multiply(rootScene,fo3anim::Multiply(actor.pose.delta[bone],rig.inverseScenePlacement));
+      if(bone>=0){
+        const auto posed=size_t(index)<rig.sceneToBone.size()
+            ?fo3anim::Multiply(actor.pose.global[bone],rig.sceneToBone[index])
+            :fo3anim::Multiply(actor.pose.delta[bone],rig.inverseScenePlacement);
+        delta=fo3anim::Multiply(rootScene,posed);
+      }
       // Uniform game->scene scale cancels in this conjugation; direction w=0.
       fqskin::Pack(rig.skin.palette[slot+1],delta,delta);
     }

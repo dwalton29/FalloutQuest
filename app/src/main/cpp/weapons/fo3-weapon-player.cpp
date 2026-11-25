@@ -409,6 +409,18 @@ bool Player::ResetActorHealth(uint32_t reference) {
   if(changed)++revision_;
   return true;
 }
+bool Player::ActorDeathState(uint32_t reference,bool& dead) const {
+  const float health=ActorHealth(reference);
+  if(health>=0){dead=health==0;return true;}
+  // An unvisited actor can have an unresolved leveled statistics template.
+  // Reading its life state must not roll that template or realize its inventory.
+  const auto placed=catalog_->actorPlacements.find(reference);
+  if(placed==catalog_->actorPlacements.end()||(placed->second.flags&0x20)||
+     state_.actorDamage.count(reference))return false;
+  const auto saved=state_.actors.find(reference);
+  dead=saved!=state_.actors.end()?saved->second.dead:catalog_->AuthoredCorpse(reference);
+  return true;
+}
 float Player::ActorHealth(uint32_t reference) const {
   if(reference==0x14)return Health();
   const auto saved=state_.actors.find(reference);

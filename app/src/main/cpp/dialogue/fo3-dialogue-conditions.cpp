@@ -18,9 +18,9 @@ bool DeadCount(const fo3player::Player& player,uint32_t base,float& value,std::s
   value=0;
   for(const auto& placement:definitions.actorPlacements){
     if(placement.second.base!=base||(placement.second.flags&0x20))continue;
-    const auto health=player.ActorHealth(placement.first);
-    if(health<0){error="GetDeadCount actor health unavailable";return false;}
-    if(health==0)++value;
+    bool dead=false;
+    if(!player.ActorDeathState(placement.first,dead)){error="GetDeadCount actor death state unavailable";return false;}
+    if(dead)++value;
   }
   return true;
 }
@@ -96,14 +96,13 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(!p.ReferenceDisabled(who.reference,disabled,error))return false;
     value=disabled;return true;}
   case 84:return DeadCount(p,c.a,value,error);
-  case 46:{const float health=pc?p.Health():p.ActorHealth(who.reference);if(health<0){error="actor health unavailable";return false;}value=health<=0;return true;}
+  case 46:{bool dead=false;if(!p.ActorDeathState(pc?fo3player::PlayerRef:who.reference,dead)){error="actor death state unavailable";return false;}value=dead;return true;}
   case 47:
     value=p.ScriptItemCount(who.reference,c.a);
     if(value<0){error="reference inventory state unavailable";return false;}
     return true;
   case 50:value=state.pipboy.talkedActors.count(who.reference);return true;
   case 53:case 79: {auto key=VariableKey(d,c.a,c.b,c.function==79);if(!key){error="script variable unavailable";return false;}
-    if(ctx.activationVariables){auto v=ctx.activationVariables->find(key);if(v!=ctx.activationVariables->end()){value=v->second;return true;}}
     auto v=state.pipboy.dialogueVariables.find(key);value=v==state.pipboy.dialogueVariables.end()?0:v->second;return true;}
   case 56:{auto q=d.quests.find(c.a);if(q==d.quests.end()){error="quest unavailable";return false;}value=quest==state.pipboy.quests.end()?(q->second.flags&1)!=0:quest->second.running;return true;}
   case 58:value=quest==state.pipboy.quests.end()?0:quest->second.stage;return d.quests.count(c.a)!=0;

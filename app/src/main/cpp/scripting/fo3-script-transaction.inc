@@ -64,7 +64,18 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
   // Revisions describe the final projection, not intermediate script toggles.
   candidate.state_.referenceStateRevision=plan->references_
       ?plan->references_->CandidateSnapshot()->revision:state_.referenceStateRevision;
+  if(plan->references_&&candidate.state_.damageModelRevision!=state_.damageModelRevision)
+    plan->references_->candidate_=std::make_shared<const fo3world::ReferenceStateSnapshot>(candidate.CaptureReferenceState());
   return plan;
+}
+std::unique_ptr<ScriptTransactionPlan> Player::PrepareActorActivation(
+    uint32_t reference,uint32_t activator,bool& requestsTalk,std::string& error) const {
+  requestsTalk=false;
+  if(!HasReferenceEvent(reference,"OnActivate")){error="actor activation handler unavailable";return {};}
+  const auto script=catalog_->eventBaseScripts.at(catalog_->references.at(reference).base);
+  return PrepareScriptTransaction([&](Player& candidate,std::string& e){
+    return candidate.RunSourceEventDirect(script,"OnActivate",reference,activator,e,0,&requestsTalk);
+  },error,true);
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareDialogueTransaction(
     const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker,ScriptProgramCapture capture) const {
@@ -128,7 +139,10 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareReferenceEventTransaction(
 }
 bool Player::HasNativeActivation(uint32_t reference)const{
   const auto ref=catalog_->references.find(reference);
-  if(ref==catalog_->references.end()||!ref->second.valid||!catalog_->activatorBases.count(ref->second.base))return false;
+  if(ref==catalog_->references.end()||!ref->second.valid)return false;
+  const auto definition=catalog_->pipboy.dialogueActors.find(ref->second.base);
+  if(definition!=catalog_->pipboy.dialogueActors.end()&&definition->second.talkingActivator)return true;
+  if(!catalog_->activatorBases.count(ref->second.base))return false;
   if(catalog_->activationChildren.count(reference))return true;
   if(!scriptAnimationDefinitions_)return false;
   const auto animation=scriptAnimationDefinitions_->find(reference);

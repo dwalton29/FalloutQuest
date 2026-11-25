@@ -51,6 +51,15 @@ class Expression {
         const auto placed=d.targets.find(owner);
         return placed!=d.targets.end()?placed->second.linkedReference:0u;
       }
+      if(auto slot=DeclaredLocalKey(d,owner,scriptId,n,true)){
+        if(forms){
+          if(!fo3dialogue::VariableKey(d,owner,uint32_t(slot),d.quests.count(owner)!=0,forms))return uint32_t(0);
+          forms->variables.back().referenceSlot=true;
+        }
+        const auto& refs=p.Snapshot().pipboy.referenceVariables;
+        const auto stored=refs.find(slot);
+        return stored==refs.end()?0u:stored->second;
+      }
       const auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
       if(forms&&!forms->Add(f->second,n))return uint32_t(0);
       return f->second;
@@ -204,7 +213,7 @@ class Expression {
       }
       if(query=="issneaking"){if(id!=fo3player::PlayerRef)return Fail("NPC sneak posture unavailable");value=p.IsSneaking();return true;}
       if(query=="istalking"){value=p.ScriptActorTalking(id);return true;}
-      if(query=="getdead"){const auto health=p.ActorHealth(id);if(health<0)return Fail("actor health unavailable");value=health<=0;return true;}
+      if(query=="getdead"){bool dead=false;if(!p.ActorDeathState(id,dead))return Fail("actor death state unavailable");value=dead;return true;}
       if(id==fo3player::PlayerRef){
         value=std::any_of(p.Snapshot().actors.begin(),p.Snapshot().actors.end(),[](const auto& entry){
           return !entry.second.dead&&entry.second.hostile==fo3player::PlayerRef;
@@ -374,7 +383,7 @@ bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& b
   }
   return true;
 }
-bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error,uint32_t scriptId,ScriptProgramOrigin origin) {
+bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error,uint32_t scriptId,ScriptProgramOrigin origin,bool* requestsTalk) {
   if(depth>=32){error="script nesting exceeded";return false;}
   if(!scriptId && owner){
     const auto quest=catalog_->pipboy.quests.find(owner);
@@ -818,6 +827,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       const auto receiver=resolve(c.receiverLocal,c.form);
       const auto activator=resolve(c.targetLocal,c.index?c.index:scriptActivator_);
       if(!receiver||(c.targetLocal&&!activator)){error="Activate reference is unset";return false;}
+      if(requestsTalk&&!c.variable&&receiver==owner&&activator==scriptActivator_){
+        *requestsTalk=true;break;
+      }
       if(!c.variable){ok=QueueScriptDefaultActivate(receiver,activator);break;}
       if(scriptActivationDepth_>=8){error="nested activation depth exceeded";return false;}
       if(activator!=PlayerRef&&!catalog_->actorPlacements.count(activator)){error="activation actor unavailable";return false;}
@@ -836,6 +848,12 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::RemoveImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::RemoveImageModifier;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::ImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::ImageModifier;action.reference=owner;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
+    case C::PlaceExplosion:{
+      for(unsigned i=0;ok&&i<unsigned(c.value);++i)ok=QueueExplosion(c.index,c.form);
+      if(!ok)error="PlaceAtMe requires a placed explosion with supported payload";
+      break;
+    }
+    case C::DamageObject:ok=DamageDestructible(c.form,c.value);break;
     case C::PlaySound3D:{
       fo3pipdata::Location location;
       ok=catalog_->pipboy.sounds.count(c.form)&&ScriptReferenceLocation(c.index,location);
@@ -885,7 +903,7 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
   error="event transaction changed before publication";return false;
 }
 bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error,uint32_t filterForm) {
+                            uint32_t activator,std::string& error,uint32_t filterForm,bool* requestsTalk) {
   error.clear();
   const auto def=catalog_->eventPrograms.find(scriptId);
   if(def==catalog_->eventPrograms.end()) {error="script definition unavailable";return false;}
@@ -909,6 +927,7 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
     // of GetActionRef (the actor responsible for the event).
     const uint32_t match=filterForm?filterForm:activator;
     const auto filter=catalog_->pipboy.formNames.find(block.filter);
+    if(block.filter=="player"&&match!=PlayerRef&&(filterForm||catalog_->references.count(match)))continue;
     if(!block.filter.empty()&&block.filter!="player"&&filter!=catalog_->pipboy.formNames.end()&&filter->second!=match)continue;
     if(!fo3script::EventFilterMatches(block.filter,match,PlayerRef) && !(filter!=catalog_->pipboy.formNames.end()&&filter->second==match)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
@@ -917,7 +936,7 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
     fo3pipdata::ResultScript body;body.source=block.body;
     ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::ReferenceEvent;
     origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.sourceLine;origin.filterForm=filterForm;
-    if(!RunScript(body,owner,0,budget,error,scriptId,std::move(origin))){
+    if(!RunScript(body,owner,0,budget,error,scriptId,std::move(origin),requestsTalk)){
       error="line "+std::to_string(block.sourceLine)+": "+error;
       return false;
     }
@@ -1183,6 +1202,17 @@ bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
   auto parents=[&]{if(!catalog_->activationChildren.count(reference))return true;
     fo3script::Action action;action.kind=fo3script::ActionKind::ActivationParents;
     action.reference=reference;return QueueScriptAction(std::move(action));};
+  const auto speaker=catalog_->pipboy.dialogueActors.find(base);
+  if(speaker!=catalog_->pipboy.dialogueActors.end()&&speaker->second.talkingActivator){
+    bool disabled=true;std::string error;
+    if(activator!=PlayerRef||!ReferenceDisabled(reference,disabled,error)||disabled)return false;
+    for(const auto topic:catalog_->pipboy.greetings){
+      const auto before=pendingScriptActions_.size();
+      if(!QueueScriptSpeech(reference,topic,activator,false,false))return false;
+      if(pendingScriptActions_.size()!=before)break;
+    }
+    return parents();
+  }
   if(catalog_->activatorBases.count(base)&&scriptAnimationDefinitions_){
     const auto animation=scriptAnimationDefinitions_->find(reference);
     if(animation!=scriptAnimationDefinitions_->end()&&!fo3script::OpenStateGroup(animation->second,true).empty()){
@@ -1215,6 +1245,72 @@ bool Player::QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon
      item==catalog_->items.end()||!item->second.weapon.valid||!ReferenceDisabled(reference,disabled,error)||disabled)return false;
   if(!HasReferenceEvent(reference,"OnHit")&&!HasReferenceEvent(reference,"OnHitWith"))return true;
   fo3script::Action action;action.kind=fo3script::ActionKind::WeaponHit;action.reference=reference;action.form=weapon;action.flags=attacker;
+  return QueueScriptAction(std::move(action));
+}
+const DestructionStage* Player::ObjectDamageStage(uint32_t ref,bool requireModel) const {
+  const auto damage=state_.objectDamage.find(ref);
+  if(damage==state_.objectDamage.end())return nullptr;
+  const auto placed=catalog_->references.find(ref);
+  if(placed==catalog_->references.end())return nullptr;
+  const auto definition=catalog_->destructibles.find(placed->second.base);
+  if(definition==catalog_->destructibles.end())return nullptr;
+  const auto& d=definition->second;
+  for(auto it=d.stages.rbegin();it!=d.stages.rend();++it)
+    if((!requireModel||!it->model.empty())&&double(damage->second)*100>=double(d.health)*(100-it->healthPercent))return &*it;
+  return nullptr;
+}
+bool Player::DamageDestructible(uint32_t ref,float amount) {
+  const auto placed=catalog_->references.find(ref);
+  if(placed==catalog_->references.end()||!std::isfinite(amount)||amount<0)return false;
+  const auto definition=catalog_->destructibles.find(placed->second.base);
+  if(definition==catalog_->destructibles.end())return false;
+  const auto& d=definition->second;
+  const auto previous=state_.objectDamage.find(ref);
+  const float old=previous==state_.objectDamage.end()?0.f:previous->second;
+  const auto* before=ObjectDamageStage(ref);
+  if(amount==0||old>=d.health||(before&&(before->flags&4)))return true;
+  float next=std::min(float(d.health),old+amount);
+  const auto* previousModel=ObjectDamageStage(ref,true);
+  // One impact enters the stage at its resulting health. An earlier capped
+  // stage stops the impact there; skipped intermediate stages do not play.
+  const DestructionStage* entered=nullptr;
+  for(const auto& stage:d.stages){
+    const float threshold=float(double(d.health)*(100-stage.healthPercent)/100.);
+    if(threshold>next)break;
+    if(threshold<=old&&previous!=state_.objectDamage.end())continue;
+    entered=&stage;
+    if(stage.flags&1){next=threshold;break;}
+  }
+  if(entered){
+    if(entered->selfDamage||entered->debris)return false;
+    if(entered->explosion&&!QueueExplosion(ref,entered->explosion))return false;
+    if(entered->flags&2){std::string error;if(!StageReferenceEnable(ref,false,error))return false;}
+  }
+  state_.objectDamage[ref]=next;++revision_;
+  const auto* currentModel=ObjectDamageStage(ref,true);
+  if(currentModel&&(!previousModel||previousModel->model!=currentModel->model)){
+    fo3script::Action action;action.kind=fo3script::ActionKind::DestructionModel;action.reference=ref;
+    if(!QueueScriptAction(std::move(action)))return false;
+    ++state_.damageModelRevision;
+  }
+  return true;
+}
+bool Player::QueueExplosion(uint32_t reference,uint32_t form){
+  const auto definition=catalog_->explosions.find(form);
+  if(definition==catalog_->explosions.end())return false;
+  const auto& e=definition->second;
+  // Damaging explosions require weapon ownership and radial hit delivery.
+  // The world-only path handles actor-independent, non-damaging blasts.
+  if(e.damage!=0||e.placedObject||e.enchantment)return false;
+  fo3pipdata::Location where;
+  if(!ScriptReferenceLocation(reference,where)||!where.cell)return false;
+  fo3script::Action action;action.kind=fo3script::ActionKind::Explosion;
+  action.reference=reference;action.form=form;action.cell=where.cell;action.world=where.world;
+  action.position={where.x,where.y,0};
+  if(reference==PlayerRef)action.position[2]=ScriptPlayerHeight();
+  else if(const auto actor=state_.actors.find(reference);actor!=state_.actors.end())action.position[2]=actor->second.position[2];
+  else if(const auto p=catalog_->pipboy.targets.find(reference);p!=catalog_->pipboy.targets.end())action.position[2]=p->second.z;
+  else return false;
   return QueueScriptAction(std::move(action));
 }
 bool Player::QueueScriptAction(fo3script::Action action){
@@ -1255,27 +1351,39 @@ std::vector<uint32_t> Player::ScriptOccupiedTriggers() const {
 std::vector<std::pair<uint32_t,bool>> Player::ScriptActorTriggerChanges(
     uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position)const {
   std::vector<std::pair<uint32_t,bool>> changes;
-  const auto volumes=catalog_->actorTriggerVolumes.find(actor);
-  if(volumes==catalog_->actorTriggerVolumes.end())return changes;
-  for(const auto reference:volumes->second){
+  const auto previous=scriptActorInsideTriggers_.find(actor);
+  auto check=[&](uint32_t reference){
     const auto placed=catalog_->pipboy.targets.find(reference);
     const auto shape=catalog_->pipboy.triggerPrimitives.find(reference);
-    if(placed==catalog_->pipboy.targets.end()||shape==catalog_->pipboy.triggerPrimitives.end())continue;
+    if(placed==catalog_->pipboy.targets.end()||shape==catalog_->pipboy.triggerPrimitives.end())return;
     const auto& p=placed->second;
+    const bool wasInside=previous!=scriptActorInsideTriggers_.end()&&previous->second.count(reference);
     bool disabled=true;std::string error;
-    const bool inside=(world?p.world==world:p.cell==cell)&&
-        ReferenceDisabled(reference,disabled,error)&&!disabled&&fo3script::Contains(p,shape->second,position);
-    if(inside!=bool(scriptActorInsideTriggers_.count((uint64_t(actor)<<32)|reference)))
-      changes.push_back({reference,inside});
-  }
+    const bool inside=(world?p.world==world:(!p.world&&p.cell==cell))&&
+        fo3script::Contains(p,shape->second,position)&&ReferenceDisabled(reference,disabled,error)&&!disabled;
+    if(inside!=wasInside)changes.emplace_back(reference,inside);
+  };
+  const auto named=catalog_->actorTriggerVolumes.find(actor);
+  if(named!=catalog_->actorTriggerVolumes.end())for(auto ref:named->second)check(ref);
+  const auto local=catalog_->unfilteredActorTriggersBySpace.find(world?world:cell);
+  if(local!=catalog_->unfilteredActorTriggersBySpace.end())for(auto ref:local->second)check(ref);
+  // An actor moving into another cell may have left an unfiltered volume
+  // which is no longer in its destination's list.
+  if(previous!=scriptActorInsideTriggers_.end())for(auto ref:previous->second)check(ref);
+  std::sort(changes.begin(),changes.end());
+  changes.erase(std::unique(changes.begin(),changes.end()),changes.end());
   return changes;
 }
 void Player::AcknowledgeScriptTrigger(uint32_t reference,bool inside,uint32_t actor){
   if(actor==PlayerRef){
     if(inside)scriptInsideTriggers_.insert(reference);else scriptInsideTriggers_.erase(reference);
   }else{
-    const auto key=(uint64_t(actor)<<32)|reference;
-    if(inside)scriptActorInsideTriggers_.insert(key);else scriptActorInsideTriggers_.erase(key);
+    if(inside){scriptActorInsideTriggers_[actor].insert(reference);return;}
+    const auto previous=scriptActorInsideTriggers_.find(actor);
+    if(previous!=scriptActorInsideTriggers_.end()){
+      previous->second.erase(reference);
+      if(previous->second.empty())scriptActorInsideTriggers_.erase(previous);
+    }
   }
 }
 bool Player::QueueScriptSound(uint32_t form){

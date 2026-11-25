@@ -13,54 +13,6 @@
 #include <cstring>
 #include <limits>
 namespace fo3dialogue {
-// The player's explicit Talk action dispatches the NPC's OnActivate event.
-// Interpret only a validated local-variable/player-activator subset. GameMode,
-// combat and death events remain outside this dialogue bridge.
-bool ActivationVariables(const Context& ctx,const fo3player::Player& player,std::unordered_map<uint64_t,float>& pending,std::string& error) {
-  pending.clear();
-  error.clear();const auto& d=player.Definitions().pipboy;
-  auto actor=d.dialogueActors.find(ctx.speaker.base);if(actor==d.dialogueActors.end())return true;
-  auto script=d.scripts.find(actor->second.script);if(script==d.scripts.end()||script->second.source.empty())return true;
-  auto lower=[](std::string s){for(auto& c:s)c=char(std::tolower((unsigned char)c));return s;};
-  auto variable=[&](const std::string& name){for(const auto& v:script->second.variables)if(lower(v.second)==name)return VariableKey(d,ctx.speaker.reference,v.first,false);return uint64_t(0);};
-  auto number=[](const std::string& s,float& value){char* end=nullptr;value=std::strtof(s.c_str(),&end);return end&&end!=s.c_str()&&!*end&&std::isfinite(value);};
-  std::istringstream lines(lower(script->second.source));std::string line;bool event=false,found=false;
-  std::vector<bool> gates{true};
-  auto fail=[&](){error="unsupported OnActivate: "+line;return false;};
-  while(std::getline(lines,line)) {
-    auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
-    std::istringstream in(line);std::string op,a,b,c,extra;if(!(in>>op))continue;
-    if(!event){if(op=="begin"&&in>>a&&a=="onactivate"){if(found||in>>extra)return fail();event=found=true;}continue;}
-    if(op=="end"){if(gates.size()!=1||in>>extra)return fail();event=false;continue;}
-    if(op=="if") {
-      if(!(in>>a>>b>>c)||b!="=="||in>>extra)return fail();
-      bool pass=false;
-      if(a=="getactionref"&&c=="player")pass=ctx.target.reference==0x14;
-      else {
-        const auto key=variable(a);float comparison=0;if(!key||!number(c,comparison))return fail();
-        const auto saved=player.Snapshot().pipboy.dialogueVariables.find(key);
-        const float value=pending.count(key)?pending.at(key):saved==player.Snapshot().pipboy.dialogueVariables.end()?0:saved->second;
-        pass=value==comparison;
-      }
-      gates.push_back(gates.back()&&pass);continue;
-    }
-    if(op=="endif"){if(gates.size()<2||in>>extra)return fail();gates.pop_back();continue;}
-    if(op=="set") {
-      float value=0;if(!(in>>a>>b>>c)||b!="to"||in>>extra||!number(c,value))return fail();
-      const auto key=variable(a);if(!key)return fail();if(gates.back())pending[key]=value;continue;
-    }
-    if(op=="activate"){if(in>>extra)return fail();continue;} // Talk supplies the default action.
-    return fail();
-  }
-  if(event||gates.size()!=1)return fail();
-  return true;
-}
-bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
-  std::unordered_map<uint64_t,float> pending;
-  if(!ActivationVariables(ctx,player,pending,error))return false;
-  for(const auto& v:pending)if(!player.SetDialogueVariable(v.first,v.second))return false;
-  return true;
-}
 bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScript& script,std::vector<Command>& out,std::string& error,uint32_t owner,uint32_t scriptId,CommandFormCapture* forms) {
   out.clear();error.clear();
   if(forms)forms->Reset();
@@ -486,6 +438,25 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
         if(in>>b){if(b!="0"&&b!="1"){error="invalid Activate event flag";return false;}cmd.variable=b=="1";}
       }
       in.clear();
+    } else if(op=="placeatme"||(op.size()>10&&op.compare(op.size()-10,10,".placeatme")==0)){
+      cmd.type=CommandType::PlaceExplosion;
+      cmd.index=op=="placeatme"?owner:form(op.substr(0,op.size()-10));
+      if(!cmd.index||!(in>>a)||!(cmd.form=form(a))){error="unresolved PlaceAtMe reference or base";return false;}
+      // A count with zero displacement has the same position in every direction.
+      cmd.value=1;
+      float distance=0,direction=0;
+      if(in>>a){
+        if(!number(a,cmd.value)||cmd.value<1||cmd.value>128||std::floor(cmd.value)!=cmd.value){error="invalid PlaceAtMe count";return false;}
+        if(in>>a){
+          if(!number(a,distance)||distance!=0){error="PlaceAtMe displacement unsupported";return false;}
+          if(in>>a)if(!number(a,direction)||direction<0||direction>3||std::floor(direction)!=direction){error="invalid PlaceAtMe direction";return false;}
+        }
+      }
+      in.clear();
+    } else if(op=="damageobject"||(op.size()>13&&op.compare(op.size()-13,13,".damageobject")==0)){
+      cmd.type=CommandType::DamageObject;
+      cmd.form=op=="damageobject"?owner:form(op.substr(0,op.size()-13));
+      if(!cmd.form||!(in>>a)||!number(a,cmd.value)||cmd.value<0){error="invalid DamageObject receiver or damage";return false;}
     } else if(op=="playsound3d"||(op.size()>12&&op.compare(op.size()-12,12,".playsound3d")==0)) {
       cmd.type=CommandType::PlaySound3D;
       cmd.index=op=="playsound3d"?owner:form(op.substr(0,op.size()-12));

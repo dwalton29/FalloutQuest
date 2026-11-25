@@ -372,7 +372,7 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
         world.baseRecordType = base.recordType;
         world.retainedSwitch = retained;
         world.editorId = base.editorId;
-        world.modelPath = base.modelPath;
+        world.modelPath = referenceState?referenceState->Model(p->refFormId,base.modelPath):base.modelPath;
         world.x = p->x; world.y = p->y; world.z = p->z;
         Q1700Interior::ConvertBethesdaRotation(p->rx, p->ry, p->rz,
                                                world.rx, world.ry, world.rz);

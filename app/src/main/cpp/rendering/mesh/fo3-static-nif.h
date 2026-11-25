@@ -1,11 +1,15 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 struct Fo3NifSkinBone {
     std::string name;
+    // Column-major transform from raw NiGeometryData vertices to this bone.
+    std::array<float,16> geometryToBone{};
+    bool hasGeometryToBone = false;
     // Bind-pose bone origin in NIF model/game coordinates after the authored
     // NiNode hierarchy has been evaluated.
     float bindPosition[3]{0.0f, 0.0f, 0.0f};
@@ -23,6 +27,7 @@ struct Fo3StaticNifMesh {
 
     // Linear transform from raw geometry/EGM delta coordinates into the
     // model-space coordinates stored in positions. Translation is excluded.
+    float geometryOriginInModel[3]{};
     float geometryDeltaToModel[9]{
         1.0f,0.0f,0.0f,
         0.0f,1.0f,0.0f,

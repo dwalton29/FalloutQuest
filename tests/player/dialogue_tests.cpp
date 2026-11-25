@@ -221,7 +221,9 @@ static void ResultConsequences() {
 static void ActivationEvent() {
   fo3player::Catalog c;c.pipboy.dialogueActors[10].script=20;
   c.pipboy.referenceScripts[100]={"actor",10};c.pipboy.scripts[20].variables[1]="Greet";
-  c.pipboy.scripts[20].source="Begin GameMode\nuseWeapon unsupported\nEnd\nBegin OnActivate\nif Greet == 0\nif GetActionRef == player\nset Greet to 1\nendif\nendif\nactivate\nEnd";
+  c.pipboy.scripts[20].source="short Greet\nBegin GameMode\nuseWeapon unsupported\nEnd\nBegin OnActivate\nif Greet == 0\nif GetActionRef == player\nset Greet to 1\nendif\nendif\nactivate\nEnd";
+  c.references[100].base=10;c.eventBaseScripts[10]=20;
+  c.eventPrograms[20]=fo3script::ParseEvents(c.pipboy.scripts[20]);
   c.initial.baseHealth=100;c.pipboy.targets[100].base=10;c.weapons.actors[10].health=100;c.pipboy.greetings={40};c.pipboy.quests[30].priority=50;c.pipboy.quests[30].flags=1;
   fo3pipdata::Info greeting;greeting.id=50;greeting.topic=40;greeting.quest=30;greeting.responses={{1,1,"Activation greeting"}};
   fo3pipdata::Condition gate;gate.function=53;gate.a=100;gate.b=1;gate.value=1;greeting.conditions={gate};c.pipboy.topics[40]={greeting};
@@ -229,12 +231,22 @@ static void ActivationEvent() {
   Session session;assert(!session.CanStart(ctx));auto previewRevision=p.Revision();
   assert(session.CanActivate(ctx)&&p.Revision()==previewRevision&&p.Snapshot().pipboy.dialogueVariables.empty());
   assert(session.Start(ctx,p));session.End("activation regression");
-  assert(Activate(ctx,p,error));assert(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==1);
-  auto revision=p.Revision();assert(Activate(ctx,p,error)&&p.Revision()==revision);
-  fo3player::Player other(c);ctx.player=&other;ctx.target.reference=101;assert(Activate(ctx,other,error));assert(other.Snapshot().pipboy.dialogueVariables.empty());
-  c.pipboy.scripts[20].source="Begin OnActivate\nset Greet to 1\nuseWeapon unsupported\nEnd";
-  fo3player::Player unsupported(c);ctx.player=&unsupported;ctx.target.reference=0x14;
-  assert(!Activate(ctx,unsupported,error)&&unsupported.Snapshot().pipboy.dialogueVariables.empty());
+  assert(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==1);
+  auto revision=p.Revision();assert(session.Start(ctx,p));session.End("repeat activation");
+  assert(p.Revision()==revision);
+  fo3player::Player other(c);bool talk=false;
+  auto plan=other.PrepareActorActivation(100,101,talk,error);
+  assert(plan&&talk&&other.CommitScriptTransaction(*plan)&&other.Snapshot().pipboy.dialogueVariables.empty());
+  c.pipboy.scripts[20].source="short Greet\nBegin OnActivate\nset Greet to 1\nuseWeapon unsupported\nEnd";
+  c.eventPrograms[20]=fo3script::ParseEvents(c.pipboy.scripts[20]);
+  fo3player::Player unsupported(c);ctx.player=&unsupported;
+  assert(!session.Start(ctx,unsupported)&&unsupported.Snapshot().pipboy.dialogueVariables.empty());
+  c.pipboy.scripts[20].source="short Greet\nBegin OnActivate\nset Greet to 1\nreturn\nactivate\nEnd";
+  c.eventPrograms[20]=fo3script::ParseEvents(c.pipboy.scripts[20]);
+  fo3player::Player suppressed(c);ctx.player=&suppressed;
+  assert(!session.CanActivate(ctx)&&suppressed.Snapshot().pipboy.dialogueVariables.empty());
+  assert(!session.Start(ctx,suppressed)&&suppressed.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==1);
+
 }
 static void PresentationAndOverride() {
   fo3font::Metrics font;font.baseLine=10;

@@ -212,6 +212,18 @@ struct World::Impl {
 };
 World::World():impl(new Impl){}World::~World()=default;
 World& Live(){static World instance;return instance;}
+void World::Blast(const V& center,float radius,float impulse){
+    if(!Finite(center)||!std::isfinite(radius)||radius<=0||!std::isfinite(impulse)||impulse<=0)return;
+    const btVector3 origin=B(center);
+    for(int i=0;i<impl->world.getNumCollisionObjects();++i){
+        auto* body=btRigidBody::upcast(impl->world.getCollisionObjectArray()[i]);
+        if(!body||body->isStaticOrKinematicObject())continue;
+        auto delta=body->getCenterOfMassPosition()-origin;const float distance=delta.length();
+        if(distance>=radius)continue;
+        if(distance<.00001f)delta={0,1,0};else delta/=distance;
+        body->activate(true);body->applyCentralImpulse(delta*(impulse*(1-distance/radius)));
+    }
+}
 void World::RemoveStatic(uint64_t id){auto i=impl->statics.find(id);if(i==impl->statics.end())return;btVector3 lo,hi;i->second.body->getAabb(lo,hi);impl->WakeBounds(lo,hi);impl->world.removeRigidBody(i->second.body.get());impl->statics.erase(i);}
 void World::ClearStatics(){for(auto& e:impl->statics)impl->world.removeRigidBody(e.second.body.get());impl->statics.clear();}
 void World::Static(uint64_t id,const std::vector<Triangle>& triangles){

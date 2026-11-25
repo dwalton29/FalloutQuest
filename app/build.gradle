@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 371
-        versionName '0.213.0-holotape-results'
+        versionCode 374
+        versionName '0.215.0-following-in-his-footsteps'
 
         ndk {
             abiFilters 'arm64-v8a'

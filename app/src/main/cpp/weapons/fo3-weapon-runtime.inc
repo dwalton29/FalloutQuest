@@ -84,7 +84,7 @@ Model* Ensure(uint32_t form){
   const auto&item=i->second;const char*group=AimGroup(item.weapon.animation);
   const auto projectileDefinition=gPlayerSession->player.Definitions().weapons.projectiles.find(item.weapon.projectile);
   const bool melee=item.weapon.TwoHandMelee();
-  if(!group||fo3weapon::AimPath(item.weapon).empty()||(!melee&&(projectileDefinition==gPlayerSession->player.Definitions().weapons.projectiles.end()||projectileDefinition->second.type!=1||projectileDefinition->second.explosion||projectileDefinition->second.range<=0)))return nullptr;
+  if(!group||fo3weapon::AimPath(item.weapon).empty()||(!melee&&(projectileDefinition==gPlayerSession->player.Definitions().weapons.projectiles.end()||!projectileDefinition->second.DirectFire())))return nullptr;
   std::vector<uint8_t> nif,fp,aim;
   if(!LoadFalloutMeshFile(item.model,nif,nullptr)||
     !LoadFalloutMeshFile("Characters\\_1stPerson\\Skeleton.NIF",fp,nullptr)||

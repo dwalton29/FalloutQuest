@@ -905,7 +905,7 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
         world.baseFormId = p->baseFormId;
         world.baseRecordType = base.recordType;
         world.editorId = base.editorId;
-        world.modelPath = base.modelPath;
+        world.modelPath = referenceState?referenceState->Model(p->refFormId,base.modelPath):base.modelPath;
         world.x = p->x;
         world.y = p->y;
         world.z = p->z;

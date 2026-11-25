@@ -91,6 +91,12 @@ float playerCollisionScale=1;void SetFo3PlayerScale(float scale){playerCollision
 bool playerTransitionPending=false;unsigned playerTransitions=0;
 bool HasPendingFo3CellTransitionRequestQ74(){return playerTransitionPending;}
 bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float,double){playerTransitionPending=true;++playerTransitions;return true;}
+namespace fo3worldfx {
+std::vector<fo3script::Action> bursts;
+void Start(const fo3script::Action& action,const fo3player::ExplosionDefinition&,double){bursts.push_back(action);}
+void Clear(){bursts.clear();}
+bool RefreshModels(fo3player::Player&,const std::unordered_set<uint32_t>&){return true;}
+}
 #include "scripting/fo3-world-script-runtime.inc"
 static void OriginalCombatVoice(const char* path){
  fo3player::Catalog c;std::string error;

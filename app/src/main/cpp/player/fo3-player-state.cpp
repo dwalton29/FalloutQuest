@@ -286,7 +286,7 @@ static void FinalizePlayerCatalog(Catalog& catalog) {
   }
 }
 
-bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
+bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const TriggerModelLoader& loadTrigger) {
   error.clear();
   auto fail = [&](const char *why) {
     error = why;
@@ -299,6 +299,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   if (fileSize < 24)
     return fail("Truncated ESM");
   Catalog next;
+  std::unordered_map<uint32_t,std::string> activatorModels;
   std::vector<uint64_t> groups;
   std::vector<uint32_t> groupCells,groupWorlds,groupTopics;
   std::unordered_map<std::string, float> settings;
@@ -371,6 +372,40 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         return fail("Malformed ESM subrecord");
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
+      if(type=="EXPL"){
+        const auto raw=Find(subs,"DATA");
+        if(raw&&raw->size>=36){
+          const auto* b=raw->data;ExplosionDefinition e;
+          e.model=Text(subs,"MODL");e.force=fo3esm::ReadF32(b);e.damage=fo3esm::ReadF32(b+4);
+          e.radius=fo3esm::ReadF32(b+8);e.light=fo3esm::ReadU32(b+12);e.sound=fo3esm::ReadU32(b+16);
+          e.flags=fo3esm::ReadU32(b+20);e.imageRadius=fo3esm::ReadF32(b+24);
+          e.impactData=fo3esm::ReadU32(b+28);e.sound2=fo3esm::ReadU32(b+32);
+          if(raw->size>=48){
+            e.radiation=fo3esm::ReadF32(b+36);e.radiationTime=fo3esm::ReadF32(b+40);
+            e.radiationRadius=fo3esm::ReadF32(b+44);
+          }
+          auto link=[&](const char* tag){const auto f=Find(subs,tag);return f&&f->size==4?fo3esm::ReadU32(f->data):0u;};
+          e.imageModifier=link("MNAM");e.placedObject=link("INAM");e.enchantment=link("EITM");
+          if(std::isfinite(e.radius)&&e.radius>=0&&std::isfinite(e.damage)&&e.damage>=0&&
+             std::isfinite(e.force)&&std::isfinite(e.imageRadius)&&std::isfinite(e.radiation))
+            next.explosions.emplace(form,std::move(e));
+        }
+      }
+      if(const auto dest=Find(subs,"DEST");dest&&dest->size==8){
+        DestructibleDefinition d;d.health=fo3esm::ReadU32(dest->data);
+        for(const auto& field:subs){
+          if(field.type=="DSTD"&&field.size==20){
+            const auto* b=field.data;
+            d.stages.push_back({b[0],b[1],b[2],b[3],fo3esm::ReadU32(b+4),
+              fo3esm::ReadU32(b+8),fo3esm::ReadU32(b+12),fo3esm::ReadU32(b+16),{}});
+          }else if(field.type=="DMDL"&&!d.stages.empty()){
+            d.stages.back().model.assign(reinterpret_cast<const char*>(field.data),
+              strnlen(reinterpret_cast<const char*>(field.data),field.size));
+          }
+        }
+        if(d.health&&d.stages.size()==dest->data[4]&&!d.stages.empty())
+          next.destructibles.emplace(form,std::move(d));
+      }
       if(type=="CREA")next.deferredBases.insert(form);
       if(type=="NPC_"&&(flags&0x00080000u))next.authoredCorpseBases.insert(form);
       if(type=="ACTI")next.activatorBases.insert(form);
@@ -394,8 +429,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       }
       if(eventBase||type=="NPC_"||type=="WEAP"||type=="ARMO"||
          type=="BOOK"||type=="MISC"||type=="ALCH"||type=="KEYM"){
-        if(const auto* script=Find(subs,"SCRI");script&&script->size==4)
+        if(const auto* script=Find(subs,"SCRI");script&&script->size==4){
           next.eventBaseScripts[form]=fo3esm::ReadU32(script->data);
+          if(loadTrigger&&type=="ACTI")activatorModels.emplace(form,Text(subs,"MODL"));
+        }
         if(type=="ACTI"||type=="TERM"||type=="FURN"||type=="DOOR")
           next.eventBaseNames[form]=Text(subs,"FULL");
       }
@@ -726,11 +763,30 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     if(script!=next.eventBaseScripts.end()&&script->second)
       next.pipboy.objectReferenceScripts[reference.first]={script->second,reference.second.base};
   }
-  fo3pipdata::Finalize(next.pipboy);
   // Immutable event indices are generated once from source definitions.
   // The original compiled bytes remain attached and are never inferred.
   for(const auto& script:next.pipboy.scripts)
     next.eventPrograms.emplace(script.first,fo3script::ParseEvents(script.second));
+  if(loadTrigger){
+    std::unordered_map<std::string,fo3pipdata::TriggerPrimitive> models;
+    std::unordered_map<uint32_t,fo3pipdata::TriggerPrimitive> byBase;
+    for(const auto& [base,path]:activatorModels){
+      const auto script=next.eventPrograms.find(next.eventBaseScripts.at(base));
+      if(path.empty()||script==next.eventPrograms.end()||!script->second.error.empty())continue;
+      const auto& blocks=script->second.blocks;
+      if(std::none_of(blocks.begin(),blocks.end(),[](const auto& block){
+          return block.event=="ontriggerenter"||block.event=="ontriggerleave"||block.event=="ontrigger";
+      }))continue;
+      auto [model,fresh]=models.try_emplace(fo3script::Lower(path));
+      if(fresh&&!loadTrigger(path,model->second))model->second={};
+      if(model->second.valid)byBase.emplace(base,model->second);
+    }
+    for(const auto& [ref,placed]:next.pipboy.targets){
+      const auto model=byBase.find(placed.base);
+      if(model!=byBase.end())next.pipboy.triggerPrimitives.emplace(ref,model->second);
+    }
+  }
+  fo3pipdata::Finalize(next.pipboy);
   // A matching AddPerk / RemovePerk effect grants a temporary rank for the
   // lifetime of its MGEF. Keep that rank separate from permanently earned perks.
   for(auto& entry:next.pipboy.magic){
@@ -757,11 +813,18 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     if(association==next.pipboy.objectReferenceScripts.end())continue;
     const auto program=next.eventPrograms.find(association->second.first);
     if(program==next.eventPrograms.end()||!program->second.error.empty())continue;
+    bool unfiltered=false;
     for(const auto& block:program->second.blocks){
       if(block.event!="ontriggerenter"&&block.event!="ontriggerleave")continue;
+      if(block.filter.empty()){unfiltered=true;continue;}
       const auto actor=next.pipboy.formNames.find(block.filter);
       if(actor!=next.pipboy.formNames.end()&&next.actorPlacements.count(actor->second))
         next.actorTriggerVolumes[actor->second].push_back(volume.first);
+    }
+    const auto placed=next.pipboy.targets.find(volume.first);
+    if(unfiltered&&placed!=next.pipboy.targets.end()){
+      const auto& p=placed->second;
+      next.unfilteredActorTriggersBySpace[p.world?p.world:p.cell].push_back(volume.first);
     }
   }
   for(auto& entry:next.actorTriggerVolumes){
@@ -1074,7 +1137,11 @@ bool Player::StageReferenceEnable(uint32_t reference,bool enabled,std::string& e
 }
 fo3world::ReferenceStateSnapshot Player::CaptureReferenceStateWith(
     const std::unordered_map<uint32_t,bool>& roots,uint64_t revision) const {
-  fo3world::ReferenceStateSnapshot out;out.revision=revision;
+  fo3world::ReferenceStateSnapshot out;out.revision=revision;out.damageModelRevision=state_.damageModelRevision;
+  for(const auto& damaged:state_.objectDamage){
+    if(const auto* stage=ObjectDamageStage(damaged.first,true))
+      out.modelOverrides.emplace(damaged.first,stage->model);
+  }
   out.states.reserve(catalog_->enableParents.size()+roots.size());
   auto capture=[&](uint32_t id){bool disabled=false;std::string error;
     const bool valid=ReferenceDisabledWith(roots,id,disabled,error);
@@ -1640,7 +1707,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasLimbs=hasActorApparel||!state_.actorLimbDamage.empty();
+  const bool hasObjectDamage=!state_.objectDamage.empty();
+  const bool hasLimbs=hasObjectDamage||hasActorApparel||!state_.actorLimbDamage.empty();
   const bool hasAid=hasLimbs||!state_.activeAid.empty()||!state_.addictions.empty();
   const bool hasAppearance=hasAid||state_.appearance.race||state_.appearanceDraft.race;
   const bool hasTags=hasAppearance||state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
@@ -1954,7 +2022,13 @@ bool Player::Save(const std::string &path, std::string &error) const {
       Put64(payload,limb.first);PutFloat(payload,limb.second);
     }
   }
-  Put32(bytes, hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasObjectDamage){
+    std::vector<std::pair<uint32_t,float>> damage(state_.objectDamage.begin(),state_.objectDamage.end());
+    std::sort(damage.begin(),damage.end());Put32(payload,0x314a424f); // OBJ1
+    Put32(payload,uint32_t(damage.size()));
+    for(const auto& object:damage){Put32(payload,object.first);PutFloat(payload,object.second);}
+  }
+  Put32(bytes, hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -2014,7 +2088,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 38))
+      (version < 1 || version > 39))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2634,13 +2708,27 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=37){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314d424c)return fail("Missing limb damage state");
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(count>150000||payload.size()-at!=12ull*count)return fail("Invalid damaged limb count");
+        if(count>150000||(version>=39?payload.size()-at<12ull*count+8:payload.size()-at!=12ull*count))return fail("Invalid damaged limb count");
         for(uint32_t i=0;i<count;++i,at+=12){
           const uint64_t key=U64(p+at);
           const float damage=fo3esm::ReadF32(p+at+8);
           if(!catalog_->actorPlacements.count(uint32_t(key>>32))||uint32_t(key)>=14||
              !std::isfinite(damage)||damage<=0||damage>1||!next.actorLimbDamage.emplace(key,damage).second)
             return fail("Invalid damaged limb");
+        }
+      }
+      if(version>=39){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314a424f)return fail("Missing object damage");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>catalog_->references.size()||payload.size()-at!=size_t(count)*8)return fail("Invalid object damage count");
+        for(uint32_t i=0;i<count;++i,at+=8){
+          const auto ref=fo3esm::ReadU32(p+at);const auto damage=fo3esm::ReadF32(p+at+4);
+          const auto placed=catalog_->references.find(ref);
+          if(placed==catalog_->references.end())return fail("Unknown damaged object");
+          const auto def=catalog_->destructibles.find(placed->second.base);
+          if(def==catalog_->destructibles.end()||!std::isfinite(damage)||damage<0||damage>def->second.health||
+             (damage==0&&(def->second.stages.front().healthPercent!=100||!(def->second.stages.front().flags&1)))||
+             !next.objectDamage.emplace(ref,damage).second)return fail("Invalid object damage");
         }
       }
       if(at!=payload.size())return fail("Trailing player save data");
@@ -2668,6 +2756,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   }
   if (version < 5 && !MigrateWeaponInstances(next))
     return fail("Legacy weapon inventory exceeds instance limits");
+  next.damageModelRevision=state_.damageModelRevision+(next.objectDamage!=state_.objectDamage);
   state_ = std::move(next);
   questScriptClock_=questScriptAccumulator_=referenceScriptAccumulator_=0;questScriptLastTicks_.clear();
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();

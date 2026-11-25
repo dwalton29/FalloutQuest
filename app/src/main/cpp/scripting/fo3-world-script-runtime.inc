@@ -20,6 +20,13 @@ struct LookTarget { uint32_t reference=0; bool rotateBody=false; };
 static std::unordered_map<uint32_t,LookTarget> lookTargets;
 static fo3script::ImageStack modifiers;
 static double seconds=0;
+struct RadiationCloud {fo3script::Action source;double began=0,last=0;};
+static std::vector<RadiationCloud> radiationClouds;
+static std::unordered_set<uint32_t> pendingDamageModels;
+static double damageModelRefreshAt=0;
+static float BlastDistance(const fo3script::Action& a,const fo3dialogue::ActorContext& listener){
+    return std::hypot(std::hypot(a.position[0]-listener.x,a.position[1]-listener.y),a.position[2]-listener.z);
+}
 struct ParentActivation {uint32_t parent=0,child=0;double due=0;unsigned depth=0;};
 static std::vector<ParentActivation> parentActivations;
 static void QueueActivationChildren(fo3player::Player& player,const fo3script::Action& action){
@@ -424,7 +431,7 @@ void Register(){
     if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration())playingIdles.clear();
     player.SetScriptPlayingIdles(std::move(playingIdles));
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();parentActivations.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();parentActivations.clear();modifiers.entries.clear();radiationClouds.clear();pendingDamageModels.clear();damageModelRefreshAt=0;fo3worldfx::Clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -543,6 +550,24 @@ static void AdvanceVolleys(fo3player::Player& player){
 void Actions(){
     Hits();if(Fo3ResidentFrameBlocked())return;
     auto& player=gPlayerSession->player;fo3script::Action action;
+    for(auto it=radiationClouds.begin();it!=radiationClouds.end();){
+        const auto& a=it->source;const auto& e=player.Definitions().explosions.at(a.form);
+        const auto until=std::min(seconds,it->began+e.radiationTime);
+        fo3dialogue::ActorContext listener;
+        if(until>it->last&&fo3dialogue::ReferenceContext(player,fo3player::PlayerRef,listener)&&
+           a.world==listener.world&&(a.world||a.cell==listener.cell)){
+            const float spatial=std::max(0.f,1-BlastDistance(a,listener)/e.radiationRadius);
+            const double midpoint=(until+it->last)*.5-it->began;
+            const float rads=float((until-it->last)*e.radiation*(1-midpoint/e.radiationTime)*spatial);
+            if(rads>0)player.ChangeActorValueDamage(fo3player::PlayerRef,54,rads,false);
+        }
+        it->last=until;
+        if(seconds>=it->began+e.radiationTime)it=radiationClouds.erase(it);else ++it;
+    }
+    if(!pendingDamageModels.empty()&&seconds>=damageModelRefreshAt){
+        if(fo3worldfx::RefreshModels(player,pendingDamageModels))pendingDamageModels.clear();
+        if(IsFo3LoadingVisible())return;
+    }
     SetFo3PlayerScale(std::clamp(player.PlayerTrackingScale(),.1f,10.f));
     const auto& move=player.Snapshot().playerMove;
     if(move.pending&&!IsFo3LoadingVisible()&&!HasPendingFo3CellTransitionRequestQ74())
@@ -596,6 +621,28 @@ void Actions(){
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
         }else if(action.kind==fo3script::ActionKind::ActivationParents){
             QueueActivationChildren(player,action);
+        }else if(action.kind==fo3script::ActionKind::DestructionModel){
+            pendingDamageModels.insert(action.reference);
+            damageModelRefreshAt=seconds+.35;
+        }else if(action.kind==fo3script::ActionKind::Explosion){
+            const auto effect=player.Definitions().explosions.find(action.form);
+            const auto ctx=SpeechContext(action.reference,fo3player::PlayerRef);
+            const auto& listener=ctx.target;
+            if(effect==player.Definitions().explosions.end()||!listener.cell||action.world!=listener.world||
+               (!listener.world&&action.cell!=listener.cell))continue;
+            const auto& e=effect->second;const float distance=BlastDistance(action,listener);
+            const float dx=action.position[0]-listener.x,dy=action.position[1]-listener.y;
+            const float h=std::hypot(dx,dy),yaw=gQ210Head[3];
+            const float pan=h>0?(dx*std::cos(yaw)+dy*std::sin(yaw))/h:0;
+            if(e.sound)fo3audio::SoundAt(e.sound,distance,pan);
+            if(e.sound2)fo3audio::SoundAt(e.sound2,distance,pan);
+            if(e.imageModifier&&distance<=e.imageRadius){
+                const auto im=player.Definitions().imageModifiers.find(e.imageModifier);
+                if(im!=player.Definitions().imageModifiers.end())modifiers.Apply(im->first,im->second,seconds);
+            }
+            if(e.radiation>0&&e.radiationTime>0&&e.radiationRadius>0)
+                radiationClouds.push_back({action,seconds,seconds});
+            fo3worldfx::Start(action,e,seconds);
         }else if(action.kind==fo3script::ActionKind::SoundAt){
             const auto source=SpeechContext(action.reference,fo3player::PlayerRef);
             const auto& emitter=source.speaker;const auto& listener=source.target;

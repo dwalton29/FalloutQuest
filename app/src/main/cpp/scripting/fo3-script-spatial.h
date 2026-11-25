@@ -14,9 +14,17 @@ inline bool Contains(const fo3pipdata::Placement& p,const fo3pipdata::TriggerPri
   const float body=bodyRadius/p.scale;
   if(shape.kind==2){const float radius=shape.bounds[0]+body;return x*x+y*y+z*z<=radius*radius;}
   if(shape.kind!=1)return false;
+  // Outside a sphere enclosing the rotated box no narrow-phase test is needed.
+  const float extent=shape.bounds[0]+shape.bounds[1]+shape.bounds[2]+body+.03f;
+  if(!shape.modelSpace&&(std::abs(x)>extent||std::abs(y)>extent||std::abs(z)>extent))return false;
   const auto rotate=[](float& a,float& b,float angle){const float c=std::cos(angle),s=std::sin(angle);
     const float old=a;a=c*a-s*b;b=s*old+c*b;};
   rotate(x,y,-p.rz);rotate(z,x,-p.ry);rotate(y,z,-p.rx);
+  if(shape.modelSpace){
+    const std::array<float,3> d{x-shape.center[0],y-shape.center[1],z-shape.center[2]};
+    auto project=[&](size_t axis){const auto* n=&shape.axes[axis*3];return n[0]*d[0]+n[1]*d[1]+n[2]*d[2];};
+    x=project(0);y=project(1);z=project(2);
+  }
   // Trigger bounds and the placed floor can differ by a few float ULPs.
   constexpr float tolerance=.01f;
   const float dx=std::max(0.f,std::abs(x)-shape.bounds[0]-tolerance);

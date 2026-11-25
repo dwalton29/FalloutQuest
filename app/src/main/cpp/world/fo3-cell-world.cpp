@@ -702,12 +702,16 @@ bool QueueFo3MapMarkerTransitionQ74(uint32_t marker,float x,float y,float z,
     return true;
 }
 bool QueueFo3SceneRefreshQ74(uint32_t cell,float x,float y,float z){
+    return QueueFo3WorldModelRefresh(cell,0,x,y,z);
+}
+bool QueueFo3WorldModelRefresh(uint32_t cell,uint32_t world,float x,float y,float z){
     if(!cell||cell!=gCurrentCellQ74||gHasPendingTransitionQ74||IsFo3LoadingVisible()||
        !std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return false;
     gPendingTransitionQ74={};gPendingTransitionQ74.cellFormId=cell;
     gPendingTransitionQ74.x=x;gPendingTransitionQ74.y=y;gPendingTransitionQ74.z=z;
     gPendingTransitionQ74.valid=true;gPendingTransitionQ74.preserveView=true;gHasPendingTransitionQ74=true;
-    BeginFo3Loading(cell,0);
+    gPendingTransitionQ74.worldspaceFormId=world;
+    BeginFo3Loading(cell,world);
     Q71_LOGI("SCRIPT SCENE REFRESH QUEUED: cell=%08X origin=(%.2f %.2f %.2f) preserveView=1",cell,x,y,z);
     return true;
 }

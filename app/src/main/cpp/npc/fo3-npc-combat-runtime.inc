@@ -190,7 +190,7 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
   }
   bool bestInRange=false;
   float best=-1;uint64_t selected=0;uint32_t form=0;
-  if(contents&&!actor.source.creature)for(const auto& s:*contents){const auto prepared=actor.combatWeapons.find(s.formId);
+  if(contents)for(const auto& s:*contents){const auto prepared=actor.combatWeapons.find(s.formId);
     if(prepared==actor.combatWeapons.end()||!prepared->second.ready||s.condition<=0)continue;
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
     if(current&&saved!=p.Snapshot().actors.end()&&saved->second.weaponLocked&&s.id!=current->id)continue;

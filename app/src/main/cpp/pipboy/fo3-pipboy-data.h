@@ -62,6 +62,9 @@ struct TriggerPrimitive {
   std::array<float,3> bounds{};
   uint32_t kind=0; // original XPRM: 1 box, 2 sphere
   bool valid=false;
+  bool modelSpace=false;
+  std::array<float,3> center{};
+  std::array<float,9> axes{1,0,0,0,1,0,0,0,1};
 };
 struct Marker : Placement {
   std::string name;

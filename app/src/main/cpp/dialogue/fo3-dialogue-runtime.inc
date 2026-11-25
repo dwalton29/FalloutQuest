@@ -193,7 +193,8 @@ void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
   if(previous&&gPlayerSession){fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();}
 }
 void EndFo3Dialogue(const char* reason){CleanupFo3Dialogue(gDialogue.actor,reason);}
-bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0) {
+bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0,
+                      fo3dialogue::GreetingInitiator initiator=fo3dialogue::GreetingInitiator::Player) {
   if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
   auto* actor=DialogueActor(reference);if(!actor)return false;
 #ifdef FO3_NPC_CHAT_RUNTIME
@@ -204,7 +205,7 @@ bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0) {
   ConfigureFo3Dialogue();
   const auto context=DialogueContext(*actor);
   if(!actor->runtime.CanTalk()||
-      !(topic?gDialogue.StartTopic(topic,context,gPlayerSession->player):gDialogue.Start(context,gPlayerSession->player))) {
+      !(topic?gDialogue.StartTopic(topic,context,gPlayerSession->player):gDialogue.Start(context,gPlayerSession->player,initiator))) {
     Q6H_LOGI("NPC DIALOGUE REENTER actor=%08X success=0 package=%08X activity=%d dialogue=%d reason=%s",reference,actor->runtime.package,int(actor->runtime.activity),actor->runtime.dialogue,gDialogue.endReason.c_str());return false;
   }
   Q240SuspendPackageWait(*actor,gDialogueTime);

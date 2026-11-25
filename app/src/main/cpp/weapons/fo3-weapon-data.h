@@ -38,7 +38,8 @@ struct Projectile {
   float gravity=0,speed=0,range=0,flashDuration=0,impactForce=0;
   uint32_t explosion=0;
   std::string model,flashModel;
-  bool Hitscan() const {return flags&1;}
+  bool DirectFire() const {return (type==1||type==4)&&!explosion&&range>0;}
+  bool Hitscan() const {return (flags&1)!=0;}
 };
 struct BodyPart {
   std::string name,node,target;

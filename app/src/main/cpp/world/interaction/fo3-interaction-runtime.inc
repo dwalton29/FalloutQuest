@@ -92,7 +92,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         const bool item=catalog.items.count(object.baseFormId)!=0;
         // Scripted activators use their original ACTI SCRI rather than being
         // treated as pickup items or a fabricated FalloutQuest interaction.
-        const bool scripted=(object.baseRecordType=="ACTI" || container || furniture) &&
+        const bool scripted=(object.baseRecordType=="ACTI" || object.baseRecordType=="TACT" || container || furniture) &&
             (player.HasReferenceEvent(object.refFormId,"OnActivate")||player.HasNativeActivation(object.refFormId));
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.

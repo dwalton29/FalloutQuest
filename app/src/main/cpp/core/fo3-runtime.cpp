@@ -144,6 +144,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-collision-overlay.h"
 #include "physics/fo3-collision-token.h"
 #include "fo3-nif-collision.h"
+#include "physics/fo3-nif-trigger.h"
 #include "fo3-transition.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-imagespace.h"
@@ -916,6 +917,7 @@ struct Q230RigPart {
     fo3face::Weights facialPublished{};
     QActorSkin skin;
     std::vector<int> bones;
+    std::vector<fo3anim::Matrix> sceneToBone;
     std::vector<std::array<float,3>> hitVertices;
     std::vector<uint8_t> hitRegions;
     std::vector<std::pair<std::array<float,3>,std::array<float,3>>> interactionBounds;
@@ -1020,7 +1022,7 @@ void Q230PrepareRagdolls();
 void Q230CaptureRagdolls();
 void Q230ActorHitReaction(uint32_t target,uint8_t region,float healthFractionLost);
 void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
-void Q230CacheCombat(Q230ActorVisual&,const fo3player::Catalog*);
+void Q230CacheCombat(Q230ActorVisual&,const fo3player::Catalog*,const std::unordered_map<uint64_t,uint32_t>*);
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi);
 bool Q230UploadActorPart(Q230ActorVisual& actor, CpuObject& part,
     float centerX, float centerY, float floorZ);
@@ -3766,7 +3768,8 @@ bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp) {
 // world-state revision, never scanned for each eye or streaming worker.
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> CaptureFo3ReferenceState() {
     if(!gPlayerSession) return {};
-    if(!gFo3ReferenceState || gFo3ReferenceState->revision!=gPlayerSession->player.Snapshot().referenceStateRevision)
+    if(!gFo3ReferenceState || gFo3ReferenceState->revision!=gPlayerSession->player.Snapshot().referenceStateRevision||
+       gFo3ReferenceState->damageModelRevision!=gPlayerSession->player.Snapshot().damageModelRevision)
         gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(gPlayerSession->player.CaptureReferenceState());
     return gFo3ReferenceState;
 }
@@ -4764,7 +4767,11 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
             } else {
                 fo3player::Catalog catalog;
                 std::string error;
-                if (!fo3player::LoadCatalog(fo3assets::FalloutMasterPath(),catalog,error)) {
+                const auto loadTrigger=[](const std::string& model,fo3pipdata::TriggerPrimitive& shape){
+                    std::vector<uint8_t> bytes;
+                    return LoadFalloutMeshFile(model,bytes)&&fo3trigger::DecodePhantom(bytes,shape);
+                };
+                if (!fo3player::LoadCatalog(fo3assets::FalloutMasterPath(),catalog,error,loadTrigger)) {
                     Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s",error.c_str());
                     return false;
                 }
@@ -4909,7 +4916,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot, bo
         const auto* actorCatalog=result.playerSession?&result.playerSession->player.Definitions():
             (gPlayerSession?&gPlayerSession->player.Definitions():nullptr);
         for(auto& actor:result.actors) {
-            Q230CacheCombat(actor,actorCatalog);
+            Q230CacheCombat(actor,actorCatalog,sourcePlayer?&sourcePlayer->Snapshot().actorTemplateChoices:nullptr);
         }
         result.actorUs=Fo3SceneElapsedUs(actorStarted);
         result.cpuUs = Fo3SceneElapsedUs(phase);
@@ -13452,7 +13459,7 @@ void Q230PumpNpcArrivals(){
         for(auto& actor:batch.actors){
             if(cancelled.load(std::memory_order_acquire))return false;
             Q230CacheDialogueAnimations(actor,&catalog->pipboy);
-            Q230CacheCombat(actor,catalog);
+            Q230CacheCombat(actor,catalog,&choices);
         }
         // Q229: expensive expanded static vertex streams and DDS decoding run
         // on the existing NPC worker, not on a frame that must submit both eyes.
@@ -13718,6 +13725,7 @@ void Q233BeginMainEyeWorld() {
     }
 }
 
+#include "rendering/mesh/fo3-world-bursts.inc"
 void RenderScene(const float* mvp) {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
@@ -14041,6 +14049,7 @@ void RenderScene(const float* mvp) {
                     Q1150BlendFactor(object.alphaDestBlend, false));
         DrawSceneObject(object);
     }
+    fo3worldfx::Draw(mvp);
     const uint64_t q2017AlphaUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() -

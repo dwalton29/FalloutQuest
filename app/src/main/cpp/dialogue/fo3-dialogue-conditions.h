@@ -13,7 +13,6 @@ struct Context {
   const fo3player::Player* player=nullptr;
   ActorContext speaker, target;
   bool talking=false;
-  const std::unordered_map<uint64_t,float>* activationVariables=nullptr;
   float randomPercent=-1; // Optional bounded caller sample for original CTDA 77.
   bool weaponDrawn=false;
 };

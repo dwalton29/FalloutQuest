@@ -570,6 +570,7 @@ int main(int argc,char**argv) {
       assert(c.weapons.models.at(w.firstPerson)==item.model);
       const auto&q=c.weapons.projectiles.at(w.projectile);
       assert(q.speed==10000&&q.gravity==0&&q.range==10000);
+      assert(q.DirectFire());
       assert(q.Hitscan()==(w.animation!=4&&w.animation!=7));
       assert(w.fire2D&&w.fire3D&&w.dry&&w.ammoUse==1&&w.pellets>0);
       std::cout<<item.editorId<<" clip="<<unsigned(w.clip)<<" damage="<<w.damage<<" ammo="<<std::hex<<w.ammo<<std::dec<<" hitscan="<<q.Hitscan()<<"\n";

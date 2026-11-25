@@ -3,6 +3,7 @@
 // A block is retained verbatim and executed by the same guarded interpreter as
 // dialogue and QUST result scripts. Unknown events/filters remain explicit.
 #include "pipboy/fo3-pipboy-data.h"
+#include <algorithm>
 #include <cctype>
 #include <sstream>
 #include <string>
@@ -72,28 +73,29 @@ inline EventProgram ParseEvents(const fo3pipdata::Script& script) {
   return out;
 }
 
-// Only source-declared numeric SCPT locals are executable in this checkpoint.
-// In particular, ref locals cannot be collapsed to a float FormID.
-inline uint64_t NumericLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
-                                uint32_t scriptId,const std::string& token){
+// Reference locals retain the full FormID. Only a matching SCPT declaration
+// and variable-table entry may address a slot on the current owner.
+inline uint64_t DeclaredLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
+                                 uint32_t scriptId,const std::string& token,bool reference){
   if(!owner||!scriptId||token.find('.')!=std::string::npos)return 0;
   const auto def=d.scripts.find(scriptId);
   if(def==d.scripts.end()||def->second.source.empty())return 0;
   const auto name=Lower(token);
-  bool numeric=false;
+  const auto slot=std::find_if(def->second.variables.begin(),def->second.variables.end(),
+      [&](const auto& entry){return Lower(entry.second)==name;});
+  if(slot==def->second.variables.end())return 0;
   std::istringstream source(def->second.source);std::string line;
   while(std::getline(source,line)){
-    const auto comment=line.find(';');
-    std::istringstream words(Lower(Trim(line.substr(0,comment))));
+    std::istringstream words(Lower(line.substr(0,line.find(';'))));
     std::string op,var;if(!(words>>op))continue;
     if(op=="begin")break;
-    if(op=="short"||op=="int"||op=="long"||op=="float"){
-      if(words>>var && var==name){numeric=true;break;}
-    }
+    const bool type=reference?(op=="ref"||op=="reference"):(op=="short"||op=="int"||op=="long"||op=="float");
+    if(type&&words>>var&&var==name)return (uint64_t(owner)<<32)|slot->first;
   }
-  if(!numeric)return 0;
-  for(const auto& v:def->second.variables)
-    if(Lower(v.second)==name)return (uint64_t(owner)<<32)|v.first;
   return 0;
+}
+inline uint64_t NumericLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
+                                uint32_t scriptId,const std::string& token){
+  return DeclaredLocalKey(d,owner,scriptId,token,false);
 }
 } // namespace fo3script

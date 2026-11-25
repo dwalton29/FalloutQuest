@@ -460,6 +460,7 @@ public:
             return;
         }
         FlushFo3PlayerState();
+        fo3worldfx::Shutdown();
         ShutdownFo3LoadingVr();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
@@ -2064,7 +2065,10 @@ private:
                     if(!scriptMenu)gPlayerSession->player.AdvanceGameClock(seconds);
                     auto& scriptPlayer=gPlayerSession->player;
                     fo3worldscript::Register();
-                    if(!scriptMenu)fo3worldscript::seconds+=seconds;
+                    if(!scriptMenu){
+                        fo3worldscript::seconds+=seconds;
+                        fo3worldfx::Advance(fo3worldscript::seconds);
+                    }
                     scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,scriptMenu?0:seconds);
                     // Trigger occupancy accounts for the player's width while
                     // heading checks continue to use the tracked view.

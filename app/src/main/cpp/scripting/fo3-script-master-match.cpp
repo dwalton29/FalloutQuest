@@ -350,7 +350,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     if(!coversConditions(e.conditions,e.conditionVariables)||!coversConditions(e.questConditions,e.questConditionVariables))
       return fail("condition variable binding coverage differs");
     for(const auto* bindings:{&e.commandVariables,&e.expressionVariables,&e.conditionVariables,&e.questConditionVariables})for(const auto& binding:*bindings){
-      if(binding.referenceSlot&&(bindings!=&e.commandVariables||binding.owner!=e.owner||
+      if(binding.referenceSlot&&((bindings!=&e.commandVariables&&bindings!=&e.expressionVariables)||binding.owner!=e.owner||
           binding.script!=e.localScript||!binding.ownerName.empty()))return fail("invalid reference-local owner");
       const bool indexed=binding.referenceSlot||bindings==&e.conditionVariables||bindings==&e.questConditionVariables;
       if(!binding.owner||!binding.script||(binding.quest?bool(binding.base):!binding.base)||

@@ -69,7 +69,8 @@ bool deferAllowed=false;int deferredStatus=0;uint64_t deferredSerial=0;
 std::unique_ptr<fo3player::ScriptTransactionPlan> deferredResult;
 bool CanDeferFo3DialogueResult(){return deferAllowed&&!deferredResult;}
 bool refreshAllowed=false;unsigned sceneRefreshes=0;
-bool QueueFo3SceneRefreshQ74(uint32_t cell,float x,float y,float z){
+bool QueueFo3WorldModelRefresh(uint32_t cell,uint32_t world,float x,float y,float z){
+  assert(world==gExteriorWorldspaceQ1890);
   assert(cell==gCurrentCellFormId&&x==gSceneCenterXQ1730&&y==gSceneCenterYQ1730&&z==gSceneFloorZQ1730);
   if(!refreshAllowed)return false;loading=true;++sceneRefreshes;return true;
 }
@@ -601,8 +602,51 @@ static void OriginalBobbleheads(const fo3player::Catalog& catalog){
   deferAllowed=refreshAllowed=false;
   std::cout<<"All 20 original bobblehead pickups, Medicine duplicates, achievements, messages, saves and both resident displays passed\n";
 }
+static void OriginalSarahApproach(const fo3player::Catalog& original,const char* path){
+  auto c=original;const auto& d=c.pipboy;
+  const auto mq=d.formNames.at("mq01"),ld=d.formNames.at("mq01ld");
+  const auto sarah=d.formNames.at("mq01sarahref"),greet=d.formNames.at("mq01sarahsceneagreetplayer");
+  // The preceding ambush is exercised in mq01_scene_tests. Start the AI at
+  // the resulting quest stages and Sarah's original placed position.
+  auto setStage=[&](uint32_t quest,uint16_t stage){
+    auto& state=c.initial.pipboy.quests[quest];state.running=true;state.stage=stage;state.stages.insert(stage);
+  };
+  setStage(mq,56);setStage(ld,55);
+  const auto marker=d.targets.at(d.packages.at(greet).location.value);
+  const auto& start=d.targets.at(sarah);
+  const auto oldScene=std::array<float,3>{gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
+  gSceneCenterXQ1730=marker.x;gSceneCenterYQ1730=marker.y;gSceneFloorZQ1730=marker.z;
+  gCurrentCellFormId=marker.cell;gExteriorWorldspaceQ1890=marker.world;
+  std::vector<Fo3NpcNavMeshQ240> meshes;
+  assert(LoadFo3NpcNavigationQ240(marker.cell,marker.world,meshes,path));
+  auto graph=std::make_shared<Q240NavigationGraph>();
+  for(auto& mesh:meshes){
+    graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();
+    graph->byForm[mesh.formId]=graph->meshes.size();
+    graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));
+  }
+  std::vector<Fo3NpcActorQ230> actors;assert(LoadFo3CellActors(start.cell,actors,path));
+  const auto found=std::find_if(actors.begin(),actors.end(),[&](const auto& actor){return actor.refFormId==sarah;});
+  assert(found!=actors.end());
+  Q230ActorVisual actor;actor.source=*found;actor.navigationGraph=graph;
+  actor.runtime.position=Q240ScenePosition({start.x,start.y,start.z});actor.runtime.yaw=-start.rz;
+  gQ230NpcActors={actor};activePackageTargets=&gQ230NpcActors;
+  gPlayerSession=std::make_unique<Session>(std::move(c));auto& player=gPlayerSession->player;
+  player.RegisterOriginalActors();loading=false;
+  const std::array<float,3> stand={marker.x+30,marker.y,marker.z};
+  gQ210Head=Q240ScenePosition(stand);gQ210Head[1]+=1.6f;
+  player.SetScriptPlayerLocation(stand[0],stand[1],stand[2],marker.cell,marker.world);
+  auto& live=gQ230NpcActors.front();assert(Q240PlanarDistance(Q240GamePosition(live),stand)>1000.f);
+  for(unsigned n=0;n<4800&&!gDialogue.Active();++n){clockTime+=.025;Q240UpdateNpcPackage(live,clockTime);}
+  assert(live.aiPackage==greet&&gDialogue.info==0x228a0&&gDialogue.Active());
+  Speak();assert(gDialogue.choices.size()==3&&player.Snapshot().pipboy.quests.at(mq).stage==60);
+  EndFo3Dialogue("route complete");gQ230NpcActors.clear();activePackageTargets=&packageTargets;
+  gSceneCenterXQ1730=oldScene[0];gSceneCenterYQ1730=oldScene[1];gSceneFloorZQ1730=oldScene[2];
+  std::cout<<"Sarah walked Chevy Chase NAVM and opened three replies through her original greeting package\n";
+}
 static void OriginalBirthHandoff(const char* path){
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  OriginalSarahApproach(c,path);
   OriginalIntercomApproach(c,path);
   OriginalBirthdayRelease(c);
   OriginalPhotoHandoff(c);

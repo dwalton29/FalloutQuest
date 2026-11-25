@@ -58,9 +58,12 @@ bool Session::CanStart(const Context& ctx)const {
 }
 bool Session::CanActivate(const Context& ctx)const {
   if(!ctx.player)return false;
-  std::unordered_map<uint64_t,float> pending;std::string error;
-  if(!ActivationVariables(ctx,*ctx.player,pending,error))return false;
-  Context activated=ctx;activated.activationVariables=&pending;
+  if(!ctx.player->HasReferenceEvent(ctx.speaker.reference,"OnActivate"))return CanStart(ctx);
+  bool requestsTalk=false;std::string error;
+  auto plan=ctx.player->PrepareActorActivation(ctx.speaker.reference,ctx.target.reference,requestsTalk,error);
+  if(!plan||!requestsTalk)return false;
+  if(plan->HasReferenceChanges()&&(!previewReferences||!previewReferences(*ctx.player,*plan,error)))return false;
+  Context activated=ctx;activated.player=plan->CandidatePlayer();
   return CanStart(activated);
 }
 static bool ScriptSpeakerAlive(const Context& ctx,const fo3player::Player& p){
@@ -91,11 +94,18 @@ bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Cont
   scriptedTopic=true;linkedConversation=conversation;actor=ctx.speaker.reference;proxy=ctx.speaker.proxy;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
-bool Session::Start(const Context& ctx,fo3player::Player& p) {
+bool Session::Start(const Context& ctx,fo3player::Player& p,GreetingInitiator initiator) {
   scriptedTopic=false;
   if(Active()||!ctx.player||ctx.speaker.proxy||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
-  std::string activationError;
-  if(!Activate(ctx,p,activationError)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT actor="+Id(ctx.speaker.reference)+" "+activationError);return false;}
+  if(initiator==GreetingInitiator::Player&&p.HasReferenceEvent(ctx.speaker.reference,"OnActivate")){
+    bool requestsTalk=false;std::string error;
+    auto plan=p.PrepareActorActivation(ctx.speaker.reference,ctx.target.reference,requestsTalk,error);
+    if(!plan){if(diagnostic)diagnostic("DIALOGUE ACTIVATION actor="+Id(ctx.speaker.reference)+" "+error);return false;}
+    if(plan->HasReferenceChanges()){
+      if(!publishReferences||!publishReferences(p,*plan,error))return false;
+    }else if(!p.CommitScriptTransaction(*plan))return false;
+    if(!requestsTalk)return false;
+  }
   // OnActivate can change local variables used by the next GREETING. Resolve
   // against the resulting state, not the pre-activation eligibility snapshot.
   if(!CanStart(ctx))return false;
