@@ -349,12 +349,15 @@ bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& b
       continue;
     }
     if(item.flags&~3u)return fail("unsupported stage item flags");
+    // End the previous quest before its result script displays the successor's
+    // objective. That script must observe the new completion and tracking state.
+    if((item.flags&3)&&!FinishQuest(id,(item.flags&2)?fo3pipdata::Completion::Failed:fo3pipdata::Completion::Complete))
+      return fail("completion rejected");
     ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::QuestStageItem;
     origin.record=id;origin.stage=index;origin.item=uint32_t(i);
     if(!RunScript(item.result,id,depth+1,budget,error,0,std::move(origin)))return fail("item "+std::to_string(i)+": "+error);
     // Reacquire after scripts: nested stages can rehash the quest instance map.
     if(!item.log.empty())state_.pipboy.quests.at(id).journal.push_back({index,uint32_t(i)});
-    if(item.flags&3)if(!FinishQuest(id,(item.flags&2)?fo3pipdata::Completion::Failed:fo3pipdata::Completion::Complete))return fail("completion rejected");
   }
   return true;
 }

@@ -24,6 +24,7 @@ static fo3player::Catalog Fixture() {
 }
 static void StateTests() {
   auto c = Fixture();
+  c.pipboy.quests[6]=c.pipboy.quests.at(2);
   fo3player::Player p(c);
   assert(p.Snapshot().pipboy.quests.empty());
   assert(!p.GrantPerk(1, 3));
@@ -32,6 +33,12 @@ static void StateTests() {
   assert(p.StartQuest(2));
   assert(p.SetQuestStage(2, 10));
   assert(p.SetObjective(2, 20, true, Completion::Active));
+  assert(p.Snapshot().pipboy.selectedQuest==2);
+  assert(p.StartQuest(6)&&p.SetObjective(6,20,true,Completion::Active));
+  assert(p.Snapshot().pipboy.selectedQuest==2);
+  assert(p.SelectQuest(6));
+  assert(p.SetObjective(2,20,false,Completion::Active)&&p.SetObjective(2,20,true,Completion::Active));
+  assert(p.Snapshot().pipboy.selectedQuest==6);
   assert(p.SelectQuest(2));
   assert(p.Discover(3));
   assert(p.SetWaypoint(4, 50, -30));

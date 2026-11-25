@@ -1,4 +1,8 @@
 #include "player/fo3-new-game.h"
+#include "ui/terminal/fo3-terminal-state.h"
+#include "mq01_test_conversation.h"
+#include "pipboy/fo3-quest-navigation.h"
+#include "pipboy/fo3-quest-route.h"
 #include "player/fo3-player-presentation.h"
 #include "scripting/fo3-script-master-match.h"
 #include "world/fo3-resident-authored-admission.h"
@@ -559,6 +563,93 @@ static void OriginalEscapeStart(fo3player::Player& p,const char* master){
   std::cout<<"Original exam exit, Escape movie/setup, wake-up package, Amata greeting and five PA lines passed\n";
   p.SetScriptEventDiagnostic({});
 }
+static void OriginalSilverRoute(fo3player::Player& player){
+  const auto& d=player.Definitions().pipboy;
+  const auto moriarty=d.formNames.at("colinmoriartyref"),silver=d.formNames.at("silverref");
+  const auto mq=d.formNames.at("mq01");
+  const auto caps=player.ItemCount(0xf);assert(caps<100);
+  {Conversation c(player,moriarty);c.Start();
+    for(auto topic:{0x3b7cu,0x14f3eu,0x151b7u,0x9ea61u})c.Choose(topic);
+  }
+  assert(player.Snapshot().pipboy.quests.at(mq).objectives.at(25).displayed);
+  const auto targets=fo3pipdata::NavigationTargets(player);
+  assert(std::find(targets.begin(),targets.end(),silver)!=targets.end());
+  {Conversation c(player,silver);c.Start();for(auto topic:{0x9ea5du,0x9ea57u,0x9ea54u})c.Choose(topic);}
+  assert(player.ItemCount(0xf)==caps+300);
+  assert(player.Snapshot().pipboy.quests.at(mq).objectives.at(25).status==fo3pipdata::Completion::Complete);
+  const auto path="/tmp/fq-silver-return-"+std::to_string(getpid());
+  std::string error;Check(player.Save(path,error),error);
+  fo3player::Player returned(player.Definitions());Check(returned.Restore(path,error),error);unlink(path.c_str());
+  {Conversation c(returned,moriarty);c.Start();c.Choose(0x3b7c);c.Choose(0xbaddd);}
+  assert(returned.ItemCount(0xf)==caps+200&&returned.Snapshot().pipboy.quests.at(mq).stage==40);
+  assert(returned.Snapshot().pipboy.quests.at(mq).objectives.at(40).displayed);
+}
+static void OriginalMoriartyTerminal(fo3player::Player& player){
+  using namespace fo3player;
+  const auto& catalog=player.Definitions();const auto& d=catalog.pipboy;
+  const auto id=[&](const char* name){Check(d.formNames.count(name),name);return d.formNames.at(name);};
+  const auto mq=id("mq01"),door=id("megmoriartysmaindoorexref"),ref=id("megmoriartyofficecomputerref");
+  std::string error;
+  Check(d.targets.count(door),"exterior saloon door placement");
+  const auto& entrance=d.targets.at(door);
+  player.SetScriptPlayerLocation(entrance.x,entrance.y,entrance.z,entrance.cell,entrance.world);
+  auto open=player.PrepareActivationTransaction(door,PlayerRef,error);
+  Check(bool(open),"saloon front door: "+error);
+  if(open->HasReferenceChanges())
+    Check(fo3script::NonresidentActorRemoval(player,*open,entrance.cell,entrance.world,{},error),error);
+  Check(player.CommitScriptTransaction(*open),error);
+  fo3script::Action action;bool delegated=false;
+  while(player.PollScriptAction(action))delegated|=action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==door;
+  assert(delegated&&player.CanScriptActivateDoor(door));
+  Check(d.targets.count(ref),"terminal placement");
+  const auto& office=d.targets.at(ref);
+  Check(d.targets.count(entrance.teleportRef),"interior saloon door placement");
+  assert(d.targets.at(entrance.teleportRef).cell==office.cell);
+  player.SetScriptPlayerLocation(office.x,office.y,office.z,office.cell,office.world);
+  const auto base=catalog.references.at(ref).base,password=d.terminals.at(base).password;
+  assert(player.GetLock(ref).locked&&!player.PrepareTerminalTransaction(ref,base,1,error));
+  // The office filing cabinet holds the original password note.
+  const uint32_t cabinet=0x228dc;
+  assert(catalog.references.at(cabinet).base==id("mq01moriartyfilingcabinet"));
+  if(!player.ItemCount(catalog.bobbyPin))assert(player.Add(catalog.bobbyPin,1));
+  assert(player.CanPickLock(cabinet)==PickAccess::Ready&&player.CompleteLockpick(cabinet));
+  Check(player.PrepareContainer(cabinet),"opening Moriarty's filing cabinet");
+  const auto* contents=player.ContainerContents(cabinet);assert(contents);
+  auto note=std::find_if(contents->begin(),contents->end(),[&](const auto& stack){return stack.formId==password;});
+  assert(note!=contents->end()&&player.TakeContainerStack(cabinet,note->id));
+  player.EndContainerInteraction();assert(player.TerminalPassword(ref));
+  fo3terminal::Session terminal;terminal.Open(player,ref,0);
+  assert(terminal.page==fo3terminal::Session::Page::Menu&&!player.GetLock(ref).locked);
+  const auto visitors=id("mq01moriartysterminalvisitors");
+  const auto james=id("mq01moriartydadinfo");
+  auto select=[&](uint32_t form,bool submenu){
+    const auto& entries=d.terminals.at(terminal.menu).entries;
+    auto index=std::find_if(terminal.entries.begin(),terminal.entries.end(),[&](size_t n){return (submenu?entries[n].submenu:entries[n].note)==form;});
+    assert(index!=terminal.entries.end());
+    auto plan=player.PrepareTerminalTransaction(ref,terminal.menu,*index,error,ScriptProgramCapture::EnteredPrograms);
+    Check(bool(plan),"Moriarty terminal: "+error);
+    Check(player.CommitScriptTransaction(*plan),error);
+    if(submenu){terminal.menu=form;terminal.Refresh(player);}
+  };
+  const auto caps=player.ItemCount(0xf);
+  assert(player.Snapshot().pipboy.quests.at(mq).stage==10);
+  select(visitors,true);
+  const auto& quest=player.Snapshot().pipboy.quests.at(mq);
+  assert(quest.stage==40&&quest.objectives.at(40).displayed&&player.ItemCount(james)==0);
+  assert(player.Snapshot().pipboy.revealed.count(id("gnrmapmarker")));
+  const auto goals=fo3pipdata::NavigationTargets(player);
+  assert(goals==d.quests.at(mq).objectives.at(40).targets&&!goals.empty());
+  fo3questroute::Navigator route;fo3pipdata::Location here;
+  assert(player.ScriptReferenceLocation(PlayerRef,here));
+  bool exit=false;
+  for(auto goal:goals){const auto next=route.Toward(player,here,goal);exit|=next.valid&&next.door&&d.targets.at(next.door).cell==here.cell;}
+  Check(exit,"stage 40 did not route through a saloon exit");
+  select(james,false);select(james,false);
+  assert(player.ItemCount(james)==1&&player.ItemCount(0xf)==caps);
+  const auto path="/tmp/fq-moriarty-terminal-"+std::to_string(getpid());
+  Check(player.Save(path,error),error);Player restored(catalog);Check(restored.Restore(path,error),error);unlink(path.c_str());
+  assert(restored.Snapshot().pipboy.quests.at(mq).stage==40&&!restored.GetLock(ref).locked&&restored.ItemCount(james)==1&&restored.Snapshot().pipboy.selectedQuest==mq);
+}
 static void OriginalEscapeExit(const fo3player::Catalog& original){
   using namespace fo3player;
   auto catalog=original;const auto& d=catalog.pipboy;
@@ -566,6 +657,7 @@ static void OriginalEscapeExit(const fo3player::Catalog& original){
   const auto quest=id("cg04"),follow=id("mq01"),door=id("vault101cavedoorinterior");
   // Start at the final door boundary, after the prior encounters.
   auto& start=catalog.initial.pipboy.quests[quest];
+  catalog.initial.pipboy.selectedQuest=quest;
   start.stage=145;start.running=true;start.stages={0,4,10,33,120,145};
   catalog.initial.inCharGen=true;
   Player p(catalog);p.RegisterOriginalActors();
@@ -619,7 +711,10 @@ static void OriginalEscapeExit(const fo3player::Catalog& original){
   Check(p.Snapshot().pipboy.quests.at(quest).stage==200,"original Escape completion: "+diagnostic);
   assert(!p.Snapshot().inCharGen&&!p.Snapshot().locationSpecificLoadScreens&&
          !p.Snapshot().pipboy.quests.at(quest).running&&p.Snapshot().pipboy.quests.at(follow).stage==10);
-  std::cout<<"Original active cave exit, final SPECIAL choice, completion and MQ01 handoff passed\n";
+  Check(p.Snapshot().pipboy.selectedQuest==follow,"vault exit displayed MQ01 but left it untracked");
+  {Player silverRoute(p);OriginalSilverRoute(silverRoute);}
+  OriginalMoriartyTerminal(p);
+  std::cout<<"Original Vault exit through Silver and Moriarty’s terminal: GNR objective, compass exit, payment, note and reload passed\n";
 }
 static void OriginalEscapeAmbush(const fo3player::Catalog& catalog){
   using namespace fo3player;

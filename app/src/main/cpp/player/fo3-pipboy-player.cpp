@@ -158,6 +158,9 @@ bool Player::SetObjective(uint32_t id, uint32_t index, bool displayed,
   if(old!=instance.objectives.end()&&old->second.displayed==displayed&&old->second.status==status)return true;
   const bool wasDisplayed=old!=instance.objectives.end()&&old->second.displayed;
   instance.objectives[index] = {displayed, status};
+  if(displayed&&!wasDisplayed&&status==fo3pipdata::Completion::Active&&
+     instance.status==fo3pipdata::Completion::Active&&!state_.pipboy.selectedQuest)
+    state_.pipboy.selectedQuest=id;
   if(displayed&&!q->second.name.empty()) {
     pendingQuestNotices_.push_back({id,instance.announced?QuestNoticeKind::Updated:QuestNoticeKind::Added});
     instance.announced=true;
