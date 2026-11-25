@@ -82,6 +82,17 @@ struct Fo3NifCollisionShapeQ6F {
     };
 };
 
+// Serialized FO3 hkMotionType values. Fixed and keyframed bodies stay in
+// scene collision. A multi-body mechanism needs its authored joints.
+inline bool Fo3MovablePropBody(const std::vector<Fo3NifCollisionShapeQ6F>& shapes){
+    if(shapes.empty())return false;
+    const auto body=shapes.front().bodyBlock;
+    return std::all_of(shapes.begin(),shapes.end(),[&](const auto& s){
+        return s.bodyBlock==body&&s.physicalProperties&&s.massKg>0&&
+            ((s.motionSystem>=1&&s.motionSystem<=5)||s.motionSystem==8);
+    });
+}
+
 namespace fo3_q6f_collision_detail {
 
 constexpr const char* TAG = "FalloutQuest";

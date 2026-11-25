@@ -7,6 +7,10 @@
 #include <unistd.h>
 int main(){
     using namespace fo3vrheight;
+    SupportAnchor feet;feet.Follow(0,0,0);
+    feet.Follow(.3f,0,.4f);assert(feet.x==0&&feet.z==0);
+    feet.Follow(1,0,.4f);assert(feet.x>.6f&&feet.x<.7f);
+    feet.ready=false;feet.Follow(-2,3,0);assert(feet.x==-2&&feet.z==3);
     Settings settings;Tracking tracking;
     tracking.Observe(0,true,true,-1.62f,settings);assert(tracking.Calibrate(settings));
     assert(std::abs(settings.standing-1.62f)<1e-5f);

@@ -478,15 +478,16 @@ Q2401LoadDoorNifAnimation(const std::string& modelPath) {
 struct Fo3PreparedRigidBody {fo3rigid::Asset asset;Vec3 centerGame;};
 std::shared_ptr<const Fo3PreparedRigidBody> PrepareFo3RigidBody(
     const Fo3WorldPlacement& placement,const std::vector<Fo3StaticNifMesh>& meshes) {
-    if(!Q220IsLooseRecordType(placement.baseRecordType)&&placement.baseRecordType!="WEAP")return {};
+    if(!Q220IsLooseRecordType(placement.baseRecordType)&&placement.baseRecordType!="MSTT")return {};
     auto out=std::make_shared<Fo3PreparedRigidBody>();
     using Shapes=std::shared_ptr<const std::vector<Fo3NifCollisionShapeQ6F>>;
     static std::mutex mutex;static std::unordered_map<std::string,Shapes> cache;Shapes source;
     {std::lock_guard<std::mutex> lock(mutex);const auto i=cache.find(placement.modelPath);if(i!=cache.end())source=i->second;}
-    if(!source){std::vector<Fo3NifCollisionShapeQ6F> decoded;LoadFo3NifCollisionShapesComplete(placement.modelPath,decoded);
+    if(!source){std::vector<Fo3NifCollisionShapeQ6F> decoded;if(!LoadFo3NifCollisionShapesComplete(placement.modelPath,decoded))decoded.clear();
         auto next=std::make_shared<const std::vector<Fo3NifCollisionShapeQ6F>>(std::move(decoded));
         std::lock_guard<std::mutex> lock(mutex);source=cache.emplace(placement.modelPath,next).first->second;}
     const auto& shapes=*source;const bool authored=!shapes.empty();
+    if(placement.baseRecordType=="MSTT"&&!Fo3MovablePropBody(shapes))return {};
     Vec3 modelCenter{};
     if(authored){
         for(const auto& shape:shapes)if(shape.physicalProperties){
@@ -996,7 +997,9 @@ float gPlayerSneakDrop=0,gPlayerDetectionSpeed=0;
 fo3sneak::Noise gPlayerDetectionShot,gPlayerDetectionStep;
 fo3sneak::Indicator gPlayerSneakIndicator=fo3sneak::Indicator::Hidden;
 fo3seat::State gPlayerSeat;
-float gPlayerSeatFade=0;
+float gPlayerSeatFade=0,gVrLeanFade=0;
+fo3vr::V gVrLean{},gVrFootOffset{};
+fo3vr::R gVrFootRotation=fo3vr::Identity();
 std::vector<Q230ActorVisual> gQ230NpcActors;
 uint64_t gQ230NpcResidenceRevision=0;
 fo3health::Tracker gQ230HealthBars;
@@ -2797,7 +2800,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.baseRecordType = cpu.placement.baseRecordType;
     gpu.q220LooseObject =
         cpu.placement.refFormId != 0u &&
-        Q220IsLooseRecordType(gpu.baseRecordType);
+        (Q220IsLooseRecordType(gpu.baseRecordType)||(gpu.baseRecordType=="MSTT"&&gpu.rigidBody));
     gpu.q223PlacementScale = cpu.placement.scale;
     if (gpu.q220LooseObject) {
         static std::unordered_set<uint32_t> q220LoggedRefs;
@@ -10461,6 +10464,9 @@ struct Q223DynamicBody {
     Vec3 sampledAngularVelocity{};
     std::chrono::steady_clock::time_point lastPalmSample{};
     std::chrono::steady_clock::time_point lastPhysicsStep{};
+    uint64_t publishedRevision=UINT64_MAX;
+    uint64_t residentRevision=UINT64_MAX;
+    fo3rigid::M publishedPose{};
     std::string modelPath;
 };
 
@@ -10479,6 +10485,7 @@ struct Q220GrabState {
         0,0,0,1
     };
     float previousGrip = 0.0f;
+    double grabUntil=-1;
 };
 
 Q220GrabState gQ220Grab[2];
@@ -10558,7 +10565,7 @@ Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
     float transform[16];Q223GetRefTransform(refFormId,transform);
     float current[16];Q220MulMat4(transform,initial.data(),current);
     fo3rigid::M pose;std::copy(current,current+16,pose.begin());
-    if(!fo3rigid::Live().Add(refFormId,source->rigidBody->asset,pose))return nullptr;
+    if(!fo3rigid::Live().Add(refFormId,source->rigidBody->asset,pose,source->baseRecordType=="MSTT"))return nullptr;
 
     body.collisionHalfExtents={(maximum.x-minimum.x)*.5f,(maximum.y-minimum.y)*.5f,(maximum.z-minimum.z)*.5f};
     body.collisionRadius=Q211Length(body.collisionHalfExtents);
@@ -10698,9 +10705,26 @@ void Q223AdvanceDynamicBodies() {
         SynchronizeFo3RigidWorld(gQ210Head[0],gQ210Head[2]);
     }
     auto& world=fo3rigid::Live();
+    // Match the resident visual placement. Admit at most two new nearby props
+    // per update; sleeping references retain their pose until the cell unloads.
+    static auto nextPropScan=now;
+    if(now>=nextPropScan){
+        nextPropScan=now+std::chrono::milliseconds(150);
+        unsigned added=0;
+        for(const auto& o:gObjects){
+            if(!o.q220LooseObject||o.baseRecordType!="MSTT"||world.Has(o.refFormId)||
+               Fo3WorldReferenceHidden(o.refFormId))continue;
+            const auto& c=o.rigidCenter;
+            if(std::hypot(c.x-gQ210Head[0],c.y-gQ210Head[1],c.z-gQ210Head[2])>5.f)continue;
+            if(Q223EnsureDynamicBody(o.refFormId)&&++added==2)break;
+        }
+    }
     for(auto i=gQ223DynamicBodies.begin();i!=gQ223DynamicBodies.end();){
-        const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject&&o.refFormId==i->first;});
-        if(!resident){world.Remove(i->first);i=gQ223DynamicBodies.erase(i);}else ++i;
+        const auto revision=gFo3VisualPublication.Revision();
+        const bool resident=i->second.residentRevision==revision||
+            std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject&&o.refFormId==i->first;});
+        i->second.residentRevision=revision;
+        if(!resident||Fo3WorldReferenceHidden(i->first)){world.Remove(i->first);i=gQ223DynamicBodies.erase(i);}else ++i;
     }
     // Existing loose grips receive this frame's raw tracking target before
     // the shared step; late grab/release processing must not add a frame of lag.
@@ -10729,6 +10753,9 @@ void Q223AdvanceDynamicBodies() {
     for(auto& entry:gQ223DynamicBodies){
         auto& body=entry.second;fo3rigid::M pose;fo3rigid::V linear,angular;
         if(!world.Pose(entry.first,pose,&linear,&angular))continue;
+        if(body.publishedRevision==gFo3VisualPublication.Revision()&&body.publishedPose==pose)continue;
+        body.publishedRevision=gFo3VisualPublication.Revision();
+        body.publishedPose=pose;
         body.linearVelocity={linear[0],linear[1],linear[2]};body.angularVelocity={angular[0],angular[1],angular[2]};
         auto inverse=fo3rigid::Identity();inverse[12]=-body.authoredCenter.x;inverse[13]=-body.authoredCenter.y;inverse[14]=-body.authoredCenter.z;
         float transform[16];Q220MulMat4(pose.data(),inverse.data(),transform);Q220SetRefTransform(entry.first,transform);
@@ -10806,17 +10833,28 @@ void Q220UpdateLooseGrab(
             return;
         }
     }
-    if(Fo3LockpickInputBlocked()){state.previousGrip=grip;return;}
-    if (Fo3DialogueFocus()&&!state.active){state.previousGrip=grip;return;}
+    if(Fo3LockpickInputBlocked()){state.grabUntil=-1;state.previousGrip=grip;return;}
+    if (Fo3DialogueFocus()&&!state.active){state.grabUntil=-1;state.previousGrip=grip;return;}
     if (!handValid) {
+        state.grabUntil=-1;
         if(handIndex==1) gShoulderGesture.Reset();
         state.previousGrip = grip;
         return;
     }
 
-    if (!state.active &&
-        state.previousGrip < PRESS &&
-        grip >= PRESS) {
+    const double grabTime=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    if(grip<PRESS)state.grabUntil=-1;
+    if(!state.active&&state.previousGrip<PRESS&&grip>=PRESS)state.grabUntil=grabTime+.12;
+    if (!state.active && grabTime<=state.grabUntil) {
+        // Reapply the authored palm offset to the tracked grip when arm IK
+        // reaches its anatomical limit. Never extend through a solid surface.
+        if(gVrSolvedArms[handIndex].valid){
+            const auto palm=gVrSolvedArms[handIndex].palm;
+            const auto solved=Q220TransformPoint(gQ210PlayerRoot,{palm.x,palm.y,palm.z});
+            const auto delta=Q211Sub(tracked,solved);
+            if(Q211Length(delta)<.25f&&!HasFo3InteractionOccluder(hand.x,hand.y,hand.z,delta.x,delta.y,delta.z,1,0))
+                hand={hand.x+delta.x,hand.y+delta.y,hand.z+delta.z};
+        }
         uint32_t ref = 0u;
         Vec3 center{};
         float distance = 0.0f;
@@ -10829,7 +10867,7 @@ void Q220UpdateLooseGrab(
                     if(i!=gPlayerSession->player.Definitions().items.end()&&i->second.weapon.Physical()){state.previousGrip=grip;return;}
                 }
             }
-            state.active = true;
+            state.grabUntil=-1;state.active = true;
             state.refFormId = ref;
             state.startPalm = hand;
             state.startTracked = tracked;
@@ -11997,7 +12035,7 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
         const fo3rigid::V desired{target.x,target.y-.035f,target.z};
         fo3rigid::V resolved=desired,normal;
         if(ready[h]&&Q211Length(Q211Sub(target,{previous[h][0],previous[h][1]+.035f,previous[h][2]}))<.5f)
-            fo3rigid::Live().SweepCapsule(previous[h],desired,.035f,.07f,resolved,normal);
+            fo3rigid::Live().SweepCapsule(previous[h],desired,.035f,.07f,resolved,normal,-1.f,gVrPoseDt);
         previous[h]=resolved;ready[h]=true;return Vec3{resolved[0],resolved[1]+.035f,resolved[2]};
     };
     leftTargetWorld=contactHand(0,leftTargetWorld,gQ210LeftHandValid);
@@ -12085,11 +12123,13 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
             part, q213LeftPose, q213RightPose, deltas);
 
         // Keep feet at their standing floor anchors while the HMD lowers the torso.
-        if(gPlayerSneakDrop>.001f)for(const char* side:{"L","R"}){
+        if(gPlayerSneakDrop>.001f||fo3vr::Length(gVrLean)>.001f)for(const char* side:{"L","R"}){
             const std::string prefix=std::string("Bip01 ")+side+" ";
             const int hip=fo3anim::FindBone(gVrSkeleton,prefix+"Thigh"),knee=fo3anim::FindBone(gVrSkeleton,prefix+"Calf"),ankle=fo3anim::FindBone(gVrSkeleton,prefix+"Foot");
             if(hip<0||knee<0||ankle<0)continue;
-            const auto pose=fo3vr::SolveCrouchLeg(VrPoint(VrSkeletonPoint(hip)),VrPoint(VrSkeletonPoint(knee)),VrPoint(VrSkeletonPoint(ankle)),gPlayerSneakDrop);
+            const auto foot=VrPoint(VrSkeletonPoint(ankle));
+            const auto pose=fo3vr::SolvePlantedLeg(VrPoint(VrSkeletonPoint(hip)),VrPoint(VrSkeletonPoint(knee)),
+                foot,fo3vr::Rotate(gVrFootRotation,foot)+gVrFootOffset,gVrFootRotation);
             if(!pose.valid)continue;const auto lower=Q211Lower(prefix);
             for(size_t b=0;b<part.boneNames.size();++b){const auto& name=part.boneNames[b];
                 if(name==lower+"thigh")deltas[b]=RuntimeDelta(pose.thigh);
@@ -15756,21 +15796,28 @@ void SetFo3PlayerBodyTrackingQ210(
     const bool valid[2]={leftValid,rightValid};
     gQ213TorsoYaw=fo3vr::SolveTorso(gVrTorso,{headX,headY,headZ},headYaw,bodyYaw,hands,valid,gVrPoseDt);
     gQ213TorsoYawReady=true;
-    const float c=std::cos(gQ213TorsoYaw),s=std::sin(gQ213TorsoYaw);
+
     Vec3 anchor{};const bool anchorReady=Q211FindAvatarHeadAnchor(anchor);
     // Align the FINAL neck-posed eye midpoint in XYZ before solving arms.
     gVrNeckPose=fo3vr::NeckPose(VrPoint(gVrNeckAnchor),fo3vr::Wrap(headYaw-gQ213TorsoYaw));
     const float playerScale=Fo3PlayerTrackingScale();
-    const auto root=fo3vr::BodyRoot(gVrNeckPose.Point(VrPoint(anchor))*playerScale,{headX,headY,headZ},gQ213TorsoYaw);
-    const float rootX=root.translation.x,rootZ=root.translation.z;
-    const float q217RootY=anchorReady?root.translation.y:headY-localHeadY+FLOOR_Y*(1-playerScale);
-
-    std::fill(gQ210PlayerRoot, gQ210PlayerRoot + 16, 0.0f);
-    gQ210PlayerRoot[0] = c*playerScale;
-    gQ210PlayerRoot[2] = -s*playerScale;
-    gQ210PlayerRoot[5] = playerScale;
-    gQ210PlayerRoot[8] = s*playerScale;
-    gQ210PlayerRoot[10] = c*playerScale;
+    const auto eyes=gVrNeckPose.Point(VrPoint(anchor));
+    const auto yaw=fo3vr::Axis({0,1,0},gQ213TorsoYaw);
+    const auto lean=fo3vr::Rotate(fo3vr::Transpose(yaw),gVrLean)*(1.f/playerScale);
+    const int pelvis=fo3anim::FindBone(gVrSkeleton,"Bip01 Pelvis");
+    const float spine=pelvis>=0?eyes.y-VrSkeletonPoint(pelvis).y:0;
+    const auto hinge=anchorReady&&spine>.1f?
+        fo3vr::Axis(fo3vr::Cross({0,1,0},lean),std::min(.65f,std::atan2(fo3vr::Length(lean),spine))):
+        fo3vr::Identity();
+    const auto rotation=fo3vr::Multiply(yaw,hinge);
+    const auto translation=fo3vr::V{headX,headY,headZ}-fo3vr::Rotate(rotation,eyes*playerScale);
+    gVrFootRotation=fo3vr::Transpose(hinge);
+    gVrFootOffset=eyes+fo3vr::Rotate(gVrFootRotation,fo3vr::V{0,gPlayerSneakDrop,0}-lean-eyes);
+    const float rootX=translation.x,rootZ=translation.z;
+    const float q217RootY=anchorReady?translation.y:headY-localHeadY+FLOOR_Y*(1-playerScale);
+    std::fill(gQ210PlayerRoot,gQ210PlayerRoot+16,0.f);
+    for(int row=0;row<3;++row)for(int col=0;col<3;++col)
+        gQ210PlayerRoot[col*4+row]=rotation[row*3+col]*playerScale;
     gQ210PlayerRoot[12] = rootX;
     gQ210PlayerRoot[13] = q217RootY;
     gQ210PlayerRoot[14] = rootZ;

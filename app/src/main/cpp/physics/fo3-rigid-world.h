@@ -25,7 +25,7 @@ public:
     void Static(uint64_t id,const std::vector<Triangle>& triangles);
     void RemoveStatic(uint64_t id);
     void ClearStatics();
-    bool Add(uint64_t id,const Asset& asset,const M& pose);
+    bool Add(uint64_t id,const Asset& asset,const M& pose,bool pushableProp=false);
     bool Has(uint64_t id)const;
     void Remove(uint64_t id);
     void ClearBodies();
@@ -51,7 +51,7 @@ public:
     std::vector<uint32_t> RagdollActors()const;
     void Step(float seconds);
     bool CanExpandCapsule(const V& feet,float radius,float oldHeight,float newHeight)const;
-    bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal,float minimumUpNormal=-1.f)const;
+    bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal,float minimumUpNormal=-1.f,float contactSeconds=0,bool playerPush=false)const;
 };
 World& Live();
 bool Surface(const Asset& asset,const M& pose,const V& point,V& surface,V& normal,float& distance);

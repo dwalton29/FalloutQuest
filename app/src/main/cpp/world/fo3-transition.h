@@ -106,7 +106,7 @@ inline std::unordered_set<std::string> BuildFo3CollisionPolicyQ710(
     for (const Fo3WorldPlacement& placement : placements) {
         if (placement.modelPath.empty()) continue;
         const std::string model = NormalizeFo3CollisionModelPathQ710(placement.modelPath);
-        if (IsFo3DynamicCollisionRecordTypeQ710(placement.baseRecordType)) {
+        if (placement.baseRecordType!="MSTT" && IsFo3DynamicCollisionRecordTypeQ710(placement.baseRecordType)) {
             dynamicModels.insert(model);
         } else {
             staticModels.insert(model);

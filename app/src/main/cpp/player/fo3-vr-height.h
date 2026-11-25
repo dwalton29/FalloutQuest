@@ -28,6 +28,17 @@ struct Settings {
         return ok&&closed&&std::rename(temp.c_str(),path.c_str())==0;
     }
 };
+// Tracking-space estimate, in metres. Leave room to lean over the feet.
+struct SupportAnchor {
+    float x=0,z=0;
+    bool ready=false;
+    void Follow(float headX,float headZ,float drop){
+        if(!ready){x=headX;z=headZ;ready=true;return;}
+        const float dx=headX-x,dz=headZ-z,distance=std::hypot(dx,dz);
+        const float reach=.16f+std::clamp(drop,0.f,.45f)*.55f;
+        if(distance>reach){x=headX-dx*reach/distance;z=headZ-dz*reach/distance;}
+    }
+};
 struct Tracking {
     float floor=-1.55f,head=0,candidate=0,stableSeconds=0;
     bool floorReady=false,stageFloor=false,headTracked=false;

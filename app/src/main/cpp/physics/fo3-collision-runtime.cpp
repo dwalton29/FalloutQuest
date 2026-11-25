@@ -848,6 +848,7 @@ bool BuildFo3CollisionPlacementChunk(const Fo3WorldPlacement& placement,
         const std::vector<Fo3NifCollisionShapeQ6F>& shapes,const Fo3PackedMetadataMapQ714& modelMetadata,
         float centerX,float centerY,float floorZ,float sceneForward,float floorY,float unitsPerMetre,
         Q1990CachedCollisionPlacement& entry,bool requireComplete=false) {
+    if(placement.baseRecordType=="MSTT"&&Fo3MovablePropBody(shapes))return true;
     std::unordered_set<uint64_t> uniqueSurfaceKeys;
     for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
         const size_t vertexCount = shape.positions.size() / 3u;
@@ -1195,6 +1196,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         size_t placementShapes = 0;
         std::array<size_t, 5> placementKinds{};
         const std::vector<Fo3NifCollisionShapeQ6F>& shapes = cached->second;
+        if(placement.baseRecordType=="MSTT"&&Fo3MovablePropBody(shapes))continue;
         for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
             const size_t vertexCount = shape.positions.size() / 3u;
             if (vertexCount == 0u || shape.indices.empty()) continue;
@@ -2993,6 +2995,15 @@ bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desir
     SynchronizeFo3RigidWorld(*outX,*outZ);
     if(arrival||!gSafeSpawnResolved){gFallVelocity=0;gFallGrounded=true;*outY=planarY;return true;}
     const float initialFeet=gCollisionFloorY+currentY;
+    if(*outX!=currentX||*outZ!=currentZ){
+        // The controller already clipped travel against fixed geometry. Dynamic
+        // props own their current shape and can receive momentum from a step.
+        fo3rigid::V stop,normal;
+        if(fo3rigid::Live().SweepCapsule({currentX,initialFeet,currentZ},{*outX,initialFeet,*outZ},
+                CollisionRadiusQ712(),PLAYER_HEIGHT,stop,normal,-1.f,seconds,true)){
+            *outX=stop[0];*outZ=stop[2];
+        }
+    }
     float feet=initialFeet;
     // Only an already grounded character can step up; never snap down a ledge.
     if(gFallGrounded&&planarY>currentY&&planarY-currentY<=StepHeightQ78B()+.01f)feet=gCollisionFloorY+planarY;

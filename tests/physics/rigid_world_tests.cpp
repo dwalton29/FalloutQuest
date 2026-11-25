@@ -21,6 +21,16 @@ int main(){
     assert(!w.CanExpandCapsule({-5,0,0},.2f,.9f,1.7f));assert(w.CanExpandCapsule({-5,0,0},.2f,1.7f,.9f));
     assert(w.CanExpandCapsule({-7,0,0},.2f,.9f,1.7f));w.RemoveStatic(101);
     w.Static(102,{{{-4.8f,0,-1},{-4.8f,2,1},{-4.8f,2,-1}},{{-4.8f,0,-1},{-4.8f,0,1},{-4.8f,2,1}}});assert(w.CanExpandCapsule({-5,0,0},.2f,.9f,1.7f));w.RemoveStatic(102);
+    {
+        auto prop=Box(.2f,.2f,.2f);prop.material.mass=35;
+        assert(w.Add(900,prop,At(3,.2f,0),true));
+        V hit,normal,v;M pose;
+        assert(w.SweepCapsule({2,.21f,.08f},{3,.21f,.08f},.035f,.07f,hit,normal));
+        assert(w.Pose(900,pose,&v)&&v[0]==0);
+        assert(w.SweepCapsule({2,.21f,.08f},{3,.21f,.08f},.035f,.07f,hit,normal,-1,.015f));
+        V angular;assert(w.Pose(900,pose,&v,&angular)&&v[0]>0&&std::abs(angular[1])>0);
+        w.Remove(900);
+    }
     auto box=Box(.1f,.1f,.1f);box.material.restitution=0;
     assert(w.Add(1,box,At(0,2,0)));M p;V v;
     w.Step(1.f/60);assert(w.Pose(1,p,&v)&&v[1]<0&&p[13]<2);

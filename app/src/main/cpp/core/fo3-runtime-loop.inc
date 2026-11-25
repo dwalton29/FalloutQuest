@@ -1562,7 +1562,7 @@ private:
         if(heightRecenterTime_&&time>=heightRecenterTime_){
             if(heightRecenterValid_)heightTracking_.Recenter(heightRecenterY_);
             else heightTracking_.floorReady=false;
-            heightRecenterTime_=0;spacewarpHistory_.Reset();recentered=true;
+            supportAnchor_.ready=false; heightRecenterTime_=0;spacewarpHistory_.Reset();recentered=true;
         }
         XrSpaceLocation floor{XR_TYPE_SPACE_LOCATION};
         const bool floorValid=floorSpace_!=XR_NULL_HANDLE&&XR_SUCCEEDED(xrLocateSpace(floorSpace_,localSpace_,time,&floor))&&
@@ -1589,6 +1589,7 @@ private:
             dt = static_cast<double>(frameTime - lastFrameTime_) / 1'000'000'000.0;
             dt = std::clamp(dt, 0.0, 0.05);
         }
+        const bool resetSupport=lastFrameTime_==0;
         lastFrameTime_ = frameTime;
         const double seatNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
         const bool seatInput=headTracked&&sessionState_==XR_SESSION_STATE_FOCUSED&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&!Fo3GameplayBlocked()&&!Fo3TerminalFocus()&&!Fo3PipboyFocus()&&!Fo3DialogueFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3BarterFocus()&&!gFo3PauseOpen&&
@@ -1638,7 +1639,13 @@ private:
         const bool sneakInput= !gPlayerSeat.Active()&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3DialogueFocus()&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!gFo3PauseOpen;
         const float physicalHeight=heightTracking_.PhysicalHeight(headView.pose.position.y);
         sneak_.Step(physicalHeight,headTracked,sneakInput,sneakDown_,float(dt),vrSettings_.physicalCrouch,vrSettings_.crouchDrop,vrSettings_.adjustment);
-        const auto stanceHead=RotateYaw(ScaledLocal(headView.pose.position),playerYaw_);
+        if(!headTracked||gPlayerSeat.Active()||seatCommit!=fo3seat::State::Commit::None||resetSupport)
+            supportAnchor_.ready=false;
+        if(!supportAnchor_.ready)supportAnchor_.Follow(headView.pose.position.x,headView.pose.position.z,0);
+        const auto previousSupport=RotateYaw({supportAnchor_.x*characterScale,0,supportAnchor_.z*characterScale},playerYaw_);
+        supportAnchor_.Follow(headView.pose.position.x,headView.pose.position.z,sneak_.standing-physicalHeight);
+        const auto stanceHead=RotateYaw({supportAnchor_.x*characterScale,0,supportAnchor_.z*characterScale},playerYaw_);
+        if(!headTracked)supportAnchor_.ready=false;
         const float eyeHeight=physicalHeight+vrSettings_.adjustment;
         const float desiredHeight=(eyeHeight+sneak_.offset+.10f)*characterScale;
         if(headTracked&&sneakInput){const float actualHeight=SetFo3PlayerStanceHeight(stanceHead.x+playerPosition_.x,stanceHead.z+playerPosition_.z,playerPosition_.y,desiredHeight);
@@ -1660,9 +1667,9 @@ private:
         const float desiredPlayerX = playerPosition_.x + requestedDx;
         const float desiredPlayerZ = playerPosition_.z + requestedDz;
 
-        const XrVector3f headOffset = RotateYaw(ScaledLocal(headView.pose.position), playerYaw_);
-        const float currentCenterX = headOffset.x + playerPosition_.x;
-        const float currentCenterZ = headOffset.z + playerPosition_.z;
+        XrVector3f headOffset = stanceHead;
+        const float currentCenterX = previousSupport.x + playerPosition_.x;
+        const float currentCenterZ = previousSupport.z + playerPosition_.z;
         const float desiredCenterX = headOffset.x + desiredPlayerX;
         const float desiredCenterZ = headOffset.z + desiredPlayerZ;
 
@@ -1674,6 +1681,17 @@ private:
                                      playerPosition_.y, float(dt),
                                      &resolvedCenterX, &resolvedCenterZ,
                                      &resolvedPlayerY)) {
+            // Attribute blocked room-scale travel to the support anchor, so
+            // contact cannot translate the tracked view against a real lean.
+            const float roomX=stanceHead.x-previousSupport.x,roomZ=stanceHead.z-previousSupport.z;
+            const float roomSq=roomX*roomX+roomZ*roomZ;
+            if(roomSq>1e-10f){
+                const float rejected=std::clamp(((desiredCenterX-resolvedCenterX)*roomX+
+                    (desiredCenterZ-resolvedCenterZ)*roomZ)/roomSq,0.f,1.f);
+                headOffset.x-=roomX*rejected;headOffset.z-=roomZ*rejected;
+                const auto local=RotateYaw(headOffset,-playerYaw_);
+                supportAnchor_.x=local.x/characterScale;supportAnchor_.z=local.z/characterScale;
+            }
             playerPosition_.x = resolvedCenterX - headOffset.x;
             playerPosition_.z = resolvedCenterZ - headOffset.z;
             playerPosition_.y = resolvedPlayerY;
@@ -1681,6 +1699,17 @@ private:
             playerPosition_.x = desiredPlayerX;
             playerPosition_.z = desiredPlayerZ;
         }
+        const auto eye=ToVirtualPose(headView.pose).position;
+        gVrLean={eye.x-(playerPosition_.x+headOffset.x),0,eye.z-(playerPosition_.z+headOffset.z)};
+        if(!headTracked||gPlayerSeat.Active())gVrLean={};
+        float targetFade=0;
+        if(fo3vr::Length(gVrLean)>.025f){
+            const float r=.06f*characterScale;
+            fo3rigid::V from{eye.x-gVrLean.x,eye.y-r,eye.z-gVrLean.z},to{eye.x,eye.y-r,eye.z},hit,normal;
+            if(fo3rigid::Live().SweepCapsule(from,to,r,2*r,hit,normal))
+                targetFade=std::clamp(std::hypot(eye.x-hit[0],eye.z-hit[2])/r,0.f,1.f);
+        }
+        gVrLeanFade+=std::clamp(targetFade-gVrLeanFade,-float(dt)*12,float(dt)*18);
         XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;afterApp.position.y+=TrackingLift()*characterScale;
         const auto afterMatrix=MatrixFromPose(afterApp);
         fo3rigid::M previousApp,currentApp;
@@ -2140,7 +2169,7 @@ private:
                         gPlayerSneakDrop=sneak_.drop;
                         if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
                     }
-                    lastFrameTime_ = 0;
+                    lastFrameTime_ = 0;gVrLean={};gVrLeanFade=0;
                 }
                 hitch.Mark("scripts+player");
                 fqperf::Scope vrInteractionUpdate(fqperf::VrInteractionUpdate);
@@ -3050,7 +3079,7 @@ private:
             }
             if(showHud){
                 fo3bloodui::Render(fo3worldscript::seconds);
-                fo3blinkui::Render(gPlayerSeatFade);
+                fo3blinkui::Render(std::max(gPlayerSeatFade,gVrLeanFade));
             }
             if (depthReady) {
                 fqperf::GpuScope gpuDepth(fqperf::GpuDepthCopy);
@@ -3176,6 +3205,7 @@ private:
     XrSpace floorSpace_{XR_NULL_HANDLE};
     fo3vrheight::Settings vrSettings_;
     fo3vrheight::Tracking heightTracking_;
+    fo3vrheight::SupportAnchor supportAnchor_;
     std::string vrSettingsPath_;
     XrTime heightRecenterTime_=0,heightSampleTime_=0;
     float heightRecenterY_=0,appliedHeightLift_=0;

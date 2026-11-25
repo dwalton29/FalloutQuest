@@ -229,7 +229,7 @@ void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     btVector3 lo,hi;impl->statics.at(id).body->getAabb(lo,hi);impl->WakeBounds(lo,hi);
 }
 bool World::Has(uint64_t id)const{return impl->bodies.count(id)!=0;}
-bool World::Add(uint64_t id,const Asset& asset,const M& pose){
+bool World::Add(uint64_t id,const Asset& asset,const M& pose,bool pushableProp){
     if(Has(id))return true;
     if(!id||asset.hulls.empty()||!Finite(pose)||!std::isfinite(asset.material.mass)||asset.material.mass<=0)return false;
     for(const auto& hull:asset.hulls)for(const auto& p:hull)if(!Finite(p))return false;
@@ -264,6 +264,10 @@ bool World::Add(uint64_t id,const Asset& asset,const M& pose){
     btVector3 lo,hi;e.shape->getAabb(btTransform::getIdentity(),lo,hi);const auto half=(hi-lo)*.5f;
     const float thin=std::max(.002f,float(std::min({half.x(),half.y(),half.z()})));
     e.body->setCcdMotionThreshold(thin*.5f);e.body->setCcdSweptSphereRadius(thin*.8f);
+    if(pushableProp){
+        e.body->setUserIndex(1);
+        e.body->setActivationState(ISLAND_SLEEPING);
+    }
     RemoveStatic(id);
     impl->world.addRigidBody(e.body.get(),2,short(-1));impl->bodies.emplace(id,std::move(e));return true;
 }
@@ -520,11 +524,15 @@ bool World::CanExpandCapsule(const V& feet,float radius,float oldHeight,float ne
  struct Upward:btCollisionWorld::ClosestConvexResultCallback{using ClosestConvexResultCallback::ClosestConvexResultCallback;btScalar addSingleResult(btCollisionWorld::LocalConvexResult& r,bool world)override{const auto normal=world?r.m_hitNormalLocal:r.m_hitCollisionObject->getWorldTransform().getBasis()*r.m_hitNormalLocal;if(normal.y()>=-.01f)return 1;return ClosestConvexResultCallback::addSingleResult(r,world);}}hit(from.getOrigin(),to.getOrigin());hit.m_collisionFilterGroup=4;hit.m_collisionFilterMask=3;
  impl->world.convexSweepTest(&shape,from,to,hit,.001f);return !hit.hasHit();
 }
-bool World::SweepCapsule(const V& from,const V& to,float radius,float height,V& resolved,V& normal,float minimumUpNormal)const{
+bool World::SweepCapsule(const V& from,const V& to,float radius,float height,V& resolved,V& normal,float minimumUpNormal,float contactSeconds,bool playerPush)const{
     btCapsuleShape capsule(radius,std::max(0.f,height-2*radius));capsule.setMargin(.001f);
     btTransform a=btTransform::getIdentity(),b=a;a.setOrigin(B(from)+btVector3(0,height*.5f,0));b.setOrigin(B(to)+btVector3(0,height*.5f,0));
     struct SupportHit:btCollisionWorld::ClosestConvexResultCallback{
-        float minimum;
+        float minimum;bool propsOnly=false;
+        bool needsCollision(btBroadphaseProxy* proxy)const override{
+            return ClosestConvexResultCallback::needsCollision(proxy)&&
+                (!propsOnly||static_cast<const btCollisionObject*>(proxy->m_clientObject)->getUserIndex()==1);
+        }
         SupportHit(const btVector3& from,const btVector3& to,float threshold):ClosestConvexResultCallback(from,to),minimum(threshold){}
         btScalar addSingleResult(btCollisionWorld::LocalConvexResult& result,bool world)override{
             const auto n=world?result.m_hitNormalLocal:result.m_hitCollisionObject->getWorldTransform().getBasis()*result.m_hitNormalLocal;
@@ -534,9 +542,22 @@ bool World::SweepCapsule(const V& from,const V& to,float radius,float height,V& 
             return ClosestConvexResultCallback::addSingleResult(result,world);
         }
     }hit(a.getOrigin(),b.getOrigin(),minimumUpNormal);
+    hit.propsOnly=playerPush;
     hit.m_collisionFilterGroup=4;hit.m_collisionFilterMask=3;
     impl->world.convexSweepTest(&capsule,a,b,hit,.001f);
     if(!hit.hasHit()){resolved=to;normal={};return false;}
+    // Contact sweeps can transfer momentum. A nearer fixed surface naturally
+    // blocks the push. The off-centre impulse also turns an authored prop.
+    if(contactSeconds>0&&contactSeconds<=.1f&&hit.m_hitCollisionObject->getUserIndex()==1){
+        auto* body=btRigidBody::upcast(const_cast<btCollisionObject*>(hit.m_hitCollisionObject));
+        const auto inward=-hit.m_hitNormalWorld;
+        const auto lever=hit.m_hitPointWorld-body->getCenterOfMassPosition();
+        const auto speed=(B(to)-B(from)).dot(inward)/contactSeconds-body->getVelocityInLocalPoint(lever).dot(inward);
+        if(speed>.01f){
+            const float effectiveMass=1.f/(1.f/(playerPush?65.f:3.f)+body->computeImpulseDenominator(hit.m_hitPointWorld,inward));
+            body->activate(true);body->applyImpulse(inward*(std::min(3.f,float(speed))*effectiveMass),lever);
+        }
+    }
     normal=A(hit.m_hitNormalWorld);resolved=A(B(from).lerp(B(to),std::max(0.f,float(hit.m_closestHitFraction)-.001f)));return true;
 }
 } // namespace fo3rigid

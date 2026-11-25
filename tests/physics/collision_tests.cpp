@@ -273,7 +273,35 @@ static void OriginalWeaponTarget(const char* path){
     assert(TraceFo3WorldSurface(centre.x+4+tri.normal.x,centre.y+tri.normal.y,centre.z+tri.normal.z,-tri.normal.x,-tri.normal.y,-tri.normal.z,2,0,0,&hit)&&hit.reference==44);
     std::cout<<"Original range target BHK hit identity and animated collision pose passed\n";
 }
+// Optional original-asset check. The game file stays outside the repository.
+static void OriginalShoppingCart(const char* path){
+    const std::string model="clutter/junk/shoppingcart01.nif";
+    std::ifstream input(path,std::ios::binary);
+    assets[model].assign(std::istreambuf_iterator<char>(input),{});
+    std::vector<Fo3NifCollisionShapeQ6F> shapes;
+    assert(LoadFo3NifCollisionShapesComplete(model,shapes)&&Fo3MovablePropBody(shapes));
+    assert(shapes.size()==1&&shapes[0].massKg==35&&shapes[0].motionSystem==4);
+    Q1990CachedCollisionPlacement fixed;
+    assert(BuildFo3CollisionPlacementChunk(placement(111,model,"MSTT"),shapes,{},0,0,0,0,0,70,fixed));
+    assert(fixed.triangles.empty());
+    fo3rigid::Asset cart;cart.material.mass=shapes[0].massKg;
+    auto& points=cart.hulls.emplace_back();
+    const auto& vertices=shapes[0].positions;
+    for(size_t i=0;i<vertices.size();i+=3)
+        points.push_back({vertices[i]/70,vertices[i+2]/70,-vertices[i+1]/70});
+    fo3rigid::V centre{};
+    for(const auto& pt:points)for(int j=0;j<3;++j)centre[j]+=pt[j]/points.size();
+    auto from=centre;from[0]-=2;from[1]-=.035f;auto to=centre;to[1]-=.035f;
+    fo3rigid::World world;assert(world.Add(111,cart,fo3rigid::Identity(),true));
+    fo3rigid::V hit,normal,velocity;fo3rigid::M pose;
+    assert(world.SweepCapsule(from,to,.035f,.07f,hit,normal,-1,.015f));
+    world.Step(1.f/60);
+    assert(!world.Held(0)&&!world.Held(1)&&world.Pose(111,pose,&velocity));
+    assert(velocity[0]>0&&pose[12]>0);
+    std::cout<<"Original 35 kg trolley moves on palm contact before grip\n";
+}
 int main(int argc,char**argv) {
+    if(argc==3&&std::string(argv[1])=="--shopping-cart"){OriginalShoppingCart(argv[2]);return 0;}
     if(argc==3&&std::string(argv[1])=="--weapon-target"){OriginalWeaponTarget(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--walkway-scene"){OriginalPlacedWalkways(argv[2],argv[3]);return 0;}
     if(argc==3&&std::string(argv[1])=="--walkways"){OriginalMegatonWalkways(argv[2]);return 0;}

@@ -499,7 +499,7 @@ void WeaponUpdate(double now,bool backButton){
     if(held){if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
     RetireReload();inside=false;stowAccess.Reset();
     if(s&&gQ210PlayerBodyReady){Zones();const auto model=models.find(s->formId);pose=HolsterPose(p.Definitions().items.at(s->formId).weapon,model!=models.end()&&model->second.ready?&model->second:nullptr);}
-    for(int hand=0;hand<2;hand++)gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];return;
+    for(int hand=0;hand<2;hand++){gQ220Grab[hand].grabUntil=-1;gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];}return;
   }
   Zones();
   bool physicsAdvanced=false;
@@ -701,8 +701,9 @@ void WeaponUpdate(double now,bool backButton){
   {
     FQ_PERF_SCOPE(LooseGrab);
     if(!support&&!magazine&&!charging&&!animatedReload)Q220UpdateLooseGrab(0,gWeaponPalmValid[0],gWeaponPalm[0],gQ218LeftHandQuat,gQ217FingerGrip[0]);
+    else {gQ220Grab[0].grabUntil=-1;gQ220Grab[0].previousGrip=gQ217FingerGrip[0];}
     if(!held)Q220UpdateLooseGrab(1,gWeaponPalmValid[1],gWeaponPalm[1],gQ218RightHandQuat,gQ217FingerGrip[1]);
-    else gQ220Grab[1].previousGrip=gQ217FingerGrip[1];
+    else {gQ220Grab[1].grabUntil=-1;gQ220Grab[1].previousGrip=gQ217FingerGrip[1];}
   }
   s=p.EquippedWeapon();ammoText[0]=0;if(s&&held&&p.Definitions().items.at(s->formId).weapon.Firearm()){
     const auto&d=p.Definitions().items.at(s->formId).weapon;
