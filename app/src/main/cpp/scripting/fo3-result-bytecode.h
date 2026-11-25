@@ -7,7 +7,7 @@ namespace fo3script {
 // FNV ScriptRunner::GetNextLine supplies the word opcode/word byte-length
 // envelope. IF's first word counts logical lines. Restrict admission to
 // complete result streams. A reference prefix belongs to its following line.
-inline bool DecodeResult(const fo3pipdata::Definitions& defs,const fo3pipdata::ResultScript& script,
+inline bool DecodeSimpleResult(const fo3pipdata::Definitions& defs,const fo3pipdata::ResultScript& script,
                          std::vector<fo3dialogue::Command>& result,fo3dialogue::CommandFormCapture* capture,uint32_t owner=0) {
   using Type=fo3dialogue::CommandType;
   const auto& bytes=script.compiled;
@@ -127,3 +127,5 @@ inline bool DecodeResult(const fo3pipdata::Definitions& defs,const fo3pipdata::R
   result.swap(commands);return true;
 }
 }
+
+#include "fo3-stage-decoder.h"

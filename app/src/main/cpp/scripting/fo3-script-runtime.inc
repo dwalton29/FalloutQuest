@@ -21,11 +21,11 @@ class Expression {
     if(syntaxOnly){
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
-      if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
+      if(query=="gethasnote"||query=="getinworldspace"||query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
          query=="getpermanentactorvalue"||query=="getpcmiscstat"||query=="getisid"||
          query=="getdetected"||query=="getiscurrentpackage"||query=="iscombattarget"||
          query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="getdeadcount"||query=="isplayertagskill"||query=="getinfaction"||query=="getfactionrank")arguments=1;
-      if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
+      if(query=="getincellparam"||query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
         if(at==tokens.size()||tokens[at]=="("||tokens[at]==")"||tokens[at]=="&&"||tokens[at]=="||"||tokens[at]=="==")return Fail("missing expression query argument");
         ++at;
@@ -132,6 +132,32 @@ class Expression {
     }
     if(query=="gettalkedtopc"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));value=p.Snapshot().pipboy.talkedActors.count(id);return true;
+    }
+    if(query=="getxpfornextlevel"){
+      const auto xp=p.ExperienceProgress();
+      value=xp.level>=xp.maxLevel?0.f:float(int64_t(xp.nextThreshold)-xp.earned);
+      return true;
+    }
+    if(query=="gethasnote"){
+      if(at==tokens.size())return Fail("missing note");
+      const auto note=form(tokens[at++]);
+      if(!d.notes.count(note))return Fail("unknown note");
+      value=p.ItemCount(note)>0;return true;
+    }
+    if(query=="getinworldspace"){
+      if(at==tokens.size())return Fail("missing worldspace");
+      const auto world=form(tokens[at++]);
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      fo3pipdata::Location location;
+      if(!d.worlds.count(world)||!p.ScriptReferenceLocation(id,location))return Fail("worldspace query location unavailable");
+      value=location.world==world;return true;
+    }
+    if(query=="getincellparam"){
+      if(tokens.size()-at<2)return Fail("missing cell or reference");
+      const auto cell=form(tokens[at++]);const auto id=form(tokens[at++]);
+      fo3pipdata::Location location;
+      if(!d.cellWorlds.count(cell)||!p.ScriptReferenceLocation(id,location))return Fail("cell query location unavailable");
+      value=fo3pipdata::InCell(d,location.cell,cell);return true;
     }
     if(query=="getincell"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -369,7 +395,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu||c.type==C::AddItem||c.type==C::RemoveItem)&&!c.expression.empty())){
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::SetActorAIValue||c.type==C::RewardXP||c.type==C::RewardKarma||c.type==C::ShowMessage||c.type==C::ShowBarterMenu||c.type==C::AddItem||c.type==C::RemoveItem)&&!c.expression.empty())){
       float v;
       if(!fo3script::Expression(*this,owner,c.expression,error,scriptId,nullptr,true).Evaluate(v))return false;
       // Capture resolvable original bindings without demanding capabilities
@@ -551,9 +577,29 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::KillUpdates:ok=KillQuestUpdates();break;
     case C::PlayMovie:ok=PlayMovie(owner,c.expression,uint8_t(c.index));break;
     case C::AppearanceMenu:ok=OpenAppearanceMenu(owner);break;
-    case C::SpecialBook:ok=OpenSpecialBook(owner,uint32_t(c.value));break;
+    case C::SpecialBook:{
+      unsigned total=uint32_t(c.value);
+      if(c.index==2){
+        for(auto attribute:state_.special)total+=attribute;
+        if(total>70)total=70;
+      }
+      if(state_.specialMenuOwner&&state_.additionalSpecial!=(c.index==2)){ok=false;break;}
+      ok=OpenSpecialBook(owner,total);
+      if(ok)state_.additionalSpecial=c.index==2;
+      break;
+    }
     case C::PlayerTagSkill:ok=SetPlayerTagSkill(c.form,c.index);break;
-    case C::TagSkills:ok=OpenTagSkills(owner,uint32_t(c.value),c.index!=0);break;
+    case C::TagSkills:{
+      unsigned total=uint32_t(c.value);
+      if(c.index==2){
+        for(unsigned av=32;av<=45;++av)if(IsPlayerTagSkill(av))++total;
+        if(total>4)total=4;
+      }
+      if(state_.tagMenuOwner&&state_.additionalTags!=(c.index==2)){ok=false;break;}
+      ok=OpenTagSkills(owner,total,c.index!=0);
+      if(ok)state_.additionalTags=c.index==2;
+      break;
+    }
     // Explicit temporary policy: retain existing race/face/default-hair assets.
     case C::DeferredAppearance:{fo3pipdata::Location location;ok=!c.form||ScriptReferenceLocation(c.form,location);break;}
     case C::PlayerNameMenu:ok=OpenPlayerNameMenu(owner);break;
@@ -582,7 +628,11 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(next!=count){count=next;++revision_;}
       break;
     }
-    case C::SetActorAIValue:ok=SetActorAIValue(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,c.value);break;
+    case C::SetActorAIValue:
+      value=c.value;
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok)ok=std::isfinite(value)&&std::floor(value)==value&&value>=0&&value<=fo3av::AIMax(c.index)&&SetActorAIValue(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,value);
+      break;
     case C::SetAlert:ok=SetActorAlert(c.form,c.value!=0);break;
     case C::UseWeapon:{
       const auto* weapon=ActorWeapon(c.form);
@@ -666,8 +716,21 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
     case C::Lock:ok=ScriptLock(c.form,int(c.value));break;
     case C::Unlock:ok=ScriptUnlock(c.form);break;
-    case C::RewardKarma:ok=RewardKarma(c.value);break;
-    case C::RewardXP:ok=RewardExperience(uint32_t(c.value));break;
+    case C::RewardKarma:case C::RewardXP:
+      value=c.value;
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok&&c.type==C::RewardKarma)ok=RewardKarma(value);
+      else if(ok)ok=std::isfinite(value)&&value>=0&&double(value)<=2147483647.0&&std::floor(value)==value&&RewardExperience(uint32_t(value));
+      break;
+    case C::AddPerk:{
+      const auto perk=catalog_->pipboy.perks.find(c.form);
+      if(perk==catalog_->pipboy.perks.end()||!perk->second.ranks){ok=false;break;}
+      const auto owned=state_.pipboy.perks.find(c.form);
+      const unsigned rank=owned==state_.pipboy.perks.end()?0:owned->second;
+      if(rank<perk->second.ranks)ok=GrantPerk(c.form,uint8_t(rank+1));
+      break;
+    }
+
     case C::CompleteAllObjectives:ok=CompleteAllObjectives(c.form);break;
     case C::SetCellFullName:ok=SetCellFullName(c.form,c.index);break;
     case C::AddAchievement:ok=AddAchievement(uint32_t(c.value));break;

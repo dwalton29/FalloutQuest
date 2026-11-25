@@ -64,7 +64,15 @@ bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
 bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScript& script,std::vector<Command>& out,std::string& error,uint32_t owner,uint32_t scriptId,CommandFormCapture* forms) {
   out.clear();error.clear();
   if(forms)forms->Reset();
-  if(fo3script::DecodeResult(d,script,out,forms,owner))return true;
+  if(fo3script::DecodeResult(d,script,out,forms,owner,scriptId,script.source.empty()))return true;
+  if(CompileSourceResult(d,script,out,error,owner,scriptId,forms))return true;
+  if(!script.source.empty()&&fo3script::DecodeResult(d,script,out,forms,owner,scriptId,true)){
+    error.clear();return true;
+  }
+  return false;
+}
+bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScript& script,std::vector<Command>& out,std::string& error,uint32_t owner,uint32_t scriptId,CommandFormCapture* forms,bool decodedNative) {
+  out.clear();error.clear();
   if(forms)forms->Reset();
   if(script.source.empty()&&!script.compiled.empty()){error="compiled-only result";return false;}
   auto lower=[](std::string s){for(auto& c:s)c=char(std::tolower((unsigned char)c));return s;};
@@ -158,6 +166,11 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     else if(op=="showspecialbookmenu"||op=="ssbmp"||op=="setspecialpoints"){
       cmd.type=CommandType::SpecialBook;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<7||cmd.value>70||std::floor(cmd.value)!=cmd.value){error="invalid SPECIAL point total";return false;}
+    }else if(op=="addspecialpoints"||op=="addtagskills"){
+      cmd.type=op=="addspecialpoints"?CommandType::SpecialBook:CommandType::TagSkills;
+      cmd.index=2; // Add to existing choices.
+      if(!(in>>a)||!number(a,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<1||
+         cmd.value>(op=="addspecialpoints"?63:4)){error="invalid additional skill or SPECIAL points";return false;}
     }else if(op=="setplayertagskill"){
       cmd.type=CommandType::PlayerTagSkill;
       if(!(in>>std::quoted(a)>>b)||!number(b,cmd.value)||cmd.value<0||cmd.value>3||std::floor(cmd.value)!=cmd.value){error="invalid tag skill slot";return false;}
@@ -265,7 +278,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       const auto av=fo3av::ID(a);
       if(fo3av::AIMax(av)>=0){
         cmd.type=CommandType::SetActorAIValue;cmd.index=av;
-        if(!cmd.form||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>fo3av::AIMax(av)){
+        if(!number(b,cmd.value))cmd.expression=b;
+        if(!cmd.form||std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>fo3av::AIMax(av)){
           error="invalid AI actor value";return false;}
       }else{
       if(a.size()!=10||a.substr(0,8)!="variable"||a[8]<'0'||a[8]>'1'||a[9]<'0'||a[9]>'9'||!number(b,cmd.value)){error="unsupported actor value";return false;}
@@ -314,7 +328,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value<0||cmd.value>255||std::floor(cmd.value)!=cmd.value)){error="invalid SetOpenState";return false;}
       cmd.type=CommandType::DoorState;
-    } else if(op=="showmessage") {
+    } else if(op=="showmessage"||op=="player.showmessage") {
       cmd.type=CommandType::ShowMessage;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid showmessage form";return false;}
       std::getline(in,cmd.expression);
@@ -359,7 +373,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!(in>>a>>b)||!(cmd.form=form(a))||!(cmd.index=form(b))){error="invalid SetCellFullName";return false;}
     } else if(op=="rewardxp"||op=="player.rewardxp"||op=="addachievement") {
       cmd.type=op!="addachievement"?CommandType::RewardXP:CommandType::AddAchievement;
-      if(!(in>>a)||!number(a,cmd.value)||cmd.value<0||double(cmd.value)>2147483647.0||std::floor(cmd.value)!=cmd.value){error="invalid XP/achievement integer";return false;}
+      if(!(in>>a)){error="missing XP/achievement integer";return false;}
+      if(!number(a,cmd.value)&&cmd.type==CommandType::RewardXP)cmd.expression=a;
+      else if(!number(a,cmd.value)||cmd.value<0||double(cmd.value)>2147483647.0||std::floor(cmd.value)!=cmd.value){error="invalid XP/achievement integer";return false;}
     } else if(op=="disable"||op=="enable"||
         (op.size()>8&&op.compare(op.size()-8,8,".disable")==0)||
         (op.size()>7&&op.compare(op.size()-7,7,".enable")==0)) {
@@ -371,9 +387,13 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(in>>a){float fade=0;if(!number(a,fade)||(fade!=0&&fade!=1)){error="invalid Enable/Disable fade flag";return false;}}
       else in.clear();
       // Only the resident workflow may publish world changes.
-    } else if(op=="rewardkarma") {
+    } else if(op=="player.addperk"||(owner==fo3player::PlayerRef&&op=="addperk")){
+      cmd.type=CommandType::AddPerk;
+      if(!(in>>a)||!(cmd.form=form(a))||!d.perks.count(cmd.form)){error="invalid perk";return false;}
+    } else if(op=="rewardkarma"||op=="player.rewardkarma") {
       cmd.type=CommandType::RewardKarma;
-      if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}
+      if(!(in>>a)){error="missing RewardKarma amount";return false;}
+      if(!number(a,cmd.value))cmd.expression=a;
     } else if(op=="settalkingactivatoractor"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="settalkingactivatoractor")) {
       cmd.type=CommandType::TalkingActivator;const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved talking activator";return false;}
@@ -507,9 +527,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       // its effects. Retain an explicit failing command: entering that branch
       // still rejects the complete transaction, including preceding effects.
       // Binding/evidence limits and malformed control flow are never deferred.
-      if(!conditionalDepth||control||(forms&&forms->exhausted)||
-         error.compare(0,12,"unsupported ")!=0)return false;
-      cmd={};cmd.type=CommandType::Unavailable;cmd.expression=error;error.clear();
+      if(control||(forms&&forms->exhausted))return false;
+      if(!decodedNative&&(!conditionalDepth||error.compare(0,12,"unsupported ")!=0))return false;
+      cmd={};cmd.type=CommandType::Unavailable;cmd.expression=decodedNative?line+" ("+error+")":error;error.clear();
     }
     if(forms&&forms->exhausted){error="script binding byte limit exceeded";return false;}
     if(op=="if")++conditionalDepth;

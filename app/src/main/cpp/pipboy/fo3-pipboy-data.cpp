@@ -94,7 +94,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   return "@voice:" + v->second + ":" + tail;
 }
 bool Relevant(const std::string &t) {
-  return t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+  return t == "EXPL" || t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "SPEL" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "HAIR" || t == "EYES" || t == "HDPT" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "CREA" || t == "PACK";
 }

@@ -449,6 +449,18 @@ static void ResultBytecodeBranches(){
   }
   auto malformed=body;malformed.compiled.back()=1;
   assert(!player.ExecuteDialogueResult(malformed,error)&&player.GlobalValue(400,value)&&value==0);
+  // The postfix stack computes (2+3)*4 even with source removed.
+  auto arithmetic=body;
+  arithmetic.compiled={0x15,0,15,0,'G',2,0,10,0,' ','2',' ','3',' ','+',' ','4',' ','*'};
+  assert(player.ExecuteDialogueResult(arithmetic,error)&&player.GlobalValue(400,value)&&value==20);
+  arithmetic.compiled.back()='?';
+  assert(!player.ExecuteDialogueResult(arithmetic,error)&&player.GlobalValue(400,value)&&value==20);
+  // The bytes identify SetGhost even though the world handler is missing.
+  // Entering it rolls back the preceding global write.
+  auto unavailable=body;unavailable.compiled.clear();
+  unavailable.compiled={0x15,0,7,0,'G',2,0,2,0,' ','9',0x1c,0,2,0,0xec,0x10,7,0,1,0,'n',1,0,0,0};
+  assert(!player.ExecuteDialogueResult(unavailable,error)&&error.find("setghost")!=std::string::npos);
+  assert(player.GlobalValue(400,value)&&value==20);
   // One skipped logical line includes both the receiver prefix and opcode.
   bytes.clear();gate(0x16,'0');
   bytes.insert(bytes.end(),{0x1c,0,2,0,0x22,0x10,2,0,0,0,0x19,0,0,0});
@@ -457,10 +469,28 @@ static void ResultBytecodeBranches(){
   assert(commands.size()==3&&commands[1].type==fo3dialogue::CommandType::Disable&&commands[1].form==400);
   assert(player.ExecuteDialogueResult(body,error));
 }
+static void AdditionalQuestPoints(){
+  auto catalog=Catalog();catalog.initial.special.fill(4);
+  fo3player::Player player(catalog);std::string error;
+  fo3pipdata::ResultScript fragment;
+  fragment.compiled={0x19,0x12,7,0,1,0,'n',1,0,0,0};
+  assert(player.ExecuteDialogueResult(fragment,error,20));
+  assert(player.SpecialBookRemaining()==1&&!player.AdjustSpecialBook(0,-1));
+  auto path="/tmp/fq-fragment-points-"+std::to_string(getpid());
+  assert(player.Save(path,error));
+  fo3player::Player saved(catalog);assert(saved.Restore(path,error));
+  assert(!saved.AdjustSpecialBook(0,-1)&&saved.AdjustSpecialBook(1,1)&&saved.ConfirmSpecialBook());
+  assert(saved.Snapshot().special[1]==5&&saved.SetPlayerTagSkill(32,0));
+  fragment.compiled[0]=0x1b;
+  assert(saved.ExecuteDialogueResult(fragment,error,20)&&saved.TagSkillsRemaining()==1);
+  assert(saved.Save(path,error)&&player.Restore(path,error));unlink(path.c_str());
+  assert(!player.ToggleTagSkill(0)&&player.ToggleTagSkill(1)&&player.ConfirmTagSkills());
+  assert(player.IsPlayerTagSkill(32)&&player.IsPlayerTagSkill(33));
+}
 static void CompareOriginalResultPrograms(const fo3pipdata::Definitions& defs){
   unsigned decoded=0,total=0;
   auto normalized=[](std::string expression){
-    // Supported expressions are a single literal or a single comparison.
+    // Ignore source layout here. Grouping is exercised by the execution test.
     expression.erase(std::remove_if(expression.begin(),expression.end(),[](unsigned char c){
       return std::isspace(c)||c=='('||c==')';
     }),expression.end());return expression;
@@ -468,18 +498,32 @@ static void CompareOriginalResultPrograms(const fo3pipdata::Definitions& defs){
   for(const auto& quest:defs.quests)for(const auto& stage:quest.second.stages)for(const auto& item:stage.second.items){
     if(item.result.compiled.empty())continue;
     ++total;
+    std::string nativeText;
+    assert(fo3script::StageDecoder(defs,item.result,quest.first).decode(nativeText));
     std::vector<fo3dialogue::Command> bytes,source;
-    if(!fo3script::DecodeResult(defs,item.result,bytes,nullptr,quest.first))continue;
+    auto compiledOnly=item.result;compiledOnly.source.clear();
+    std::string diagnostic;
+    assert(fo3dialogue::CompileResult(defs,compiledOnly,bytes,diagnostic,quest.first,quest.second.script));
+    if(std::any_of(bytes.begin(),bytes.end(),[](const auto& c){return c.type==fo3dialogue::CommandType::Unavailable;}))continue;
     ++decoded;
     auto text=item.result;text.compiled.clear();std::string error;
+    // Three retail stages retain an argument in SCTX for the parameterless
+    // RemoveScriptPackage opcode. Assert exactly what the compiler discarded.
+    const std::string spelling="SammyRef.RemoveScriptPackage MQ07FetchSquirrel";
+    if(auto at=text.source.find(spelling);at!=std::string::npos){
+      text.source.replace(at,spelling.size(),"SammyRef.RemoveScriptPackage");
+      const auto sammy=defs.formNames.at("sammyref");
+      assert(std::any_of(bytes.begin(),bytes.end(),[&](const auto& c){return c.type==fo3dialogue::CommandType::ScriptPackage&&c.form==sammy&&!c.index&&!c.value;}));
+    }
     assert(fo3dialogue::CompileResult(defs,text,source,error,quest.first,quest.second.script));
     assert(source.size()==bytes.size());
     for(size_t i=0;i<bytes.size();++i){
       const auto& a=bytes[i];const auto& b=source[i];
-      assert(a.type==b.type&&a.form==b.form&&a.index==b.index&&a.variable==b.variable&&a.value==b.value);
+      assert(a.type==b.type&&a.form==b.form&&a.index==b.index&&a.variable==b.variable&&a.value==b.value&&a.offset==b.offset&&a.noTargetLook==b.noTargetLook);
       assert(normalized(a.expression)==normalized(b.expression));
     }
   }
+  assert(total==825&&decoded>=803);
   std::cout<<decoded<<" / "<<total<<" original quest result programs matched source commands and operands\n";
 }
 // Replay original MQ01 result bytes with SCTX removed. The other quest's
@@ -739,6 +783,7 @@ static void CompiledProgramsRemainLive() {
 }
 int main(int argc,char** argv){
   ResultBytecodeBranches();
+  AdditionalQuestPoints();
   CompiledProgramsRemainLive();
   Parsing();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);

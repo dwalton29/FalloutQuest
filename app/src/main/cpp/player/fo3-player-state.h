@@ -215,6 +215,7 @@ struct State {
   std::array<uint8_t,14> tagBonuses{}; // Applied grant, retained across capped/replaced tags.
   uint32_t tagMenuOwner=0,tagMenuTotal=0;
   uint16_t tagDraft=0;
+  bool additionalSpecial=false,additionalTags=false;
   uint64_t scriptRandom=0; // Zero until the first committed scripted draw.
   uint32_t noActivationSound=0;
   PlayerMove playerMove;

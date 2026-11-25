@@ -1344,7 +1344,7 @@ bool Player::OpenSpecialBook(uint32_t owner,uint32_t total){
 bool Player::AdjustSpecialBook(unsigned attribute,int delta){
   if(!state_.specialMenuOwner||attribute>=7||(delta!=1&&delta!=-1))return false;
   const int value=state_.specialDraft[attribute]+delta;
-  if(value<1||value>10||(delta>0&&SpecialBookRemaining()<=0))return false;
+  if(value<1||value>10||(state_.additionalSpecial&&value<state_.special[attribute])||(delta>0&&SpecialBookRemaining()<=0))return false;
   state_.specialDraft[attribute]=uint8_t(value);++revision_;return true;
 }
 std::array<uint8_t,14> Player::SkillsForSpecial(const std::array<uint8_t,7>& special) const {
@@ -1365,7 +1365,7 @@ std::array<uint8_t,14> Player::SkillsForSpecial(const std::array<uint8_t,7>& spe
 bool Player::ConfirmSpecialBook(){
   if(!state_.specialMenuOwner||SpecialBookRemaining()!=0)return false;
   if(!SetPlayerAttributes(state_.specialDraft,SkillsForSpecial(state_.specialDraft)))return false;
-  state_.specialMenuOwner=state_.specialMenuTotal=0;state_.specialDraft={};++revision_;return true;
+  state_.additionalSpecial=false;state_.specialMenuOwner=state_.specialMenuTotal=0;state_.specialDraft={};++revision_;return true;
 }
 #include "fo3-tag-skills.inc"
 bool Player::SetNoActivationSound(uint32_t sound){
@@ -1866,7 +1866,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
        (state_.specialMenuOwner&&(state_.appearanceMenuOwner||state_.specialMenuTotal<7||state_.specialMenuTotal>70||used>state_.specialMenuTotal||std::any_of(state_.specialDraft.begin(),state_.specialDraft.end(),[](auto v){return v<1||v>10;})))||
        (!state_.specialMenuOwner&&(used||state_.specialMenuTotal))){error="Invalid character menu state";return false;}
     Put32(payload,0x31495543); // CUI1
-    Put32(payload,state_.appearanceMenuOwner);Put32(payload,state_.specialMenuOwner);Put32(payload,state_.specialMenuTotal);
+    Put32(payload,state_.appearanceMenuOwner);Put32(payload,state_.specialMenuOwner);Put32(payload,state_.specialMenuTotal|(state_.additionalSpecial?0x80000000u:0u));
     for(auto value:state_.specialDraft)Put32(payload,value);
   }
   if(hasLife){
@@ -1901,7 +1901,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,0x31534754); // TGS1
     payload.insert(payload.end(),state_.taggedSkills.begin(),state_.taggedSkills.end());
     payload.insert(payload.end(),state_.tagBonuses.begin(),state_.tagBonuses.end());
-    Put32(payload,state_.tagMenuOwner);Put32(payload,state_.tagMenuTotal);Put32(payload,state_.tagDraft);
+    Put32(payload,state_.tagMenuOwner);Put32(payload,state_.tagMenuTotal|(state_.additionalTags?0x80000000u:0u));Put32(payload,state_.tagDraft);
     Put32(payload,0x31474e52);Put64(payload,state_.scriptRandom); // RNG1
     if(scriptPrompts_.size()>16||scriptButtons_.size()>10000){error="Too many script prompts/buttons";return false;}
     Put32(payload,0x31504d53);Put32(payload,uint32_t(scriptPrompts_.size())); // SMP1
@@ -2531,8 +2531,13 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=30){
         if((version>=31?payload.size()-at<44:payload.size()-at!=44)||fo3esm::ReadU32(p+at)!=0x31495543)return fail("Missing character menu state");
         next.appearanceMenuOwner=fo3esm::ReadU32(p+at+4);next.specialMenuOwner=fo3esm::ReadU32(p+at+8);next.specialMenuTotal=fo3esm::ReadU32(p+at+12);at+=16;
+        next.additionalSpecial=(next.specialMenuTotal>>31)!=0;next.specialMenuTotal&=0x7fffffffu;
+        if(next.additionalSpecial&&!next.specialMenuOwner)return fail("Orphan additional SPECIAL points");
         unsigned used=0;for(auto& value:next.specialDraft){const auto raw=fo3esm::ReadU32(p+at);at+=4;if(raw>10)return fail("Invalid SPECIAL draft value");value=uint8_t(raw);used+=value;}
         auto validOwner=[&](uint32_t owner){return !owner||catalog_->pipboy.quests.count(owner)||catalog_->references.count(owner);};
+        if(next.additionalSpecial){
+          for(size_t i=0;i<next.special.size();++i)if(next.specialDraft[i]<next.special[i])return fail("Invalid additional SPECIAL draft");
+        }
         if(!validOwner(next.appearanceMenuOwner)||!validOwner(next.specialMenuOwner)||next.nameMenuOwner||
            (next.specialMenuOwner&&(next.appearanceMenuOwner||next.specialMenuTotal<7||next.specialMenuTotal>70||used>next.specialMenuTotal||std::any_of(next.specialDraft.begin(),next.specialDraft.end(),[](auto v){return v<1;})))||
            (!next.specialMenuOwner&&(used||next.specialMenuTotal)))return fail("Invalid character menu state");
@@ -2574,6 +2579,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         at+=4;
         std::copy_n(p+at,4,next.taggedSkills.begin());at+=4;std::copy_n(p+at,14,next.tagBonuses.begin());at+=14;
         next.tagMenuOwner=fo3esm::ReadU32(p+at);next.tagMenuTotal=fo3esm::ReadU32(p+at+4);const auto draft=fo3esm::ReadU32(p+at+8);at+=12;next.tagDraft=uint16_t(draft);
+        next.additionalTags=(next.tagMenuTotal>>31)!=0;next.tagMenuTotal&=0x7fffffffu;
+        if(next.additionalTags&&(!next.tagMenuOwner||(fo3tags::Mask(next.taggedSkills)&~next.tagDraft)))return fail("Invalid additional tag draft");
         if(draft>65535||!fo3tags::Valid(next)||(next.tagMenuOwner&&((!catalog_->pipboy.quests.count(next.tagMenuOwner)&&!catalog_->references.count(next.tagMenuOwner))||next.movie.owner||next.nameMenuOwner||next.specialMenuOwner||next.appearanceMenuOwner)))return fail("Invalid saved tag skills");
         if(fo3esm::ReadU32(p+at)!=0x31474e52)return fail("Missing script random state");
         next.scriptRandom=U64(p+at+4);at+=12;

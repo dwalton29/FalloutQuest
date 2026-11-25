@@ -15,7 +15,7 @@ bool Player::OpenTagSkills(uint32_t owner,uint32_t total,bool showExisting){
 }
 int Player::TagSkillsRemaining()const{return int(state_.tagMenuTotal)-int(fo3tags::Count(state_.tagDraft));}
 bool Player::ToggleTagSkill(unsigned skill){
-  if(!state_.tagMenuOwner||!fo3tags::Skill(skill))return false;
+  if(!state_.tagMenuOwner||!fo3tags::Skill(skill)||(state_.additionalTags&&IsPlayerTagSkill(32+skill)))return false;
   const auto bit=uint16_t(1u<<skill);if(!(state_.tagDraft&bit)&&TagSkillsRemaining()<=0)return false;
   state_.tagDraft^=bit;++revision_;return true;
 }
@@ -25,5 +25,5 @@ bool Player::ConfirmTagSkills(){
   std::array<uint8_t,4> slots{{255,255,255,255}};unsigned n=0;
   for(unsigned i=0;i<14;++i)if(state_.tagDraft&(1u<<i))slots[n++]=uint8_t(i);
   fo3tags::Apply(state_,slots,unsigned(std::lround(bonus)));
-  state_.tagMenuOwner=state_.tagMenuTotal=0;state_.tagDraft=0;++revision_;return true;
+  state_.additionalTags=false;state_.tagMenuOwner=state_.tagMenuTotal=0;state_.tagDraft=0;++revision_;return true;
 }
