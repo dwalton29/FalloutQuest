@@ -43,6 +43,10 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
       (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtright.kf";
   paths[size_t(fo3npc::Animation::StepBack)]=root+"locomotion\\"+
       (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtbackward.kf";
+  if(!actor.source.creature){
+    paths[size_t(fo3npc::Animation::CrouchIdle)]=root+"sneakmtidle.kf";
+    paths[size_t(fo3npc::Animation::CrouchWalk)]=root+"sneakmtforward.kf";
+  }
   if(actor.source.creature){
     paths[3].clear(); // Do not bind humanoid conversation IDLEs to a creature.
     paths[1]=Fo3ActorClipPath(actor.source.skeletonModel,"mtturnleft",true);
@@ -59,6 +63,13 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
     if(!ready&&actor.source.creature&&i==size_t(fo3npc::Animation::Walk)){
       paths[i]=Fo3ActorClipPath(actor.source.skeletonModel,"mtforward",true);
       ready=LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
+    }
+    if(!ready&&!actor.source.creature&&(i==size_t(fo3npc::Animation::Run)||i==size_t(fo3npc::Animation::CrouchIdle)||i==size_t(fo3npc::Animation::CrouchWalk))){
+      const auto name=paths[i].substr(paths[i].find_last_of("\\/")+1);
+      for(const auto& prefix:{root+"locomotion\\",root,root+"locomotion\\"+(actor.source.female?"female\\":"male\\")}){
+        if(prefix+name==paths[i])continue;
+        if(LoadFalloutMeshFile(prefix+name,bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i])){paths[i]=prefix+name;ready=true;break;}
+      }
     }
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
   }
@@ -80,6 +91,14 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
   if(actor.source.creature&&actor.chestBone<0){
     actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine1");
     if(actor.chestBone<0)actor.chestBone=actor.headBone;
+  }
+  const auto& crouch=actor.animations[size_t(fo3npc::Animation::CrouchIdle)];
+  if(actor.headBone>=0&&!crouch.tracks.empty()){
+    fo3anim::Pose pose;fo3anim::BindClip(actor.skeleton,crouch,pose);
+    if(fo3anim::Sample(actor.skeleton,crouch,0,pose)){
+      const float height=pose.global[actor.headBone][14]*actor.source.scale/FO3_UNITS_PER_METRE;
+      if(std::isfinite(height)&&height>0)actor.runtime.crouchHeadHeight=height;
+    }
   }
   actor.blendFrom.resize(actor.skeleton.bones.size());
 }
@@ -152,7 +171,7 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     Q230CombatWeapon ready;ready.definition=d;std::vector<uint8_t> bytes;
     // WEAP DNAM byte 41 is the authored animation-group enum (xEdit FO3).
     std::string attack;
-    switch(d.attackAnimation){case 26:attack="AttackLeft";break;case 32:attack="AttackRight";break;case 38:attack="Attack3";break;case 44:attack="Attack4";break;case 50:attack="Attack5";break;case 56:attack="Attack6";break;case 62:attack="Attack7";break;case 68:attack="Attack8";break;case 74:attack="AttackLoop";break;case 80:attack="AttackSpin";break;case 86:attack="AttackSpin2";break;case 255:if(melee)attack="AttackRight_A";break;}
+    switch(d.attackAnimation){case 26:attack="AttackLeft";break;case 32:attack="AttackRight";break;case 38:attack="Attack3";break;case 44:attack="Attack4";break;case 50:attack="Attack5";break;case 56:attack="Attack6";break;case 62:attack="Attack7";break;case 68:attack="Attack8";break;case 74:attack="AttackLoop";break;case 80:attack="AttackSpin";break;case 86:attack="AttackSpin2";break;case 255:attack=melee?"AttackRight_A":"AttackRight";break;}
     if(attack.empty())continue; // Undecoded engine default/group, never fake it.
     std::string attackPath=attack;for(auto& ch:attackPath)ch=char(std::tolower((unsigned char)ch));
     const std::array<std::string,4> names{group+"aim.kf",group+attackPath+".kf",
@@ -173,8 +192,8 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     if(fo3anim::FindBone(actor.skeleton,"Weapon")<0)continue;
     Fo3WorldPlacement placement;placement.modelPath=item->second.model;placement.baseFormId=form;
     placement.baseRecordType="WEAP";placement.scale=1;
-    std::vector<CpuObject> parts;if(!BuildCpuObjects(placement,parts))continue;
-    for(auto& part:parts)actor.parts.push_back(std::move(part));
+    std::vector<CpuObject> parts;
+    if(BuildCpuObjects(placement,parts))for(auto& part:parts)actor.parts.push_back(std::move(part));
     for(size_t i=0;i<2;++i){
       const auto path=root+group+(i==0?"aimup.kf":"aimdown.kf");
       auto& aim=ready.aimVariants[i];
@@ -701,6 +720,12 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       actor.runtime.equippedWeapon&&actor.runtime.animation!=fo3npc::Animation::Hit;
   if(combatLayer&&(selected==int(fo3npc::Animation::Attack)||selected==int(fo3npc::Animation::Reload)))
     selected=int(fo3npc::Animation::Aim);
+  const bool crouch=actor.runtime.activity==fo3npc::Activity::Package?actor.runtime.packageSneak:
+    combatLayer&&actor.runtime.combatMovement==fo3npc::CombatAction::Cover&&actor.runtime.speed<.01f;
+  if(crouch&&(selected==int(fo3npc::Animation::Idle)||selected==int(fo3npc::Animation::Aim)||selected==int(fo3npc::Animation::Walk))){
+    const auto stance=selected==int(fo3npc::Animation::Walk)?fo3npc::Animation::CrouchWalk:fo3npc::Animation::CrouchIdle;
+    if(!actor.animations[size_t(stance)].tracks.empty())selected=int(stance);
+  }
   const bool locomotion=fo3npc::Locomotion(fo3npc::Animation(selected));
   if(selected!=actor.activeAnimation||(!locomotion&&!combatLayer&&actor.animationSerial!=actor.runtime.actionSerial)) {
     actor.animationSerial=actor.runtime.actionSerial;

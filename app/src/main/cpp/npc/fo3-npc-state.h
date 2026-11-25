@@ -17,7 +17,7 @@ struct DialoguePolicy {
   static constexpr const char* ConversationIdle="LooseListenToPlayerRelaxedB";
 };
 enum class Activity { Idle, Package, Dialogue, Combat, Dying, Dead, Unconscious };
-enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk, Speaking, Aim, Attack, Reload, Hit, Death, Run, StepLeft, StepRight, StepBack, AimUp, AimDown, Count };
+enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk, Speaking, Aim, Attack, Reload, Hit, Death, Run, StepLeft, StepRight, StepBack, AimUp, AimDown, CrouchIdle, CrouchWalk, Count };
 enum class CombatAction { Acquire, Pursue, Aim, Attack, Reload, Flee, Search, Reposition, Cover, Wait };
 enum class Procedure { None, Executing, Waiting, Completed, Blocked, InvalidTarget, RouteFailed, Unsupported, Interrupted };
 // Standalone steering policy, not recovered Bethesda engine constants.
@@ -56,6 +56,10 @@ struct RuntimeState {
   Activity activity=Activity::Idle,suspended=Activity::Idle;
   Animation animation=Animation::Idle;
   std::array<float,3> position{},destination{};
+  float crouchHeadHeight=0;
+  bool packageSneak=false;
+  int passingSide=0;
+  double passingUntil=0;
   float aimPitch=0;
   float yaw=0,authoredYaw=0,returnYaw=0,speed=0,headYaw=0,suspendedSpeed=0;
   double authoredMotionUntil=0;

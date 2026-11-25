@@ -66,7 +66,7 @@ inline float CombatSetting(const fo3player::Catalog& c,const char* key,float fal
 // comparing remaining health to it is an explicit approximation, not the
 // recovered Bethesda relative combat-strength algorithm.
 inline bool ShouldFlee(const AiData& ai,const fo3player::Catalog& c,
-                       float health,float maximum,bool armed){
+                       float health,float maximum,bool armed,float strengthRatio=1.f){
   if(!ai.valid||health<=0)return false;
   if(ai.confidence==0)return true;
   if(ai.confidence==4)return false;
@@ -74,7 +74,7 @@ inline bool ShouldFlee(const AiData& ai,const fo3player::Catalog& c,
   const char* key=ai.confidence==1?"fConfidenceCautious":
                   ai.confidence==2?"fConfidenceAverage":"fConfidenceBrave";
   const float threshold=CombatSetting(c,key);
-  return threshold>0&&maximum>0&&health/maximum<=threshold;
+  return threshold>0&&maximum>0&&std::min(health/maximum,strengthRatio)<=threshold;
 }
 inline float CombatChoice(uint32_t reference,uint32_t serial,float minimum,float maximum){
   const uint32_t hash=reference*2654435761u^serial*2246822519u;

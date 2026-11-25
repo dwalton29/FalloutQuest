@@ -63,8 +63,9 @@ struct Observer {
   }
   if(phase==Phase::Combat)phase=Phase::Lost;
   if(now>=expires)phase=Phase::Normal;
-  if(sightScore>g("fSneakNoticedMin"))Notice(settings,now,sight);
-  else if(heard&&now<heard->time+g("fDetectionEventExpireTime"))Notice(settings,heard->time,heard->position);
+  if(heard&&now<heard->time+g("fDetectionEventExpireTime")){
+   Notice(settings,std::max(evidenceAt,heard->time),heard->position);
+  }else if(sightScore>g("fSneakNoticedMin"))Notice(settings,now,sight);
  }
  Indicator Hud()const{return hostile?(detected?Indicator::Danger:phase==Phase::Normal?Indicator::Hidden:Indicator::Caution):(detected?Indicator::Detected:Indicator::Hidden);}
 };

@@ -1101,7 +1101,8 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   const bool tactical=actor.runtime.activity==fo3npc::Activity::Combat&&actor.runtime.equippedWeapon&&
     (actor.runtime.action==fo3npc::CombatAction::Reposition||actor.runtime.action==fo3npc::CombatAction::Cover||
      actor.runtime.combatMovement==fo3npc::CombatAction::Reposition||actor.runtime.combatMovement==fo3npc::CombatAction::Cover);
-  const float desired=tactical?std::atan2(-(actor.runtime.lastThreat[0]-actor.runtime.position[0]),
+  const bool faceThreat=tactical&&actor.runtime.action!=fo3npc::CombatAction::Cover;
+  const float desired=faceThreat?std::atan2(-(actor.runtime.lastThreat[0]-actor.runtime.position[0]),
                                         -(actor.runtime.lastThreat[2]-actor.runtime.position[2])):movementYaw;
   const float error=fo3npc::Angle(desired-actor.runtime.yaw);
   actor.runtime.yaw=fo3npc::Angle(actor.runtime.yaw+
@@ -1115,9 +1116,13 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   }
   const auto& catalog=gPlayerSession->player.Definitions();
   const float walk=catalog.npcBaseSpeed>0?catalog.npcBaseSpeed/FO3_UNITS_PER_METRE:1.05f;
-  const bool fast=actor.runtime.activity==fo3npc::Activity::Combat&&
-    (actor.runtime.action==fo3npc::CombatAction::Flee||actor.runtime.action==fo3npc::CombatAction::Pursue);
-  const float maximum=walk*(fast?catalog.npcRunMultiplier:1.f);
+  const auto pack=catalog.pipboy.packages.find(actor.aiPackage);
+  const bool packageMove=actor.runtime.activity==fo3npc::Activity::Package&&pack!=catalog.pipboy.packages.end();
+  const bool sneak=packageMove&&(pack->second.flags&0x20000u);
+  const bool fast=(packageMove&&!sneak&&((pack->second.flags&0x2000u)||pack->second.type==10))||
+    (actor.runtime.activity==fo3npc::Activity::Combat&&(actor.runtime.action==fo3npc::CombatAction::Flee||
+      actor.runtime.action==fo3npc::CombatAction::Pursue||actor.runtime.action==fo3npc::CombatAction::Cover));
+  const float maximum=walk*(fast?catalog.npcRunMultiplier:sneak?fo3sneak::Setting(catalog.sneakSettings,"fMoveSneakMult"):1.f);
   float desiredSpeed=maximum*std::max(.25f,std::cos(std::min(std::fabs(error),1.3f)));
   if(goal+1==actor.aiPathGame.size())
     desiredSpeed=std::min(desiredSpeed,std::sqrt(2*fo3npc::MovementPolicy::Braking*distance));
@@ -1185,7 +1190,7 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
     // Try forward diagonals and then lateral steps on this exact NAVM
     // triangle. Reject any candidate that still intersects world or actor
     // collision, including the inside corner of a booth.
-    const int preferred=(actor.source.refFormId&1u)?1:-1;
+    const int preferred=now<actor.runtime.passingUntil?actor.runtime.passingSide:((actor.source.refFormId&1u)?1:-1);
     for(float forward:{.70710678f,0.f}){
       const float sideways=forward>0?forward:1.f;
       for(int side:{preferred,-preferred}){
@@ -1195,8 +1200,19 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
         if(!actor.navigationGraph||actor.aiPathIndex>=actor.aiPathSurfaces.size())continue;
         const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
         const auto& mesh=*actor.navigationGraph->meshes[surface.first];
-        const auto projected=Q240GroundPoint(mesh,surface.second,candidate);
-        if(Q240PlanarDistance(candidate,projected)>=.01f)continue;
+        auto projected=Q240GroundPoint(mesh,surface.second,candidate);
+        bool crossesPortal=false;
+        if(Q240PlanarDistance(candidate,projected)>=.01f){
+          // Only cross into the next connected route triangle. Stacked or
+          // disconnected nearby floors must never receive a passing step.
+          if(actor.aiPathIndex+1>=actor.aiPathSurfaces.size())continue;
+          const auto next=actor.aiPathSurfaces[actor.aiPathIndex+1];
+          std::array<float,3> portal{};
+          if(!Q240Portal(*actor.navigationGraph,{surface.first,surface.second},{next.first,next.second},portal))continue;
+          projected=Q240GroundPoint(*actor.navigationGraph->meshes[next.first],next.second,candidate);
+          if(Q240PlanarDistance(candidate,projected)>=.01f||std::fabs(projected[2]-current[2])>16.f)continue;
+          crossesPortal=true;
+        }
         candidate[2]=projected[2];
 #ifdef FO3_NPC_CROWD_STEP
         if(!FO3_NPC_CROWD_STEP(actor,candidate))continue;
@@ -1206,7 +1222,9 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
         const float cx=scene[0]-actor.runtime.position[0],cz=scene[2]-actor.runtime.position[2];
         if(FO3_NPC_PATH_BLOCKED(actor,cx/step,0,cz/step,step,step))continue;
 #endif
-        nextGame=candidate;lateral=side;break;
+        if(crossesPortal)++actor.aiPathIndex;
+        nextGame=candidate;lateral=side;
+        actor.runtime.passingSide=side;actor.runtime.passingUntil=now+.75;break;
       }
       if(lateral)break;
     }
@@ -1232,7 +1250,7 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   actor.runtime.locomotionTime+=dt*(maximum>0?velocity/maximum:1.f);
   actor.runtime.animation=fast&&!actor.animations[size_t(fo3npc::Animation::Run)].tracks.empty()?
       fo3npc::Animation::Run:fo3npc::Animation::Walk;
-  if(tactical){
+  if(tactical&&!fast){
     const float relative=fo3npc::Angle(movementYaw-actor.runtime.yaw);
     const auto animation=std::fabs(relative)>2.35f?fo3npc::Animation::StepBack:
       std::fabs(relative)>.65f?(relative>0?fo3npc::Animation::StepLeft:fo3npc::Animation::StepRight):fo3npc::Animation::Walk;
@@ -1598,6 +1616,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     state.packageEndIdle=0;state.packageEndIdleUntil=-1;
   }
   const auto* package=Q280EvaluatePackage(actor,now,packageId,anchor,radius);
+  state.packageSneak=package&&(package->flags&0x20000u);
   const auto previousDoor=state.xtelDoor;
   state.xtelDoor=state.evaluatedXtelDoor;state.xtelCell=state.evaluatedXtelCell;
   if(state.xtelDoor&&(previousDoor!=state.xtelDoor||actor.aiPackage!=packageId))

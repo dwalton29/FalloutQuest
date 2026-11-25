@@ -194,6 +194,7 @@ static void StateAndPerception() {
     assert(ShouldFlee(ai,c,1,100,true)==(confidence<4));
     assert(!ShouldFlee(ai,c,0,100,false));
   }
+  ai.confidence=2;assert(ShouldFlee(ai,c,100,100,true,.15f)&&!ShouldFlee(ai,c,100,100,true,.3f));
   ai.confidence=2;assert(!ShouldFlee(ai,c,20,100,true)&&ShouldFlee(ai,c,18,100,true));
   fo3weapon::Definitions::CombatStyle burst;burst.valid=true;burst.fireMin=burst.fireMax=1;burst.pauseMin=burst.pauseMax=2;burst.delayMin=burst.delayMax=1;
   s={};s.BeginCombat(101);

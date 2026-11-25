@@ -10,19 +10,24 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
  auto& observer=actor.playerDetection;if(now<observer.next)return;
  auto& player=gPlayerSession->player;const auto& settings=player.Definitions().sneakSettings;
  const auto* stats=player.ActorStatistics(actor.source.refFormId);if(!stats)return;
- const fo3sneak::Point point{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
+ fo3sneak::Point point{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
  const auto distance=[&](const fo3sneak::Point& source){
    const auto& pos=actor.runtime.position;
    return std::hypot(source[0]-pos[0],source[1]-pos[1],source[2]-pos[2])*FO3_UNITS_PER_METRE;
  };
  const bool exterior=gExteriorWorldspaceQ1890!=0;
  const float limit=fo3sneak::Setting(settings,"fSneakMaxDistance")*(exterior?fo3sneak::Setting(settings,"fSneakExteriorDistanceMult"):1);
- const float playerDistance=distance(point);
- const bool sight=playerDistance<limit&&
-   Q230InSightCone(actor,point,fo3sneak::Setting(settings,"fDetectionViewCone"))&&Q230Sight(actor,0x14,point);
+ const auto visible=[&](const fo3sneak::Point& sample){
+   return distance(sample)<limit&&Q230InSightCone(actor,sample,fo3sneak::Setting(settings,"fDetectionViewCone"))&&Q230Sight(actor,0x14,sample);
+ };
+ bool sight=visible(point);
+ if(!sight&&distance(point)<limit+2*FO3_UNITS_PER_METRE){
+   fo3sneak::Point torso{};uint32_t base=0;
+   if(Q230Target(0x14,torso,base)&&torso!=point&&visible(torso)){point=torso;sight=true;}
+ }
  const float actionTime=fo3sneak::Setting(settings,"fDetectionActionTimer");
  const auto available=[&](const fo3sneak::Noise& noise){
-   return hostile&&noise.strength>0&&noise.time>observer.heardAt&&noise.time>=observer.evidenceAt&&
+   return hostile&&noise.strength>0&&noise.time>observer.heardAt&&noise.time>=observer.seenAt&&
           now<noise.time+actionTime&&distance(noise.position)<limit;
  };
  const bool shot=available(gPlayerDetectionShot),step=available(gPlayerDetectionStep);
@@ -31,7 +36,7 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
    player.SetScriptActorDetectedPlayer(actor.source.refFormId,false);
    return;
  }
- fo3sneak::Evidence e;e.distance=playerDistance;
+ fo3sneak::Evidence e;e.distance=distance(point);
  e.exterior=exterior;e.perception=stats->perception;player.ActorAIValue(actor.source.refFormId,6,e.perception);
  e.skill=player.EffectiveSkill(size_t(fo3player::Skill::Sneak));player.ActorValue(fo3player::PlayerRef,49,e.chameleon);e.sneaking=player.IsSneaking();
  const float walkSpeed=player.Definitions().npcBaseSpeed/FO3_UNITS_PER_METRE;
@@ -60,10 +65,10 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
    const float score=fo3sneak::Value(settings,audio);
    if(score>heardScore){heardScore=score;heard=&noise;}
  };
- if(sightScore<=fo3sneak::Setting(settings,"fSneakNoticedMin")){
+ if(sightScore<=fo3sneak::Setting(settings,"fSneakSeenMin")){
    if(shot)hear(gPlayerDetectionShot,false);
    if(step)hear(gPlayerDetectionStep,true);
  }
- observer.Step(settings,sightScore,hostile,now,point,heard);
+ observer.Step(settings,sightScore,hostile,now,point,heardScore>sightScore?heard:nullptr);
  player.SetScriptActorDetectedPlayer(actor.source.refFormId,observer.detected);
 }

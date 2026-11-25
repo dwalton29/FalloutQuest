@@ -4,7 +4,7 @@
 
 namespace fo3npc {
 inline bool Locomotion(Animation a){
-  return a==Animation::Walk||a==Animation::Run||a==Animation::StepLeft||
+  return a==Animation::Walk||a==Animation::CrouchWalk||a==Animation::Run||a==Animation::StepLeft||
          a==Animation::StepRight||a==Animation::StepBack;
 }
 inline Animation WeaponAnimation(const RuntimeState& s,double now){

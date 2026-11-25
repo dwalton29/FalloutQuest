@@ -12,6 +12,9 @@ bool blocked=false,loading=false,blockSecondSightRay=false;int sightRayCount=0,d
 bool IsFo3LoadingVisible(){return loading;}
 void Q230UpdateActor(Q230ActorVisual&){}
 bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& p){p=actor.runtime.position;p[1]+=bone==actor.headBone?1.7f:1.f;return true;}
+bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi){
+  lo=hi=actor.runtime.position;hi[1]+=1.8f;return true;
+}
 bool HasFo3InteractionOccluder(float,float y,float,float,float dy,float,float length,uint32_t){if(captureCoverRays)coverRayOrigins.push_back(y);if(partialCover)return y+dy*length<.3f;return blocked||(blockSecondSightRay&&++sightRayCount==2);}
 void EndFo3Dialogue(const char*){++dialogueEnds;}
 std::vector<std::string> actionSounds;
@@ -36,7 +39,8 @@ static void Prepare() {
   c.items[10]=w;fo3player::Item ammo;ammo.formId=11;ammo.kind=fo3player::ItemKind::Ammo;c.items[11]=ammo;
   c.actorInventories[43].entries={{10,0,1,1,1,false},{11,0,1,1,1,false}};
   gPlayerSession=std::make_unique<Session>(std::move(c));
-  Q230CombatWeapon weapon;weapon.definition=d;weapon.ready=true;weapon.gpu={0};weapon.clips[1].stop=.3f;weapon.clips[2].stop=.5f;
+  Q230CombatWeapon weapon;weapon.definition=d;weapon.ready=true; // CPU-ready weapon can fire before its render mesh arrives.
+  weapon.clips[1].stop=.3f;weapon.clips[2].stop=.5f;
   actor.combatWeapons[10]=weapon;actor.runtime.yaw=0;actor.runtime.activity=fo3npc::Activity::Package;actor.runtime.package=50;
   actor.runtime.BeginDialogue();gQ230NpcActors={actor};
   gQ210Head=actor.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=1;

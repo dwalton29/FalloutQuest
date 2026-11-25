@@ -424,6 +424,21 @@ static void PackageCallbacks(){
   std::cout<<"Production NAVM package start/arrival/change callbacks and reload replay protection passed\n";
 }
 int main(int argc,char** argv) {
+  auto peakSpeed=[](uint32_t flags){
+    auto actor=Actor(6);auto catalog=gPlayerSession->player.Definitions();
+    auto& package=catalog.pipboy.packages.at(50);package.flags=flags;package.location.radius=0;
+    catalog.npcBaseSpeed=100;catalog.npcRunMultiplier=2;catalog.sneakSettings["fMoveSneakMult"]=.57f;
+    gPlayerSession=std::make_unique<Session>(catalog);
+    actor.animations[size_t(fo3npc::Animation::Run)].tracks.emplace_back();
+    float peak=0;bool ran=false;
+    for(unsigned i=0;i<60;++i){
+      Q240UpdateNpcPackage(actor,i*.05);
+      peak=std::max(peak,actor.runtime.speed);ran|=actor.runtime.animation==fo3npc::Animation::Run;
+    }
+    assert(actor.runtime.packageSneak==bool(flags&0x20000u));
+    assert(ran==bool(flags&0x2000u));return peak;
+  };
+  assert(peakSpeed(0x2000u)>1.5f&&peakSpeed(0x20000u)<.6f&&peakSpeed(0)>.9f);
   DailyPackageRetirement();
   TravelToActorRadius();EndIdleRetirement();
   PackageCallbacks();

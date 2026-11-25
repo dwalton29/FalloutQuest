@@ -20,6 +20,9 @@ int main(int argc,char** argv){
  auto settings=NativeSettings();Evidence e;e.distance=0;e.perception=5;e.light=0;const float normal=Value(settings,e);e.sneaking=true;e.skill=100;assert(std::abs(Value(settings,e)-(normal-50))<.001f);
  e.moving=true;const float moving=Value(settings,e);e.running=true;assert(Value(settings,e)>moving);e.action=100;assert(Value(settings,e)>moving);e.los=true;const auto sound=Value(settings,e);e.light=100;assert(Value(settings,e)>sound);e.distance=1e6f;assert(std::isinf(Value(settings,e)));
  Observer o;o.Step(settings,-100,true,0,{});assert(o.Hud()==Indicator::Hidden);o.Step(settings,-10,true,1,{1,2,3});assert(o.Hud()==Indicator::Caution);o.Step(settings,10,true,2,{2,3,4});assert(o.Hud()==Indicator::Danger);o.Step(settings,-100,true,3,{9,9,9});assert(o.Hud()==Indicator::Caution&&(o.lastKnown==std::array<float,3>{2,3,4}));o.Step(settings,-100,true,20,{});assert(o.Hud()==Indicator::Hidden);o.Step(settings,10,false,21,{});assert(o.Hud()==Indicator::Detected);
+ Observer uncertain;Noise shot{{4,0,1},1,100};
+ uncertain.Step(settings,-10,true,1.1,{0,0,1},&shot);
+ assert(!uncertain.detected&&uncertain.phase==Phase::Alert&&uncertain.lastKnown==shot.position);
  Observer hit;hit.Hit(settings,30,{3,2,1});hit.Step(settings,-100,true,30,{});assert(hit.Hud()==Indicator::Caution&&(hit.lastKnown==std::array<float,3>{3,2,1}));hit.Step(settings,-100,true,50,{});assert(hit.Hud()==Indicator::Hidden);
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);fo3player::Item item;item.formId=100;item.name="Fixture item";c.items[100]=item;c.pipboy.formNames["fixtureitem"]=100;
  fo3player::Player p(c);fo3dialogue::Context context;context.player=&p;context.speaker.reference=0x14;fo3pipdata::Condition cond;cond.function=286;cond.value=1;std::string error;
