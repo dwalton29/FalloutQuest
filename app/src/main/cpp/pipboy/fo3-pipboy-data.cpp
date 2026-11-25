@@ -665,7 +665,7 @@ void Finalize(Definitions &d) {
   // Prepare it once. Radio keeps its existing authored playlist ordering.
   for(auto& topic:d.topics) {
     auto type=d.dialogueTopics.find(topic.first);
-    if(type==d.dialogueTopics.end()||(type->second.type!=0&&type->second.type!=3))continue;
+    if(type==d.dialogueTopics.end()||(type->second.type!=0&&type->second.type!=2&&type->second.type!=3&&type->second.type!=4))continue;
     auto& infos=topic.second;std::unordered_map<uint32_t,size_t> index;
     for(size_t i=0;i<infos.size();++i)index[infos[i].id]=i;
     std::vector<std::vector<size_t>> children(infos.size());std::vector<size_t> indegree(infos.size());

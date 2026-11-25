@@ -183,6 +183,14 @@ static void CoverGeometryTests(){
   assert(!Q230TacticalRoute(actor,threat,0,INFINITY,false,true,1)); // Torso hidden, head exposed.
   partialCover=false;blocked=true;captureCoverRays=true;actor.runtime.nextPath=0;
   assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,true,2));
+  const auto hide=actor.runtime.coverPoint;
+  assert(actor.runtime.hasCoverPoint);
+  actor.runtime.position=Q240ScenePosition(hide);
+  actor.runtime.combatMovement=fo3npc::CombatAction::Reposition;actor.runtime.nextPath=0;
+  blocked=false;
+  assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,false,3)&&actor.runtime.hasFiringPoint);
+  actor.runtime.position=Q240ScenePosition(actor.runtime.firingPoint);actor.runtime.nextPath=0;blocked=true;
+  assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,true,4)&&actor.runtime.coverPoint==hide);
   assert(!coverRayOrigins.empty());for(float y:coverRayOrigins)assert(y==Q240ScenePosition(threat)[1]);
 }
 static void ConcurrentWeaponTests(){
@@ -301,6 +309,29 @@ static void OccludedEvidence(const std::unordered_map<std::string,float>& settin
  gPlayerDetectionShot=gPlayerDetectionStep={};
 }
 
+static void SharedSighting(){
+ Prepare();
+ auto catalog=gPlayerSession->player.Definitions();
+ catalog.pipboy.dialogueActors[43].factions[55]=0;
+ AddNpc(catalog,70,71);
+ catalog.pipboy.dialogueActors[71].aiData[14]=1;
+ gPlayerSession=std::make_unique<Session>(std::move(catalog));
+ auto& scout=gQ230NpcActors[0];auto& ally=gQ230NpcActors[1];
+ ally.runtime.position[2]=scout.runtime.position[2]+1;
+ scout.runtime.EndDialogue();detectionLight=100;
+ Q230SimulateActor(scout,1);
+ const auto sight=scout.playerDetection.lastKnown;
+ assert(scout.runtime.combatTarget==fo3player::PlayerRef&&scout.playerDetection.detected&&ally.playerDetection.phase==fo3sneak::Phase::Alert);
+ blocked=true;gQ210Head[0]+=4;
+ Q230SimulateActor(ally,1.1);
+ assert(ally.runtime.search.investigating&&ally.playerDetection.lastKnown==sight&&
+        !ally.playerDetection.detected&&!ally.runtime.combatTarget);
+ // The investigating ally is checking the original evidence. The scout that
+ // loses sight of the same player should immediately probe a different place.
+ Q230SimulateActor(scout,2);
+ assert(scout.runtime.search.active&&scout.runtime.search.nextDirection>0&&
+        (scout.aiPathGame.empty()||scout.aiPathGame.back()!=ally.runtime.search.origin));
+}
 static void ChosenTargetAndSearch(){
  Prepare();
  auto catalog=gPlayerSession->player.Definitions();
@@ -348,6 +379,7 @@ int main(int argc,char** argv){
  }
  DetectionIntegration();
  OccludedEvidence(settings);
+ SharedSighting();
  ChosenTargetAndSearch();
  std::cout<<"Silent occlusion, sound and hit origins, target selection, local search and reacquisition passed\n";
  return 0;

@@ -24,6 +24,7 @@ bool Fo3SpecialBookFocus();
 void ShutdownFo3Movie();
 namespace fo3worldscript {
 void ResetSpeech();
+void CombatVoice(uint32_t actor,uint32_t target,const char* topic);
 uint32_t SpeechLookTarget(uint32_t actor);
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);

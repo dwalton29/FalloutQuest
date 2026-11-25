@@ -5,7 +5,9 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "npc/fo3-npc-state.h"
 struct Fo3DoorCollisionPose {fo3anim::Matrix transform=fo3anim::Identity();bool enabled=true;std::unordered_map<uint32_t,fo3anim::Matrix> nodeTransforms;};
+#include <chrono>
 #include <stdexcept>
+auto Fo3GameplayNow(){return std::chrono::steady_clock::now();}
 #include <iostream>
 static void Check(bool b,const char* message){if(!b)throw std::runtime_error(message);}
 #define Q6H_LOGW(...) ((void)0)
@@ -40,6 +42,7 @@ bool QueueFo3DoorTransitionQ1700(uint32_t source,uint32_t destination,float x,fl
 bool Q2400ToggleInteriorDoor(uint32_t reference,float,float){localOpen=!localOpen;return gPlayerSession->player.ScriptDoorState(reference,localOpen);}
 bool Q2400DoorOpen(uint32_t){return localOpen;}
 struct ActorVisual {
+  std::unordered_map<uint32_t,fo3anim::Clip> responseClips;double responseStarted=0;
   struct Source{uint32_t refFormId=0,baseFormId=0;}source;
   fo3npc::RuntimeState runtime;uint32_t aiPackage=0,responseIdle=0,responseToken=0,responseInfo=0;uint64_t lastFrame=0;
 };
@@ -51,6 +54,7 @@ namespace fo3audio {void Open(uint32_t){}void Close(uint32_t){}}
 #include "world/interaction/fo3-script-default-activation.inc"
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
 void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
+void Q230PlayScriptIdle(ActorVisual& a,const fo3pipdata::Definitions&,uint32_t idle,double now){a.responseIdle=idle;a.responseStarted=now;}
 void Q230PlayPackageIdle(ActorVisual& a,uint32_t idle,uint32_t){a.responseIdle=idle;}
 void Q230StopScriptCombat(ActorVisual& a,double){a.runtime.EndCombat();a.runtime.pendingAttack=false;}
 fo3dialogue::Session gDialogue;
@@ -88,6 +92,30 @@ bool playerTransitionPending=false;unsigned playerTransitions=0;
 bool HasPendingFo3CellTransitionRequestQ74(){return playerTransitionPending;}
 bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float,double){playerTransitionPending=true;++playerTransitions;return true;}
 #include "scripting/fo3-world-script-runtime.inc"
+static void OriginalCombatVoice(const char* path){
+ fo3player::Catalog c;std::string error;
+ Check(fo3player::LoadCatalog(path,c,error),"original combat voice catalogue");
+ const auto ref=0x0002e919u; // EvergreenMillsRaiderBoss01, original placed reference.
+ gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));
+ auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+ Check(p.RealizeActor(ref),"realize original placed combat actor");
+ const auto& at=p.Definitions().pipboy.targets.at(ref);
+ gCurrentCellFormId=at.cell;gExteriorWorldspaceQ1890=at.world;
+ p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+ ActorVisual actor;actor.source={ref,at.base};actor.runtime.BeginCombat(fo3player::PlayerRef);
+ gQ230NpcActors={actor};++gQ230NpcResidenceRevision;fo3worldscript::ResetSpeech();fo3worldscript::SpeechTick();
+ for(const char* topic:{"normaltocombat","combattolost"}){
+   fo3worldscript::CombatVoice(ref,fo3player::PlayerRef,topic);
+   fo3worldscript::SpeechTick();
+   const auto& lane=fo3worldscript::speechLanes.back();
+   Check(lane.combatVoice&&lane.dialogue.Active()&&!fo3audio::path.empty(),"original combat INFO selected with voice path");
+   Check(fo3worldscript::AllowsPlayerDialogue()&&!fo3worldscript::SpeechLookTarget(ref),"combat bark allows interaction and independent aim");
+   fo3worldscript::PauseForPlayerDialogue();
+   Check(!lane.dialogue.Active()&&!p.ScriptActorTalking(ref),"interrupting a bark releases its actor");
+   fo3worldscript::seconds+=3;
+ }
+ std::cout<<"Original Evergreen Mills raider sighting and lost-target voice paths passed\n";
+}
 static void OriginalIntercom(const char* path){
  fo3player::Catalog c;std::string error;Check(fo3player::LoadCatalog(path,c,error),"original intercom catalogue");
  const auto q=c.pipboy.formNames.at("cg02"),dad=c.pipboy.formNames.at("cg02dadref"),jonas=c.pipboy.formNames.at("cg02jonasref"),intercom=c.pipboy.formNames.at("cg02dinerintercomref"),package=c.pipboy.formNames.at("cg02dadtalktojonasonintercom");
@@ -524,6 +552,6 @@ int main(int argc,char** argv){try{
   for(int i=0;i<10;++i){fo3worldscript::Actions();fo3worldscript::seconds+=.1;}
   Check(fo3worldscript::parentActivations.empty(),"cyclic activation data cannot keep dispatching indefinitely");
  }
- if(argc>1){OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);OriginalHallwayIntervention(argv[1]);OriginalSecretDoor(argv[1]);}
+ if(argc>1){OriginalCombatVoice(argv[1]);OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);OriginalHallwayIntervention(argv[1]);OriginalSecretDoor(argv[1]);}
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

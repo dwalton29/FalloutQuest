@@ -56,7 +56,7 @@ struct SpeechLane {
     std::pair<uint32_t,uint32_t> pendingPackageDone{};
     double began=0,missingVoiceUntil=0;
     bool subtitle=false,noTargetLook=false,noHeadTracking=false;
-    bool paused=false;
+    bool paused=false,combatVoice=false;
     uint32_t pausedQuest=0;
     uint16_t pausedStage=0;
 };
@@ -74,6 +74,19 @@ static fo3dialogue::Panel scriptSubtitle;
 static std::vector<fo3script::Action> speechPending,hitPending;
 struct ScriptVolley {uint32_t source=0,target=0,weapon=0,remaining=0;double next=0;};
 static std::vector<ScriptVolley> volleys;
+// A transition is offered for the next speech tick only. Stale shouts must
+// never play after the player has entered dialogue or left the encounter.
+static fo3script::Action pendingCombatVoice;
+static double nextCombatVoice=0;
+void CombatVoice(uint32_t actor,uint32_t target,const char* editor){
+    if(!gPlayerSession||pendingCombatVoice.reference||seconds<nextCombatVoice)return;
+    const auto& definitions=gPlayerSession->player.Definitions().pipboy;
+    const auto topic=definitions.formNames.find(editor);
+    if(topic==definitions.formNames.end()||!definitions.dialogueTopics.count(topic->second))return;
+    pendingCombatVoice.kind=fo3script::ActionKind::SayTo;
+    pendingCombatVoice.reference=actor;pendingCombatVoice.flags=target;pendingCombatVoice.form=topic->second;
+    pendingCombatVoice.noTargetLook=true;
+}
 static uint32_t speechSerial=0;
 static uint64_t speechGeneration=~uint64_t{0};
 bool OwnsSpeechResultAdmission(bool admitting,uint64_t ticket){
@@ -112,11 +125,11 @@ static void SpeechStop(SpeechLane& lane,unsigned index){
     lane.dialogue.End("scripted speech stopped");
     lane.reference=lane.identity=lane.target=lane.listener=lane.topic=lane.token=0;
     lane.package=lane.packageOwner=0;lane.subtitle=lane.noTargetLook=lane.noHeadTracking=false;
-    lane.paused=false;lane.pausedQuest=lane.pausedStage=0;
+    lane.combatVoice=false;lane.paused=false;lane.pausedQuest=lane.pausedStage=0;
 }
 bool AllowsPlayerDialogue(){
     return std::none_of(speechLanes.begin(),speechLanes.end(),[](const auto& lane){
-        return lane.dialogue.Active()&&(lane.target==fo3player::PlayerRef||lane.dialogue.phase==fo3dialogue::Phase::Results);
+        return lane.dialogue.Active()&&((!lane.combatVoice&&lane.target==fo3player::PlayerRef)||lane.dialogue.phase==fo3dialogue::Phase::Results);
     });
 }
 static uint16_t SpeechQuestStage(const fo3player::Player& player,uint32_t quest){
@@ -129,6 +142,7 @@ void PauseForPlayerDialogue(){
     for(unsigned index=0;index<speechLanes.size();++index){
         auto& lane=speechLanes[index];
         if(lane.paused||lane.dialogue.phase!=fo3dialogue::Phase::Speaking)continue;
+        if(lane.combatVoice){SpeechStop(lane,index);continue;}
         const auto* info=lane.dialogue.Current(player.Definitions().pipboy);
         lane.pausedQuest=info?info->quest:0;
         lane.pausedStage=SpeechQuestStage(player,lane.pausedQuest);
@@ -190,11 +204,12 @@ static void AdvanceSpeech(SpeechLane& lane,unsigned index,fo3player::Player& pla
     }
     auto& speech=lane.dialogue;
     if(!speech.Active())return;
-    if(auto* actor=speech.proxy?nullptr:DialogueActor(lane.reference))
+    if(auto* actor=(speech.proxy||lane.combatVoice)?nullptr:DialogueActor(lane.reference))
         Q230DialogueResponseAnimation(*actor,speech);
     bool disabled=true;
     std::string error;
     if(IsFo3LoadingVisible()||
+       (lane.combatVoice&&(!DialogueActor(lane.reference)||!DialogueActor(lane.reference)->runtime.Alive()))||
        !player.ReferenceDisabled(lane.reference,disabled,error)||disabled||
        (lane.identity!=lane.reference&&(player.TalkingActivatorActor(lane.reference)!=lane.identity||player.ActorHealth(lane.identity)<=0))||
        (lane.listener!=lane.target&&(player.TalkingActivatorActor(lane.target)!=lane.listener||player.ActorHealth(lane.listener)<=0))||
@@ -259,9 +274,10 @@ static void AdvanceSpeech(SpeechLane& lane,unsigned index,fo3player::Player& pla
         return;
     }
     const bool completed=speech.infoCompleted;
+    const bool bark=lane.combatVoice;
     const auto package=lane.package,owner=lane.packageOwner;
     SpeechStop(lane,index);
-    if(!completed)return;
+    if(!completed||bark)return;
     if(package){
         if(!PackageEvent(owner,package,true))lane.pendingPackageDone={owner,package};
     }else Event(actor,"SayToDone",topic);
@@ -325,7 +341,7 @@ void ResetSpeech(){
         SpeechStop(speechLanes[i],i);
         speechLanes[i].pendingPackageDone={};
     }
-    speechPending.clear();
+    speechPending.clear();pendingCombatVoice={};nextCombatVoice=0;
     scriptSubtitle={};
 }
 void SpeechTick(){
@@ -335,10 +351,29 @@ void SpeechTick(){
         ResetSpeech();
         speechGeneration=player.ScriptRuntimeGeneration();
     }
+    const auto bark=pendingCombatVoice;
+    pendingCombatVoice={};
     if(gDialogue.Active())return;
     for(unsigned i=0;i<speechLanes.size();++i) {
+        auto& lane=speechLanes[i];
+        if(lane.combatVoice&&!speechPending.empty()&&lane.dialogue.phase==fo3dialogue::Phase::Speaking)
+            SpeechStop(lane,i);
         AdvanceSpeech(speechLanes[i],i,player);
         if(speechLanes[i].dialogue.resultTicket)break;
+    }
+    if(bark.reference&&speechPending.empty()&&!gQ230NpcChat.Active()&&!IsFo3LoadingVisible()&&
+       CanDeferFo3DialogueResult()&&!player.ScriptActorTalking(bark.reference)&&
+       std::none_of(speechLanes.begin(),speechLanes.end(),[](const auto& lane){
+           return lane.dialogue.Active()||lane.pendingPackageDone.first;
+       })){
+        auto* actor=DialogueActor(bark.reference);
+        if(actor&&actor->runtime.combatTarget==bark.flags&&actor->runtime.Alive()&&!actor->runtime.offScene){
+            auto& lane=speechLanes.back();
+            StartSpeech(lane,speechLanes.size()-1,bark,player);
+            lane.combatVoice=lane.dialogue.Active();
+            lane.noHeadTracking=lane.combatVoice;
+            if(lane.combatVoice)nextCombatVoice=seconds+2;
+        }
     }
     if(!speechPending.empty()&&!gDialogue.Active()&&!gQ230NpcChat.Active()&&
        !IsFo3LoadingVisible()&&CanDeferFo3DialogueResult()){
