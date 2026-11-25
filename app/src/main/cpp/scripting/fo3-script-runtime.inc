@@ -23,8 +23,12 @@ class Expression {
     if(t=="-"||t=="+"){if(!Atom(value))return false;if(t=="-")value=-value;return true;}
     char* end=nullptr;value=std::strtof(t.c_str(),&end);
     if(end!=t.c_str()&&!*end)return std::isfinite(value)||Fail("nonfinite literal");
+    const auto dot=t.find('.');
+    const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    std::string animationGroup;
+    if(query=="isanimplaying"&&at<tokens.size()&&std::isalpha(static_cast<unsigned char>(tokens[at].front())))
+      animationGroup=tokens[at++];
     if(syntaxOnly){
-      const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
       if(query=="gethasnote"||query=="getinworldspace"||query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
          query=="getpermanentactorvalue"||query=="getpcmiscstat"||query=="getisid"||
@@ -78,7 +82,6 @@ class Expression {
       if(at==tokens.size())return Fail("missing death-count actor base");
       return fo3dialogue::DeadCount(p,form(tokens[at++]),value,error);
     }
-    const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
     if(dot==std::string::npos&&(t=="player"||t=="getactionref"||t=="getself"||t=="getlinkedref")){
       value=float(form(t));return true;
     }
@@ -257,7 +260,7 @@ class Expression {
     }
     if(query=="isanimplaying"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool playing=false;
-      if(!p.ScriptAnimationPlaying(id,playing))return Fail("animation reference unavailable");
+      if(!p.ScriptAnimationPlaying(id,playing,animationGroup))return Fail("animation reference unavailable");
       value=playing;return true;
     }
     if(t=="getbuttonpressed"){value=p.ScriptButton();return true;}
@@ -1144,10 +1147,11 @@ void Player::SetScriptRuntimeClock(double now,double elapsed){
 void Player::SetScriptAnimationRegistry(std::shared_ptr<const fo3script::AnimationRegistry> registry){
   scriptAnimationDefinitions_=std::move(registry);++scriptEffectRevision_;
 }
-bool Player::ScriptAnimationPlaying(uint32_t reference,bool& playing) const {
+bool Player::ScriptAnimationPlaying(uint32_t reference,bool& playing,const std::string& group) const {
   if(!scriptAnimationDefinitions_||!scriptAnimationDefinitions_->count(reference))return false;
   const auto i=scriptAnimations_.find(reference);
-  playing=i!=scriptAnimations_.end()&&fo3script::Playing(i->second,scriptRuntimeSeconds_);return true;
+  playing=i!=scriptAnimations_.end()&&(group.empty()||i->second.group==fo3script::Lower(group))&&
+          fo3script::Playing(i->second,scriptRuntimeSeconds_);return true;
 }
 bool Player::QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags){
   // The object bridge supports immediate start (1) and the authored object

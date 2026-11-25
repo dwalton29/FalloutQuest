@@ -673,7 +673,7 @@ public:
   uint64_t ScriptRuntimeGeneration() const {return scriptRuntimeGeneration_;}
   void SetScriptRuntimeClock(double now,double elapsed);
   void SetScriptAnimationRegistry(std::shared_ptr<const fo3script::AnimationRegistry> registry);
-  bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
+  bool ScriptAnimationPlaying(uint32_t reference,bool& playing,const std::string& group={}) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   void FinishScriptAnimation(uint32_t reference,const std::string& group);
   bool QueueScriptAction(fo3script::Action action);

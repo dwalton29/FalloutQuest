@@ -108,6 +108,15 @@ static void Synthetic(){
   plan=p.PrepareReferenceEventTransaction(10,"OnTriggerEnter",PlayerRef,error);Check(bool(plan),error);
   Check(p.CommitScriptTransaction(*plan),"commit event");Check(p.PollScriptAction(action)&&action.group=="advance"&&action.started==1,"source group action");
   bool playing=false;Check(p.ScriptAnimationPlaying(10,playing)&&playing,"playing query");
+  Check(p.ScriptAnimationPlaying(10,playing,"Advance")&&playing,"named active sequence");
+  Check(p.ScriptAnimationPlaying(10,playing,"Idle")&&!playing,"different sequence is inactive");
+  // SCDA for "if IsAnimPlaying Forward == 0 / RewardKarma 1 / endif".
+  fo3pipdata::ResultScript namedGroup;
+  namedGroup.compiled={
+    0x16,0,19,0,1,0,15,0,' ','X',0x28,0x11,4,0,1,0,3,0,' ','0',' ','=','=',
+    4,0x12,7,0,1,0,'n',1,0,0,0,0x19,0,0,0};
+  const auto karma=p.Snapshot().karma;
+  Check(p.ExecuteDialogueResult(namedGroup,error,10)&&p.Snapshot().karma==karma+1,"compiled named group ignores another active sequence");
   p.AcknowledgeScriptTrigger(10,true);Check(p.ScriptTriggerChanges().empty(),"no repeated entry");
   p.SetScriptRuntimeClock(3,.25);Check(p.ScriptAnimationPlaying(10,playing)&&!playing,"exact duration completion");
   p.SetScriptPlayerLocation(0,5,0,1,0);changes=p.ScriptTriggerChanges();Check(changes.size()==1&&!changes[0].second,"rotated XPRM leave");

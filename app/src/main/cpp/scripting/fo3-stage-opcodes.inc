@@ -66,6 +66,7 @@
     case 0x1114: return {"playbink","snnnn",1,false};
     case 0x1119: return {"setcellownership","rr",1,false};
     case 0x111c: return {"setactorfullname","r",1,false};
+    case 0x1128: return {"isanimplaying","g",0,true};
     case 0x1136: return {"getinworldspace","r",1,true};
     case 0x113c: return {"setscale","n",1,false};
     case 0x114a: return {"addachievement","n",1,false};

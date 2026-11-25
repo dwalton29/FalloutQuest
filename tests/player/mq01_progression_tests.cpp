@@ -160,5 +160,31 @@ static void Original(const char* path){
   assert(repaired.ItemCount(id("mq02liphotonote"))==1&&repaired.Snapshot().achievements.count(5));
   std::cout<<"Three Dog turn-in completed Galaxy News Radio and started Scientific Pursuits\n";
 
+  const auto pursuits=id("mq03"),panel=id("mqapanelref");
+  auto visit=[&](uint32_t marker,uint16_t stage){
+    const auto& location=catalog.pipboy.targets.at(marker);
+    repaired.SetScriptPlayerLocation(location.x,location.y,location.z,location.cell,location.world);
+    for(unsigned tick=0;tick<60&&repaired.Snapshot().pipboy.quests.at(pursuits).stage!=stage;++tick)
+      repaired.PumpWorldAwareGameMode(.25,{},[&](auto plan){return repaired.CommitScriptTransaction(*plan);});
+    assert(repaired.Snapshot().pipboy.quests.at(pursuits).stage==stage);
+  };
+  visit(id("sciencelabmarker"),20);
+  {Conversation li(repaired,id("doctorliref"));li.Start();
+   for(auto topic:{0x426fau,0x5f9bau,0x43df7u,0x43df4u,0x43df3u})li.Choose(topic);}
+  assert(repaired.Snapshot().pipboy.quests.at(pursuits).stage==30);
+  visit(id("mq05controlroommarker"),40);
+  auto panelTick=[&]{
+    auto plan=repaired.PrepareReferenceEventTransaction(panel,"GameMode",0,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    if(!plan)std::cerr<<error<<std::endl;
+    assert(plan&&repaired.CommitScriptTransaction(*plan));
+  };
+  panelTick();
+  assert(repaired.Snapshot().pipboy.quests.at(pursuits).stage==40);
+  assert(repaired.Pickup(id("mq03holo21ref")));
+  panelTick();
+  assert(repaired.Snapshot().pipboy.quests.at(pursuits).stage==50);
+  assert(repaired.Snapshot().pipboy.quests.at(pursuits).objectives.at(50).displayed);
+  std::cout<<"Scientific Pursuits reached the journal listening objective via Rivet City, Doctor Li and the placed holotape\n";
+
 }
 int main(int argc,char** argv){if(argc>1)Original(argv[1]);else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}
