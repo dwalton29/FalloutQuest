@@ -573,6 +573,10 @@ public:
     if(detected)scriptDetection_.insert(reference);else scriptDetection_.erase(reference);
   }
   void ClearScriptActorDetection(){scriptDetection_.clear();}
+  bool ScriptIdlePlaying(uint32_t actor) const;
+  void SetScriptPlayingIdles(std::unordered_set<uint32_t> actors){
+    if(actors!=scriptPlayingIdles_){scriptPlayingIdles_=std::move(actors);++scriptEffectRevision_;}
+  }
   bool AnyScriptActorTalking()const{return !scriptTalking_.empty();}
   bool ScriptActorTalking(uint32_t reference)const{return scriptTalking_.count(reference)!=0;}
   void SetScriptActorTalking(uint32_t reference,bool talking){if(talking)scriptTalking_.insert(reference);else scriptTalking_.erase(reference);}
@@ -933,7 +937,7 @@ private:
   size_t scriptTraceBytes_=0;
   mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
-  std::unordered_set<uint32_t> scriptDetection_, scriptTalking_;
+  std::unordered_set<uint32_t> scriptDetection_, scriptTalking_, scriptPlayingIdles_;
   std::vector<fo3script::Action> pendingScriptActions_;
   std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;
   std::unordered_map<uint32_t,fo3script::AnimationRun> scriptAnimations_;

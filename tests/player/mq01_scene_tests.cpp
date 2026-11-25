@@ -114,6 +114,30 @@ static void Original(const char* path){
   assert(returned.ApplyAttack(fo3player::PlayerRef,fatman,behemoth,1));assert(returned.Snapshot().pipboy.dialogueVariables.at(counter)==1);
   Check(returned.Save(save,error),error);fo3player::Player hitSaved(c);Check(hitSaved.Restore(save,error),error);unlink(save.c_str());
   assert(hitSaved.Snapshot().pipboy.dialogueVariables.at(counter)==1);
+  // Isolate the actor's original GameMode from stage 105's separate explosion.
+  // Supply the enabled actor and quest stage that the world entrance would publish.
+  for(auto& item:c.pipboy.quests.at(ld).stages.at(105).items)item.result={};
+  const auto idle=c.pipboy.formNames.at("bmtstretch");
+  const auto step=fo3dialogue::VariableKey(c.pipboy,"MQ01BehemothRef.entryStage");assert(step);
+  for(bool alreadyPlaying:{false,true}){
+    fo3player::Player entrance(c);entrance.RegisterOriginalActors();
+    auto enable=entrance.PrepareReferenceEnablePlan({{behemoth,true}},error);Check(bool(enable),error);
+    assert(entrance.CommitReferenceEnablePlan(*enable));
+    Check(entrance.ExecuteQuestStage(ld,105,error),error);
+    if(alreadyPlaying)entrance.SetScriptPlayingIdles({behemoth});
+    auto plan=entrance.PrepareReferenceEventTransaction(behemoth,"GameMode",0,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    Check(bool(plan),error);
+    fo3script::ScriptMasterMatch match;std::atomic<bool> cancelled{false};
+    Check(fo3script::MatchScriptProgramsToMaster(path,plan->ExecutedScripts(),match,cancelled,error),error);
+    assert(entrance.CommitScriptTransaction(*plan));
+    assert(entrance.Snapshot().pipboy.dialogueVariables.at(step)==1);
+    fo3script::Action action;unsigned count=0;
+    while(entrance.PollScriptAction(action))if(action.kind==fo3script::ActionKind::PlayIdle){
+      assert(action.reference==behemoth&&action.form==idle);++count;
+    }
+    assert(count==(alreadyPlaying?0u:1u));
+  }
+  std::cout<<"Original Behemoth selects BMTStretch once and skips it during an existing idle\n";
   std::cout<<"Original MQ01 ambush trigger -> five-second timer with mid-timer reload -> authored faction/aggression/objective changes; replay protection and Behemoth weapon filter passed. World traversal/battle not simulated.\n";
 }
 int main(int argc,char** argv){if(argc<2)return 77;Original(argv[1]);}

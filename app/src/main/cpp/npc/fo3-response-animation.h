@@ -13,6 +13,7 @@ bool SelectResponseAnimation(Actor& actor,uint32_t idle,double now){
   const auto next=actor.responseClips.find(idle);
   if(idle&&next==actor.responseClips.end())return false;
   actor.runtime.packagePoseIdle=0;actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;
+  actor.runtime.scriptIdleUntil=-1;
   actor.responseIdle=idle;actor.responseLastTime=-1;actor.responseStarted=now;
   actor.runtime.authoredMotionUntil=next!=actor.responseClips.end()&&fo3anim::ControlsAccumulationRoot(next->second)?
     now+(next->second.stop-next->second.start)/next->second.frequency:0;

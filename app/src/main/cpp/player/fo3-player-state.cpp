@@ -2673,7 +2673,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
   scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;ClearScriptActorFurniture();
-  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptDetection_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
+  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptPlayingIdles_.clear();scriptDetection_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
   scriptPrompts_=restoredPrompts;pendingScriptMessages_=std::move(restoredPrompts);scriptButtons_=std::move(restoredButtons);
   pendingScriptSounds_.clear();pendingBarters_.clear();EndContainerInteraction();
   ++revision_;

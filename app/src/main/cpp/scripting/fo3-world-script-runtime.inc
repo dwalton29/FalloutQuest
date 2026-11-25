@@ -369,7 +369,14 @@ void Register(){
         player.ClearScriptActorFurniture();
         player.ClearScriptActorDetection();
     }
+    std::unordered_set<uint32_t> playingIdles;
+    const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     for(const auto& actor:gQ230NpcActors){
+        const auto clip=actor.responseClips.find(actor.responseIdle);
+        if(!actor.runtime.offScene&&actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&
+           actor.runtime.speed<.01f&&!actor.runtime.furniture.Active()&&clip!=actor.responseClips.end()&&
+           now-actor.responseStarted<(clip->second.stop-clip->second.start)/clip->second.frequency)
+            playingIdles.insert(actor.source.refFormId);
         if(actor.runtime.offScene){player.SetScriptActorFurniture(actor.source.refFormId,0,0,255);continue;}
         const auto& furniture=actor.runtime.furniture;const auto* slot=furniture.Selected();
         uint8_t sitting=0;uint32_t ref=0;uint8_t marker=0;
@@ -379,6 +386,8 @@ void Register(){
         }
         player.SetScriptActorFurniture(actor.source.refFormId,ref,marker,sitting);
     }
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration())playingIdles.clear();
+    player.SetScriptPlayingIdles(std::move(playingIdles));
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
     if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();parentActivations.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
@@ -516,7 +525,12 @@ void Actions(){
             if(player.ReferenceDisabled(action.reference,disabled,error)&&!disabled)
                 fo3audio::RadioConversation(action.reference,action.form,player.Snapshot().pipboy);
         }
-        else if(action.kind==fo3script::ActionKind::PackageIdle){
+        else if(action.kind==fo3script::ActionKind::PlayIdle){
+            if(auto* actor=DialogueActor(action.reference)){
+                const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+                Q230PlayScriptIdle(*actor,player.Definitions().pipboy,action.form,now);
+            }
+        }else if(action.kind==fo3script::ActionKind::PackageIdle){
             if(auto* actor=DialogueActor(action.reference))Q230PlayPackageIdle(*actor,action.form,action.flags);
         }else if(action.kind==fo3script::ActionKind::KillQuestUpdates){
             fo3notify::Notifications().ClearQuests();

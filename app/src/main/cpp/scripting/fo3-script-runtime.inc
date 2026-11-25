@@ -245,6 +245,11 @@ class Expression {
     }
     if(t=="getcurrenttime"){value=p.Snapshot().gameHour;return true;}
     if(t=="getsecondspassed"){value=float(p.ScriptSecondsPassed());return true;}
+    if(query=="isidleplaying"){
+      const auto actor=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(!p.Definitions().actorPlacements.count(actor))return Fail("idle actor unavailable");
+      value=p.ScriptIdlePlaying(actor);return true;
+    }
     if(query=="isanimplaying"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool playing=false;
       if(!p.ScriptAnimationPlaying(id,playing))return Fail("animation reference unavailable");
@@ -812,6 +817,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       struct ActivationScope {unsigned& depth;ActivationScope(unsigned& d):depth(d){++depth;}~ActivationScope(){--depth;}} scope(scriptActivationDepth_);
       ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(receiver).base),"OnActivate",receiver,activator,error);break;
     }
+    case C::PlayIdle:{
+      fo3script::Action action;action.kind=fo3script::ActionKind::PlayIdle;action.reference=c.form;action.form=c.index;
+      ok=catalog_->actorPlacements.count(c.form)&&QueueScriptAction(std::move(action));break;
+    }
     case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
     case C::NoActivationSound:ok=SetNoActivationSound(c.form);break;
     case C::ScreenBlood:{fo3script::Action action;action.kind=fo3script::ActionKind::ScreenBlood;action.flags=uint32_t(c.value);ok=QueueScriptAction(std::move(action));break;}
@@ -1117,6 +1126,11 @@ bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,ui
     scriptPrompts_.push_back(request);
   }
   pendingScriptMessages_.push_back(std::move(request));++scriptEffectRevision_;return true;
+}
+bool Player::ScriptIdlePlaying(uint32_t actor) const {
+  return scriptPlayingIdles_.count(actor)||std::any_of(pendingScriptActions_.begin(),pendingScriptActions_.end(),[&](const auto& action){
+    return (action.kind==fo3script::ActionKind::PlayIdle||action.kind==fo3script::ActionKind::PackageIdle)&&action.reference==actor;
+  });
 }
 void Player::SetScriptRuntimeClock(double now,double elapsed){
   if(std::isfinite(now)&&std::isfinite(elapsed)&&elapsed>=0){scriptRuntimeSeconds_=now;scriptElapsedSeconds_=elapsed;}

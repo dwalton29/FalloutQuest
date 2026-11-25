@@ -38,6 +38,7 @@
     case 0x105e: return {"evaluatepackage","",0,false};
     case 0x1060: return {"enableplayercontrols","nnnnnnn",0,false};
     case 0x1061: return {"disableplayercontrols","nnnnnnn",0,false};
+    case 0x1070: return {"isidleplaying","",0,true};
     case 0x1072: return {"lock","nn",0,false};
     case 0x1073: return {"unlock","n",0,false};
     case 0x1078: return {"setenemy","rrnn",2,false};
@@ -80,6 +81,7 @@
     case 0x117f: return {"addtofaction","rn",2,false};
     case 0x1180: return {"removefromfaction","r",1,false};
     case 0x1182: return {"restoreactorvalue","an",2,false};
+    case 0x1190: return {"playidle","s",1,false};
     case 0x1191: return {"applyimagespacemodifier","rn",1,false};
     case 0x1192: return {"removeimagespacemodifier","rn",1,false};
     case 0x11a2: return {"setobjectivecompleted","rnn",3,false};

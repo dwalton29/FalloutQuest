@@ -3,6 +3,26 @@
 #include "fo3-combat-animation.h"
 #include "audio/fo3-animation-sounds.h"
 #include "rendering/performance-capture.h"
+static bool Q230CacheIdle(Q230ActorVisual& actor,const fo3pipdata::Definitions& d,uint32_t idle){
+  if(actor.responseClips.count(idle))return true;
+  const auto model=d.idleModels.find(idle);
+  if(model==d.idleModels.end()||d.idleAnimationObjects.count(idle))return false;
+  std::vector<uint8_t> bytes;fo3anim::Clip clip;
+  if(!LoadFalloutMeshFile(model->second,bytes)||!fo3anim::DecodeClip(bytes,clip)||clip.tracks.empty()||clip.frequency<=0||clip.stop<=clip.start)return false;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  for(const auto& key:clip.textKeys)if(key.text.rfind("Sound: ",0)==0)fo3audio::PreloadSound(key.text.substr(7));
+#endif
+  actor.responseClips.emplace(idle,std::move(clip));return true;
+}
+static bool Q230PlayScriptIdle(Q230ActorVisual& actor,const fo3pipdata::Definitions& d,uint32_t idle,double now){
+  if(!Q230CacheIdle(actor,d,idle))return false;
+  actor.responseIdle=0; // An explicit PlayIdle restarts the same clip.
+  fo3npc::SelectResponseAnimation(actor,idle,now);
+  const auto& clip=actor.responseClips.at(idle);
+  actor.runtime.scriptIdleUntil=now+(clip.stop-clip.start)/clip.frequency;
+  actor.lastFrame=UINT64_MAX;
+  return true;
+}
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
   actor.animations[0]=actor.clip;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
@@ -53,17 +73,7 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
       for(uint32_t idle:found->second.procedureIdles)if(idle)idles.insert(idle);
       for(uint32_t idle:found->second.idleAnimations)if(idle)idles.insert(idle);
     }
-    for(uint32_t id:idles){
-      if(actor.responseClips.count(id)||d->idleAnimationObjects.count(id))continue;
-      const auto model=d->idleModels.find(id);if(model==d->idleModels.end())continue;
-      std::vector<uint8_t> bytes;fo3anim::Clip clip;
-      if(LoadFalloutMeshFile(model->second,bytes)&&fo3anim::DecodeClip(bytes,clip)&&!clip.tracks.empty()&&clip.frequency>0&&clip.stop>clip.start){
-#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-        for(const auto& key:clip.textKeys)if(key.text.rfind("Sound: ",0)==0)fo3audio::PreloadSound(key.text.substr(7));
-#endif
-        actor.responseClips.emplace(id,std::move(clip));
-      }
-    }
+    for(uint32_t id:idles)Q230CacheIdle(actor,*d,id);
   }
   actor.headBone=fo3anim::FindBone(actor.skeleton,"Bip01 Head");
   actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine2");
@@ -708,8 +718,11 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const auto& furniture=actor.runtime.furniture;
   const auto* slot=furniture.Selected();
   if(actor.runtime.speed>.01f&&!actor.runtime.packagePoseIdle)actor.responseIdle=0;
-  const auto responseClip=actor.responseClips.find(actor.responseIdle);
   const double responseNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+  if(actor.runtime.scriptIdleUntil>=0&&responseNow>=actor.runtime.scriptIdleUntil){
+    actor.responseIdle=0;actor.runtime.scriptIdleUntil=-1;
+  }
+  const auto responseClip=actor.responseClips.find(actor.responseIdle);
   const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&(actor.runtime.packagePoseIdle==actor.responseIdle||fo3npc::RetainsResponsePose(responseClip->second)||responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency);
   const auto* program=furniture.SelectedProgram();
   const bool furniturePose=!responsePose&&slot&&(slot->idleMarker||program)&&
@@ -914,6 +927,7 @@ void Q230RenderNpcActors(bool alphaPass) {
 void Q230PlayPackageIdle(Q230ActorVisual& actor,uint32_t idle,uint32_t packageFlags){
   // Preserve the active voice token so its next update does not immediately
   // replace this package action. A genuinely new response still takes over.
+  actor.runtime.scriptIdleUntil=-1;
   actor.responseIdle=idle;actor.responseLastTime=-1;actor.runtime.packagePoseIdle=idle;
   actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
   const auto clip=actor.responseClips.find(idle);

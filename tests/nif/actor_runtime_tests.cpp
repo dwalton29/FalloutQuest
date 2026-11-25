@@ -484,6 +484,16 @@ int main(int argc,char** argv) {
     assert(!fo3npc::SelectResponseAnimation(animated,0,12)&&animated.responseIdle==901);
     assert(!fo3npc::SelectResponseAnimation(animated,9999,13)&&animated.responseIdle==901);
     assert(fo3npc::SelectResponseAnimation(animated,900,14)&&animated.responseStarted==14);
+    fo3pipdata::Definitions defs;
+    const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    assert(Q230PlayScriptIdle(animated,defs,901,now-10));
+    assert(Q230PlayScriptIdle(animated,defs,901,now)&&animated.responseStarted==now);
+    assert(!Q230PlayScriptIdle(animated,defs,9999,now)&&animated.responseIdle==901);
+    ++gStereoFrame;Q230UpdateActor(animated);
+    assert(animated.responseIdle==901&&animated.pose.local.front().translation[0]==77);
+    assert(Q230PlayScriptIdle(animated,defs,901,now-10));
+    ++gStereoFrame;Q230UpdateActor(animated);
+    assert(!animated.responseIdle&&animated.pose.local.front().translation[0]!=77);
   }
   CombatCompositionTests();
   // Production furniture branch must feed the continuation root to the skin

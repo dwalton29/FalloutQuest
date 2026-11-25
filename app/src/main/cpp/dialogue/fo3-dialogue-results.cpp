@@ -449,6 +449,13 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       cmd.type=CommandType::EvaluatePackage;const auto dot=op.find('.');
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved EVP reference";return false;}
+    } else if(op=="playidle"||(op.size()>9&&op.substr(op.size()-9)==".playidle")){
+      cmd.type=CommandType::PlayIdle;cmd.form=op=="playidle"?owner:form(op.substr(0,op.size()-9));
+      if(!(in>>a)){error="missing PlayIdle animation";return false;}
+      if(a.size()>=2&&a.front()=='"'&&a.back()=='"')a=a.substr(1,a.size()-2);
+      cmd.index=form(a);
+      const auto model=d.idleModels.find(cmd.index);
+      if(!cmd.form||model==d.idleModels.end()||model->second.empty()){error="unsupported PlayIdle actor or animation";return false;}
     } else if(op=="playgroup"||(op.size()>10&&op.substr(op.size()-10)==".playgroup")){
       cmd.type=CommandType::PlayGroup;
       cmd.form=op=="playgroup"?owner:form(op.substr(0,op.size()-10));
