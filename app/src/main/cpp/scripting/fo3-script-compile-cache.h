@@ -19,14 +19,15 @@ public:
   explicit CompileCache(const fo3pipdata::Definitions& definitions):definitions_(definitions){}
   std::shared_ptr<const Program> Get(const fo3pipdata::ResultScript& script,
       uint32_t owner,uint32_t localScript,bool capture,size_t limit=0) {
-    Key key{owner,localScript,capture,limit,script.source.empty()&&!script.compiled.empty(),script.source};
+    Key key{owner,localScript,capture,limit,false,script.source,script.compiled,script.references};
+    for(const auto& r:script.records)if(r.first=="SCRV"||(r.first=="SCRO"&&r.second.size()!=4)){key.unsupportedRefs=true;break;}
     const auto found=entries_.find(key);
     if(found!=entries_.end()){++hits;return found->second;}
     ++misses;
     auto result=std::make_shared<Program>();result->forms.limit=limit;
     result->valid=fo3dialogue::CompileResult(definitions_,script,result->commands,result->error,
         owner,localScript,capture?&result->forms:nullptr);
-    size_t bytes=sizeof(Key)+sizeof(Program)+key.source.capacity()+result->error.capacity();
+    size_t bytes=sizeof(Key)+sizeof(Program)+key.source.capacity()+key.code.capacity()+key.refs.capacity()*sizeof(uint32_t)+result->error.capacity();
     bytes+=result->commands.capacity()*sizeof(fo3dialogue::Command);
     for(const auto& command:result->commands)bytes+=command.expression.capacity();
     bytes+=result->forms.bindings.capacity()*sizeof(result->forms.bindings[0]);
@@ -51,10 +52,10 @@ public:
   uint64_t hits=0,misses=0;
 private:
   struct Key {
-    uint32_t owner,script;bool capture;size_t limit;bool compiledOnly;std::string source;
+    uint32_t owner,script;bool capture;size_t limit;bool unsupportedRefs;std::string source;std::vector<uint8_t> code;std::vector<uint32_t> refs;
     bool operator<(const Key& b) const {
-      return std::tie(owner,script,capture,limit,compiledOnly,source)<
-          std::tie(b.owner,b.script,b.capture,b.limit,b.compiledOnly,b.source);
+      return std::tie(owner,script,capture,limit,unsupportedRefs,source,code,refs)<
+          std::tie(b.owner,b.script,b.capture,b.limit,b.unsupportedRefs,b.source,b.code,b.refs);
     }
   };
   const fo3pipdata::Definitions& definitions_;

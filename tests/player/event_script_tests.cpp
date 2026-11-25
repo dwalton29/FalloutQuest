@@ -422,8 +422,56 @@ static void PersistentReferenceState() {
   assert(!p.CanPickup(200)&&p.CanLootContainer(300));
   std::remove(path.c_str());
 }
+// Replay original MQ01 result bytes with SCTX removed. The other quest's
+// stage is controlled independently so both outcomes use the same program.
+static void OriginalStageBytecode(const fo3player::Catalog& original){
+  const auto& defs=original.pipboy;
+  const auto mq=defs.formNames.at("mq01"),other=defs.formNames.at("mq03");
+  auto fixture=Catalog();
+  fixture.pipboy.formNames=defs.formNames;
+  fixture.pipboy.markers=defs.markers;
+  fixture.pipboy.quests[mq]=defs.quests.at(mq);
+  auto& prerequisite=fixture.pipboy.quests[other];
+  prerequisite.editor=defs.quests.at(other).editor;
+  prerequisite.stages[9]={};prerequisite.stages[10]={};
+  for(unsigned stage:{10u,20u,40u}){
+    const auto& item=defs.quests.at(mq).stages.at(stage).items.at(0);
+    auto bytes=item.result;bytes.source.clear();
+    auto source=item.result;source.compiled.clear();
+    for(unsigned before:{9u,10u}){
+      fixture.pipboy.quests[mq].stages.at(stage).items.at(0).result=bytes;
+      fo3player::Player actual(fixture);
+      fixture.pipboy.quests[mq].stages.at(stage).items.at(0).result=source;
+      fo3player::Player expected(fixture);std::string error;
+      assert(actual.ExecuteQuestStage(other,before,error)&&expected.ExecuteQuestStage(other,before,error));
+      assert(actual.ExecuteQuestStage(mq,stage,error)&&expected.ExecuteQuestStage(mq,stage,error));
+      const auto& a=actual.Snapshot().pipboy;const auto& b=expected.Snapshot().pipboy;
+      assert(a.revealed==b.revealed&&a.travelEnabled==b.travelEnabled);
+      assert(a.quests.count(mq)==b.quests.count(mq));
+      if(a.quests.count(mq)){
+        const auto& objectives=a.quests.at(mq).objectives;
+        assert(objectives.size()==b.quests.at(mq).objectives.size());
+        assert((objectives.count(stage)&&objectives.at(stage).displayed)==(before==9));
+        for(const auto& entry:objectives){
+          const auto& rhs=b.quests.at(mq).objectives.at(entry.first);
+          assert(entry.second.displayed==rhs.displayed&&entry.second.status==rhs.status);
+        }
+      }
+    }
+    fo3script::CompileCache cache(fixture.pipboy);
+    assert(cache.Get(bytes,mq,0,false)->valid);
+    auto invalid=bytes;invalid.compiled.push_back(0xff);
+    assert(!cache.Get(invalid,mq,0,false)->valid);
+    invalid=bytes;invalid.references.front()=0;
+    assert(!cache.Get(invalid,mq,0,false)->valid);
+    invalid=bytes;++invalid.compiled[4];
+    assert(!cache.Get(invalid,mq,0,false)->valid);
+  }
+  std::cout<<"Six original MQ01 SCDA-only outcomes matched source execution\n";
+}
 static void OriginalBomb(const char* path) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  OriginalStageBytecode(c);
   assert(c.eventBaseScripts.at(0x3bc8)==0x78cb3);
   assert(c.enableParents.size()==5502);
   fo3player::Player graph(c);bool disabled=false;
