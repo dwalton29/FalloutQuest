@@ -498,6 +498,12 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     } else if(op=="autosave"||op=="forcesave")cmd.type=CommandType::AutoSave;
     else if(op=="resetpipboymanager")cmd.type=CommandType::PipboyReset;
     else if(op=="forceradiostationupdate")cmd.type=CommandType::RadioRefresh;
+    else if(op=="pipboyradio"){
+      if(!(in>>std::quoted(a)>>b)||lower(a)!="tune"||!(cmd.form=form(b))){
+        error="expected PipboyRadio tune and a transmitter reference";return false;
+      }
+      cmd.type=CommandType::TuneRadio;
+    }
     else if(op=="pipboyradiooff")cmd.type=CommandType::RadioOff;
     else if(op.find('.')!=std::string::npos&&
             (op.substr(op.find('.')+1)=="setbroadcaststate"||op.substr(op.find('.')+1)=="startradioconversation")){

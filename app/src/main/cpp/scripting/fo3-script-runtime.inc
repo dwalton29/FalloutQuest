@@ -14,6 +14,11 @@ class Expression {
   bool Atom(float& value) {
     if(at==tokens.size())return Fail("missing expression operand");
     auto t=tokens[at++];
+    // The editor accepts whitespace after the member separator in scoped reads.
+    if(t.size()>1&&t.back()=='.'&&std::isalpha(static_cast<unsigned char>(t.front()))&&at<tokens.size()){
+      const char first=tokens[at].front();
+      if(std::isalpha(static_cast<unsigned char>(first))||first=='_')t+=tokens[at++];
+    }
     if(t=="("){if(!Or(value)||at==tokens.size()||tokens[at++]!=")")return Fail("unbalanced expression");return true;}
     if(t=="-"||t=="+"){if(!Atom(value))return false;if(t=="-")value=-value;return true;}
     char* end=nullptr;value=std::strtof(t.c_str(),&end);
@@ -727,6 +732,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       ok=c.type==C::EquipItem&&c.variable?ScriptEquipActorItem(c.index,c.form,c.value!=0):
           ScriptEquipItem(c.form,c.type==C::EquipItem);break;
     case C::PipboyReset:case C::RadioRefresh:{fo3script::Action action;action.kind=c.type==C::PipboyReset?fo3script::ActionKind::PipboyReset:fo3script::ActionKind::RadioRefresh;ok=QueueScriptAction(std::move(action));break;}
+    case C::TuneRadio:ok=TuneRadio(c.form);break;
     case C::RadioOff:ok=TuneRadio(0);break;
     case C::BroadcastState:case C::RadioConversation:{
       const auto& radio=catalog_->pipboy;

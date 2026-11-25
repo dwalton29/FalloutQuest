@@ -95,8 +95,8 @@ class StageDecoder {
         if(arg.find_first_of("\"\r\n;\\")!=std::string::npos||arg.find('\0')!=std::string::npos)return false;
         arg='"'+arg+'"';
       }else if(spec.arguments[i]=='g'){
-        if(!r.take(2,v)||v!=3)return false;
-        arg="forward";
+        if(!r.take(2,v)||(v!=3&&v!=4))return false;
+        arg=v==3?"forward":"backward";
       }else if(spec.arguments[i]=='a'){
         static const char* const skills[]={"barter","bigguns","energyweapons","explosives","lockpick","medicine","meleeweapons","repair","science","smallguns","sneak","speech","throwing","unarmed"};
         if(!r.take(2,v))return false;

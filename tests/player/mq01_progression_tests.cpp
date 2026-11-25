@@ -92,5 +92,73 @@ static void Original(const char* path){
   assert(rewarded.Snapshot().experience==xp+300&&rewarded.ItemCount(note)==1);
   std::cout<<"Original Three Dog ending conversation: stage 200, MQ02, 300 XP, NOTE/radio/achievement, relocation and duplicate-reward protection passed; GNR world approach not simulated\n";
 
+  const auto id=[&](const char* name){return catalog.pipboy.formNames.at(name);};
+  const auto dishRef=id("mq02dishref"),dish=id("mq02virgoiidish"),relay=id("mq02relaywithoutdish");
+  const auto quest=id("mq02"),station=id("radiogalaxynewsref02");
+  // Same operands as the relay SCDA, with station and relay in slots 1 and 2.
+  fo3pipdata::ResultScript bytecode;
+  bytecode.references={station,relay};
+  bytecode.compiled={
+    0xa7,0x11,11,0,2,0,4,0,'t','u','n','e','r',1,0,
+    0x1c,0,1,0,0xd6,0x11,2,0,0,0,
+    0x1c,0,2,0,0x13,0x10,9,0,2,0,4,0,'n',1,0,0,0};
+  std::vector<fo3dialogue::Command> commands;
+  assert(fo3dialogue::CompileResult(catalog.pipboy,bytecode,commands,error));
+  assert(commands.size()==3&&commands[0].type==fo3dialogue::CommandType::TuneRadio&&commands[0].form==station);
+  assert(commands[1].type==fo3dialogue::CommandType::RadioConversation&&commands[1].form==station&&!commands[1].index);
+  assert(commands[2].type==fo3dialogue::CommandType::PlayGroup&&commands[2].form==relay&&commands[2].expression=="backward");
+  auto sequences=std::make_shared<fo3script::AnimationRegistry>();
+  (*sequences)[relay]={{"Backward",1,false}};
+  (*sequences)[id("monumentosc")]={{"Forward",1,false}};
+  rewarded.SetScriptAnimationRegistry(sequences);
+  auto runEvent=[&](uint32_t ref,const char* event,uint32_t actor){
+    auto plan=rewarded.PrepareReferenceEventTransaction(ref,event,actor,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    if(!plan)std::cerr<<event<<" "<<std::hex<<ref<<": "<<error<<std::endl;
+    assert(plan&&rewarded.CommitScriptTransaction(*plan));
+  };
+  auto chooseButton=[&](uint32_t ref,uint32_t prompt,int button){
+    runEvent(ref,"OnActivate",fo3player::PlayerRef);
+    fo3player::ScriptMessage message;
+    assert(rewarded.PollScriptMessage(message)&&message.form==prompt);
+    assert(rewarded.SubmitScriptMessageButton(ref,button));
+    runEvent(ref,"GameMode",0);
+  };
+  auto arrive=[&](uint32_t marker,uint16_t expected){
+    const auto& location=catalog.pipboy.targets.at(marker);
+    rewarded.SetScriptPlayerLocation(location.x,location.y,location.z,location.cell,location.world);
+    for(unsigned tick=0;tick<60&&rewarded.Snapshot().pipboy.quests.at(quest).stage!=expected;++tick){
+      rewarded.PumpWorldAwareGameMode(.25,{},[&](auto plan){return rewarded.CommitScriptTransaction(*plan);});
+    }
+    assert(rewarded.Snapshot().pipboy.quests.at(quest).stage==expected);
+  };
+  arrive(id("mq02museummarker"),20);
+  chooseButton(dishRef,id("mq02dishmessage"),1);
+  assert(!rewarded.ItemCount(dish)&&rewarded.Snapshot().pipboy.quests.at(quest).stage==20);
+  chooseButton(dishRef,id("mq02dishmessage"),0);
+  assert(rewarded.ItemCount(dish)==1&&rewarded.Snapshot().pipboy.quests.at(quest).stage==30);
+  assert(rewarded.ReferenceDisabled(dishRef,disabled,error)&&disabled);
+  arrive(id("mq02elevatorentrance"),40);
+  const auto karma=rewarded.Snapshot().karma;
+  chooseButton(relay,id("mq02relaybeforemessage"),0);
+  assert(!rewarded.ItemCount(dish)&&rewarded.Snapshot().pipboy.quests.at(quest).stage==50);
+  assert(rewarded.Snapshot().pipboy.tunedRadio==station&&rewarded.Snapshot().karma==karma+200);
+  assert(rewarded.ReferenceDisabled(id("radiogalaxynewsref01"),disabled,error)&&disabled);
+  assert(rewarded.ReferenceDisabled(station,disabled,error)&&!disabled);
+  assert(rewarded.ReferenceDisabled(id("mq02dishdoneref"),disabled,error)&&!disabled);
+  runEvent(relay,"GameMode",0);
+  assert(rewarded.Snapshot().karma==karma+200);
+  assert(rewarded.Save(save,error));
+  fo3player::Player repaired(catalog);assert(repaired.Restore(save,error));unlink(save.c_str());
+  assert(repaired.Snapshot().pipboy.tunedRadio==station&&repaired.Snapshot().pipboy.quests.at(quest).stage==50);
+  std::cout<<"Original Museum dish and Washington Monument relay events passed through MQ02 stage 50\n";
+
+  {Conversation report(repaired,dog);report.Start();
+   for(auto topic:{0x24450u,0x2444cu,0x2444du})report.Choose(topic);}
+  assert(repaired.Snapshot().pipboy.quests.at(quest).stage==200);
+  assert(!repaired.Snapshot().pipboy.quests.at(quest).running);
+  assert(repaired.Snapshot().pipboy.quests.at(id("mq03")).running);
+  assert(repaired.ItemCount(id("mq02liphotonote"))==1&&repaired.Snapshot().achievements.count(5));
+  std::cout<<"Three Dog turn-in completed Galaxy News Radio and started Scientific Pursuits\n";
+
 }
 int main(int argc,char** argv){if(argc>1)Original(argv[1]);else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}

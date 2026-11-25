@@ -88,12 +88,14 @@
     case 0x11a3: return {"setobjectivedisplayed","rnn",3,false};
     case 0x11a4: return {"getobjectivecompleted","rn",2,true};
     case 0x11a5: return {"getobjectivedisplayed","rn",2,true};
+    case 0x11a7: return {"pipboyradio","sr",1,false};
     case 0x11ad: return {"completeallobjectives","r",1,false};
     case 0x11bc: return {"additemhealthpercent","rnnn",3,false};
     case 0x11c5: return {"setplayerteammate","n",1,false};
     case 0x11ca: return {"clearactorsfactionsplayerenemyflag","",0,false};
     case 0x11cd: return {"setplayertagskill","an",2,false};
     case 0x11d5: return {"setbroadcaststate","n",1,false};
+    case 0x11d6: return {"startradioconversation","r",0,false};
     case 0x11d9: return {"castimmediateonself","r",1,false};
     case 0x11dc: return {"setquestdelay","rn",2,false};
     case 0x11df: return {"matchfacegeometry","rn",2,false};
