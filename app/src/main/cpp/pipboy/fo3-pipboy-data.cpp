@@ -832,19 +832,19 @@ std::vector<std::string> BroadcastAudio(const Definitions &d, const Info &i,
   }
   return paths;
 }
-std::vector<std::string> NoteAudio(const Definitions &d, uint32_t id) {
-  std::vector<std::string> paths;
+std::vector<NoteSegment> NoteSegments(const Definitions &d, uint32_t id) {
+  std::vector<NoteSegment> segments;
   auto n = d.notes.find(id);
   if (n == d.notes.end())
-    return paths;
+    return segments;
   auto sound = d.sounds.find(n->second.sound);
   if (n->second.type == 0 && sound != d.sounds.end())
-    paths.push_back(sound->second);
+    segments.push_back({0,{sound->second}});
   if (n->second.type == 3) {
     auto v = d.npcVoices.find(n->second.npc);
     auto infos = d.topics.find(n->second.topic);
     if (v == d.npcVoices.end() || infos == d.topics.end())
-      return paths;
+      return segments;
     for (auto &i : infos->second) {
       bool eligible = true;
       for (auto &c : i.conditions) {
@@ -880,15 +880,16 @@ std::vector<std::string> NoteAudio(const Definitions &d, uint32_t id) {
       if (!eligible)
         continue; // Authored note topic is fixed; no world
                   // quest conditions are executed here.
-      for (auto &r : i.responses) {
-        auto s = d.sounds.find(r.sound);
-        auto path =
-            s != d.sounds.end() ? s->second : VoicePath(d, i, r, v->second);
-        if (!path.empty())
-          paths.push_back(path);
-      }
+      auto paths=BroadcastAudio(d,i,v->second);
+      if(!paths.empty())segments.push_back({i.id,std::move(paths)});
     }
   }
+  return segments;
+}
+std::vector<std::string> NoteAudio(const Definitions& d,uint32_t note){
+  std::vector<std::string> paths;
+  for(auto& segment:NoteSegments(d,note))
+    paths.insert(paths.end(),segment.paths.begin(),segment.paths.end());
   return paths;
 }
 } // namespace fo3pipdata

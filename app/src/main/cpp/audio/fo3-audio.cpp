@@ -43,7 +43,7 @@ struct Event {
   std::array<float,4> volumes{1,.3f,1,1};
   Listener listener;
   unsigned dialogueLane=0;
-  uint32_t radioTopic=0;
+  uint32_t radioTopic=0,noteToken=0;
   bool intercom=false;
   float distance=-1,pan=0;
   uint64_t loadingGeneration=0;
@@ -63,6 +63,7 @@ struct Runtime {
   uint32_t lastCell = UINT32_MAX;
   bool lastActive = false;
   std::atomic<uint32_t> playingNote{0};
+  uint32_t noteSerial=0,activeNoteToken=0,finishedNoteToken=0; // guarded by mutex
   std::array<DialogueCompletionMailbox,2> dialogueCompletion;
   std::array<DialogueFaceMailbox,2> dialogueFace;
 } runtime;
@@ -427,7 +428,7 @@ void Worker() {
   std::shared_ptr<const fo3pipdata::Definitions> definitions;
   fo3pipdata::SessionState broadcastState;
   uint32_t broadcastGeneration[2]{};
-  auto playBroadcast = [&](const std::vector<std::string> &paths, int channel) {
+  auto playBroadcast = [&](const std::vector<std::string> &paths, int channel,uint32_t noteToken=0) {
     std::string playlist;
     broadcastFiles[channel].clear();
     for (auto &relative : paths) {
@@ -444,7 +445,7 @@ void Worker() {
     }
     auto str = env->NewStringUTF(playlist.c_str());
     env->CallVoidMethod(runtime.activity, broadcast, str, channel,
-                        ++broadcastGeneration[channel]);
+                        jint(channel==1?noteToken:++broadcastGeneration[channel]));
     env->DeleteLocalRef(str);
     if (env->ExceptionCheck())
       env->ExceptionClear();
@@ -581,19 +582,13 @@ void Worker() {
       continue;
     }
     if (e.kind == 7) {
-      runtime.playingNote = e.id;
-      if (!playBroadcast(e.paths, 1))
-        runtime.playingNote = 0;
+      if (!playBroadcast(e.paths,1,e.noteToken))BroadcastDone(2,e.noteToken);
       __android_log_print(ANDROID_LOG_INFO, "FalloutQuest",
                           "PIPBOY NOTE play=%08X", runtime.playingNote.load());
       continue;
     }
     if (e.kind == 8) {
       if (e.id == broadcastGeneration[0]) advanceRadio();
-      continue;
-    }
-    if (e.kind == 9) {
-      if (e.id == broadcastGeneration[1]) runtime.playingNote = 0;
       continue;
     }
     if (e.kind == 0) {
@@ -634,7 +629,8 @@ void Worker() {
           definitions.reset();
           radio={};
           playBroadcast({},0);
-          runtime.playingNote=0;
+          {std::lock_guard<std::mutex> lock(runtime.mutex);
+           runtime.playingNote=0;runtime.activeNoteToken=0;runtime.finishedNoteToken=0;}
           playBroadcast({},1);
         }
       }
@@ -808,11 +804,26 @@ void Radio(uint32_t transmitter, std::shared_ptr<const fo3pipdata::Definitions> 
   e.state = state;
   Push(std::move(e));
 }
-void Note(uint32_t id, const std::vector<std::string> &paths) {
-  runtime.playingNote = id;
-  Event e{7, id, true};
-  e.paths = paths;
-  Push(std::move(e));
+uint32_t Note(uint32_t id,const std::vector<std::string>& paths){
+  std::lock_guard<std::mutex> lock(runtime.mutex);
+  runtime.finishedNoteToken=0;
+  runtime.activeNoteToken=0;
+  runtime.playingNote=0;
+  if(runtime.stop||!runtime.worker.joinable())return 0;
+  if(++runtime.noteSerial==0)++runtime.noteSerial;
+  runtime.events.erase(std::remove_if(runtime.events.begin(),runtime.events.end(),
+      [](const Event& entry){return entry.kind==7;}),runtime.events.end());
+  Event event{7,id,true};
+  event.noteToken=runtime.noteSerial;event.paths=paths;
+  runtime.events.push_back(std::move(event));
+  runtime.activeNoteToken=runtime.noteSerial;runtime.playingNote=id;
+  runtime.cv.notify_one();return runtime.noteSerial;
+}
+uint32_t TakeFinishedNote(){
+  std::lock_guard<std::mutex> lock(runtime.mutex);
+  auto token=runtime.finishedNoteToken;runtime.finishedNoteToken=0;
+  if(token)runtime.playingNote=0;
+  return token;
 }
 void RadioState(const fo3pipdata::SessionState &state) {
   Event e{10, 0, true};
@@ -826,7 +837,12 @@ void RadioConversation(uint32_t transmitter,uint32_t topic,const fo3pipdata::Ses
 }
 uint32_t PlayingNote() { return runtime.playingNote.load(); }
 void BroadcastDone(int channel, uint32_t generation) {
-  Push({channel == 0 ? 8 : 9, generation, true});
+  if(channel==0){Push({8,generation,true});return;}
+  std::lock_guard<std::mutex> lock(runtime.mutex);
+  if(!generation||generation!=runtime.activeNoteToken)return;
+  if(channel==1)runtime.finishedNoteToken=generation;
+  else runtime.playingNote=0;
+  runtime.activeNoteToken=0;
 }
 void PreloadSound(uint32_t soundForm){if(soundForm)Push({12,soundForm,false});}
 void PreloadSound(const std::string&editorId){if(!editorId.empty())Push({12,0,false,editorId});}

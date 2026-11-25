@@ -108,7 +108,7 @@ void UpdateFo3Terminal(double now,float x,float y,bool a,bool b,bool focused,flo
     gTerminal.result=entry.result;if(entry.note){const auto note=p.Definitions().pipboy.notes.find(entry.note);
       if(note!=p.Definitions().pipboy.notes.end()){
         gTerminal.result+="\n"+note->second.text;gTerminal.image=note->second.image;gTerminal.note=entry.note;
-        auto paths=fo3pipdata::NoteAudio(p.Definitions().pipboy,entry.note);if(!paths.empty())fo3audio::Note(entry.note,paths);
+        StartFo3Note(p,entry.note,true);
       }}
     gTerminal.page=Page::Text;gTerminal.scroll=0;
   }

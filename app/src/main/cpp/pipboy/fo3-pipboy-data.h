@@ -345,6 +345,8 @@ void Decode(Definitions &, const std::string &, uint32_t id, uint32_t flags,
             uint32_t topic);
 void Finalize(Definitions &);
 bool InCell(const Definitions &, uint32_t current, uint32_t prefix);
+struct NoteSegment { uint32_t info; std::vector<std::string> paths; };
+std::vector<NoteSegment> NoteSegments(const Definitions&,uint32_t note);
 std::vector<std::string> NoteAudio(const Definitions &, uint32_t note);
 } // namespace fo3pipdata
 

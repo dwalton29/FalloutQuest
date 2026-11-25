@@ -24,6 +24,7 @@ void Invalidate(){}void Advance(){}void AdvanceImage(const std::string&){}
 void Render(const float*,const fo3terminal::Surface&,const fo3terminal::Display&,bool,bool){}
 }
 namespace fo3notify {struct Queue {void Enqueue(const std::string&) {}};Queue queue;Queue& Notifications(){return queue;}}
+void StartFo3Note(fo3player::Player&,uint32_t,bool){}
 bool Fo3TerminalFocus();
 #define FO3_TERMINAL_HEADLESS
 #include "ui/terminal/fo3-terminal-runtime.inc"

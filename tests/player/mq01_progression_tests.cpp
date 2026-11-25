@@ -186,5 +186,22 @@ static void Original(const char* path){
   assert(repaired.Snapshot().pipboy.quests.at(pursuits).objectives.at(50).displayed);
   std::cout<<"Scientific Pursuits reached the journal listening objective via Rivet City, Doctor Li and the placed holotape\n";
 
+  const auto tape=id("mq03holo21");
+  const auto segments=fo3pipdata::NoteSegments(catalog.pipboy,tape);
+  assert(segments.size()==1&&segments.front().paths.size()==4);
+  const auto& journal=catalog.pipboy.notes.at(tape);
+  auto finished=repaired.PrepareDialogueInfoTransaction(journal.topic,segments.front().info,
+      fo3player::DialogueScriptPhase::End,error,0,fo3player::ScriptProgramCapture::EnteredPrograms);
+  if(!finished)std::cerr<<error<<std::endl;
+  assert(finished&&repaired.CommitScriptTransaction(*finished));
+  assert(repaired.Snapshot().pipboy.quests.at(pursuits).stage==60);
+  assert(repaired.Snapshot().pipboy.quests.at(pursuits).objectives.at(60).displayed);
+  const auto read=fo3dialogue::VariableKey(catalog.pipboy,"MQ03.HoloRead");
+  assert(repaired.Snapshot().pipboy.dialogueVariables.at(read)==1);
+  assert(repaired.Save(save,error));
+  fo3player::Player listened(catalog);assert(listened.Restore(save,error));unlink(save.c_str());
+  assert(listened.Snapshot().pipboy.quests.at(pursuits).stage==60);
+  std::cout<<"Dad's journal end result displayed Vault 112 objective and survived reload\n";
+
 }
 int main(int argc,char** argv){if(argc>1)Original(argv[1]);else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}

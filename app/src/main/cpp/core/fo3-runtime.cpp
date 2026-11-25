@@ -202,6 +202,7 @@ std::string gFo3StartupError;
 bool gFo3PauseOpen=false,gFo3FocusPaused=false,gFo3GameplayInputSuppressed=false;
 bool Fo3VatsFocus();
 bool Fo3PlayerDead();
+void CancelFo3NotePlayback();
 bool Fo3GameplayBlockedOutsideVats(){return Fo3PlayerDead()||gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
 bool Fo3GameplayBlocked(){return Fo3GameplayBlockedOutsideVats()||Fo3VatsFocus();}
 bool Fo3ResidentLegacyStreamActive();
@@ -4677,7 +4678,7 @@ void AbortFo3SceneLoad(const char* reason) {
             gFo3ResidentSavePending=false;
             gFo3Title.saves=fo3title::Saves(fo3title::SaveRoot);
         }
-        gPlayerSession.reset();gFo3SavePose={};gFo3Title.open=true;gFo3Title.neutral=false;
+        CancelFo3NotePlayback();gPlayerSession.reset();gFo3SavePose={};gFo3Title.open=true;gFo3Title.neutral=false;
         gFo3Title.Notice(gFo3StartupError.empty()?"Could not load the selected game. The save has been preserved. Check logcat for the asset or save error.":gFo3StartupError);}
 }
 
@@ -5286,6 +5287,7 @@ bool ProcessQ74TransitionRequest() {
             WeaponShutdown();
             gFo3SavePose={};
         }
+        CancelFo3NotePlayback();
         gPlayerSession = std::move(prepared.playerSession);
         gFo3ResidentSavePending=false;
         const auto& p = gPlayerSession->player;

@@ -23,7 +23,8 @@ void DialogueDone(uint32_t token,bool success);
 DialogueFaceSample DialogueFace(uint32_t token);
 void Radio(uint32_t transmitter, std::shared_ptr<const fo3pipdata::Definitions> definitions,
            const fo3pipdata::SessionState &state);
-void Note(uint32_t note, const std::vector<std::string> &paths);
+uint32_t TakeFinishedNote();
+uint32_t Note(uint32_t note, const std::vector<std::string> &paths);
 void RadioState(const fo3pipdata::SessionState &state);
 void RadioConversation(uint32_t transmitter,uint32_t topic,const fo3pipdata::SessionState& state);
 uint32_t PlayingNote();

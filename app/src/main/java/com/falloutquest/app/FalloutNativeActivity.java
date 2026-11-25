@@ -139,7 +139,7 @@ public final class FalloutNativeActivity extends NativeActivity {
         for (int channel = 0; channel < broadcasts.length; ++channel) {
             Broadcast b = broadcasts[channel];
             if (b.player == player) { b.release(); b.paths.clear(); b.index = 0;
-                if (channel == 1) audioBroadcastDone(1,b.generation);
+                if (channel == 1) audioBroadcastDone(2,b.generation); // failed note, no INFO result
                 refresh(); return true; }
         }
         return false;

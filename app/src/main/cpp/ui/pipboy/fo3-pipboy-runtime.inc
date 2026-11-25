@@ -1,5 +1,59 @@
 // Physical Pip-Boy activation and session integration. Included after the
 // authored body mount; never called from an eye renderer.
+bool PublishFo3DialogueReferences(fo3player::Player&,fo3player::ScriptTransactionPlan&,std::string&);
+struct Fo3PlayingJournal {
+  fo3player::Player* owner=nullptr;
+  uint64_t generation=0;
+  uint32_t note=0,token=0;
+  size_t index=0;
+  std::vector<fo3pipdata::NoteSegment> segments;
+};
+static Fo3PlayingJournal journal;
+static bool gTerminalNoteOwnsPlayback=false;
+static void StartFo3Note(fo3player::Player& player,uint32_t note,bool terminal=false){
+  gTerminalNoteOwnsPlayback=terminal;
+  journal={};
+  auto segments=fo3pipdata::NoteSegments(player.Definitions().pipboy,note);
+  if(segments.empty()){fo3audio::Note(0,{});return;}
+  journal.owner=&player;journal.generation=player.ScriptRuntimeGeneration();
+  journal.note=note;journal.segments=std::move(segments);
+  journal.token=fo3audio::Note(note,journal.segments.front().paths);
+}
+static void AdvanceFo3Note(fo3player::Player& player){
+  if(!journal.owner)return;
+  if(journal.owner!=&player||journal.generation!=player.ScriptRuntimeGeneration()||Fo3PlayerDead()){
+    fo3audio::Note(0,{});journal={};return;
+  }
+  if(Fo3ResidentFrameBlocked())return;
+  const auto token=fo3audio::TakeFinishedNote();
+  if(!token||token!=journal.token){
+    if(fo3audio::PlayingNote()!=journal.note)journal={};
+    return;
+  }
+  const auto& defs=player.Definitions().pipboy;
+  const auto info=journal.segments[journal.index].info;
+  if(info){
+    const auto& note=defs.notes.at(journal.note);
+    std::string error;
+    auto plan=player.PrepareDialogueInfoTransaction(note.topic,info,fo3player::DialogueScriptPhase::End,
+        error,0,fo3player::ScriptProgramCapture::EnteredPrograms);
+    bool ok=false;
+    if(plan){
+      if(!plan->HasReferenceChanges())ok=player.CommitScriptTransaction(*plan);
+      else if(PublishFo3DialogueReferences(player,*plan,error))ok=true;
+      else if(auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan))){
+        gFo3ResidentGameplayTicket=ticket;ok=true;
+      }
+    }
+    if(!ok){Q6H_LOGW("NOTE result rejected info=%08X %s",info,error.c_str());journal={};return;}
+    FlushFo3PlayerState();
+  }
+  if(++journal.index==journal.segments.size()){journal={};return;}
+  journal.token=fo3audio::Note(journal.note,journal.segments[journal.index].paths);
+}
+void CancelFo3NotePlayback(){
+  fo3audio::Note(0,{});journal={};gPipMenu.playingNote=0;
+}
 bool gMapTakingDamage=false;
 float gMapPreviousDamage=-1;
 const void* gMapDamageOwner=nullptr;
@@ -326,15 +380,16 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
       lastRadioRevision = session->player.Revision();
       fo3audio::RadioState(session->player.Snapshot().pipboy);
     }
-    if (lastNote && gPipMenu.playingNote == lastNote &&
-        !fo3audio::PlayingNote()) {
-      gPipMenu.playingNote = 0;
-      gPipMenu.dirty = true;
+    if(lastNote!=gPipMenu.playingNote){
+      if(gPipMenu.playingNote)StartFo3Note(session->player,gPipMenu.playingNote);
+      else if(!gTerminalNoteOwnsPlayback)CancelFo3NotePlayback();
     }
-    if (lastNote != gPipMenu.playingNote) {
-      lastNote = gPipMenu.playingNote;
-      fo3audio::Note(lastNote, fo3pipdata::NoteAudio(defs, lastNote));
+    AdvanceFo3Note(session->player);
+    if(gPipMenu.playingNote&&
+        (gTerminalNoteOwnsPlayback||fo3audio::PlayingNote()!=gPipMenu.playingNote)){
+      gPipMenu.playingNote=0;gPipMenu.dirty=true;
     }
+    lastNote=gPipMenu.playingNote;
   }
   gPipUpdateUs = fqopaque::Micros(started);
 }
