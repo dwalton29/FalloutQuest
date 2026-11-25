@@ -12,6 +12,7 @@
 #include <zlib.h>
 #include "dialogue/fo3-dialogue-results.h"
 #include "scripting/fo3-script-compile-cache.h"
+#include "scripting/fo3-result-bytecode.h"
 
 static void Parsing() {
   fo3pipdata::Script source;
@@ -422,6 +423,65 @@ static void PersistentReferenceState() {
   assert(!p.CanPickup(200)&&p.CanLootContainer(300));
   std::remove(path.c_str());
 }
+static void ResultBytecodeBranches(){
+  auto catalog=Catalog();
+  catalog.globals[400]=0;catalog.pipboy.formNames["testglobal"]=400;
+  fo3player::Player player(catalog);std::string error;
+  fo3pipdata::ResultScript body;
+  body.references={20,400};
+  auto& bytes=body.compiled;
+  auto gate=[&](uint8_t op,uint8_t limit){
+    const std::vector<uint8_t> data{op,0,19,0,1,0,15,0,' ','X',0x3a,0x10,5,0,1,0,'r',1,0,' ',limit,' ','<'};
+    bytes.insert(bytes.end(),data.begin(),data.end());
+  };
+  auto assign=[&](uint8_t digit){
+    bytes.insert(bytes.end(),{0x15,0,7,0,'G',2,0,2,0,' ',digit});
+  };
+  gate(0x16,'1');assign('3');gate(0x18,'5');assign('4');
+  bytes.insert(bytes.end(),{0x17,0,2,0,1,0});assign('7');
+  bytes.insert(bytes.end(),{0x19,0,0,0});
+  float value=0;
+  for(unsigned stage:{0u,2u,6u}){
+    auto state=catalog;state.pipboy.quests[20].stages[stage]={};
+    fo3player::Player p(std::move(state));
+    assert(p.ExecuteQuestStage(20,stage,error)&&p.ExecuteDialogueResult(body,error));
+    assert(p.GlobalValue(400,value)&&value==(stage==0?3:stage==2?4:7));
+  }
+  auto malformed=body;malformed.compiled.back()=1;
+  assert(!player.ExecuteDialogueResult(malformed,error)&&player.GlobalValue(400,value)&&value==0);
+  // One skipped logical line includes both the receiver prefix and opcode.
+  bytes.clear();gate(0x16,'0');
+  bytes.insert(bytes.end(),{0x1c,0,2,0,0x22,0x10,2,0,0,0,0x19,0,0,0});
+  std::vector<fo3dialogue::Command> commands;
+  assert(fo3dialogue::CompileResult(catalog.pipboy,body,commands,error));
+  assert(commands.size()==3&&commands[1].type==fo3dialogue::CommandType::Disable&&commands[1].form==400);
+  assert(player.ExecuteDialogueResult(body,error));
+}
+static void CompareOriginalResultPrograms(const fo3pipdata::Definitions& defs){
+  unsigned decoded=0,total=0;
+  auto normalized=[](std::string expression){
+    // Supported expressions are a single literal or a single comparison.
+    expression.erase(std::remove_if(expression.begin(),expression.end(),[](unsigned char c){
+      return std::isspace(c)||c=='('||c==')';
+    }),expression.end());return expression;
+  };
+  for(const auto& quest:defs.quests)for(const auto& stage:quest.second.stages)for(const auto& item:stage.second.items){
+    if(item.result.compiled.empty())continue;
+    ++total;
+    std::vector<fo3dialogue::Command> bytes,source;
+    if(!fo3script::DecodeResult(defs,item.result,bytes,nullptr,quest.first))continue;
+    ++decoded;
+    auto text=item.result;text.compiled.clear();std::string error;
+    assert(fo3dialogue::CompileResult(defs,text,source,error,quest.first,quest.second.script));
+    assert(source.size()==bytes.size());
+    for(size_t i=0;i<bytes.size();++i){
+      const auto& a=bytes[i];const auto& b=source[i];
+      assert(a.type==b.type&&a.form==b.form&&a.index==b.index&&a.variable==b.variable&&a.value==b.value);
+      assert(normalized(a.expression)==normalized(b.expression));
+    }
+  }
+  std::cout<<decoded<<" / "<<total<<" original quest result programs matched source commands and operands\n";
+}
 // Replay original MQ01 result bytes with SCTX removed. The other quest's
 // stage is controlled independently so both outcomes use the same program.
 static void OriginalStageBytecode(const fo3player::Catalog& original){
@@ -471,6 +531,7 @@ static void OriginalStageBytecode(const fo3player::Catalog& original){
 }
 static void OriginalBomb(const char* path) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  CompareOriginalResultPrograms(c.pipboy);
   OriginalStageBytecode(c);
   assert(c.eventBaseScripts.at(0x3bc8)==0x78cb3);
   assert(c.enableParents.size()==5502);
@@ -677,6 +738,7 @@ static void CompiledProgramsRemainLive() {
   std::cout<<"Bounded compiled programs preserve live conditions, catalogue identity, evidence limits and atomic failure\n";
 }
 int main(int argc,char** argv){
+  ResultBytecodeBranches();
   CompiledProgramsRemainLive();
   Parsing();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);

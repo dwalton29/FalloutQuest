@@ -64,7 +64,7 @@ bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
 bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScript& script,std::vector<Command>& out,std::string& error,uint32_t owner,uint32_t scriptId,CommandFormCapture* forms) {
   out.clear();error.clear();
   if(forms)forms->Reset();
-  if(fo3script::DecodeResult(d,script,out,forms))return true;
+  if(fo3script::DecodeResult(d,script,out,forms,owner))return true;
   if(forms)forms->Reset();
   if(script.source.empty()&&!script.compiled.empty()){error="compiled-only result";return false;}
   auto lower=[](std::string s){for(auto& c:s)c=char(std::tolower((unsigned char)c));return s;};
