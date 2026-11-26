@@ -58,6 +58,16 @@ static void Dispatch() {
   p.PumpQuestGameMode(0.10);p.PumpQuestGameMode(0.16);
   assert(p.Snapshot().pipboy.quests.at(20).stage==10);
 }
+static void UnknownStageInAuthoredEvent() {
+  auto c=Catalog();
+  auto& script=c.pipboy.scripts.at(102);
+  script.source="scn NPC\nBegin OnDeath\nSetStage ExampleQuest 99\nRewardKarma 3\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(script);
+  fo3player::Player player(std::move(c));std::string error;
+  const auto karma=player.Snapshot().karma;
+  assert(player.DispatchReferenceEvent(100,"OnDeath",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(player.Snapshot().karma==karma+3&&!player.Snapshot().pipboy.quests.count(20));
+}
 static void EquipmentInstanceEvents(){
   auto c=Catalog();
   c.items[40].formId=40;c.items[40].kind=fo3player::ItemKind::Armour;c.items[40].bipedMask=4;
@@ -929,6 +939,7 @@ int main(int argc,char** argv){
   ReferenceLocalBranches();
   AdditionalQuestPoints();
   CompiledProgramsRemainLive();
+  UnknownStageInAuthoredEvent();
   Parsing();Resurrection();DeathEventOrdering();GoreSettingAndBlastPresentation();ScriptedHealthDamage();EssentialKnockout();EquipmentInstanceEvents();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);

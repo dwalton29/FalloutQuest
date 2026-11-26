@@ -432,6 +432,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(forms.exhausted)error="script provenance byte limit exceeded";
     return false;
   }
+  const bool authoredProgram=origin.kind!=ScriptProgramKind::UnboundResult;
   const auto& commands=compiled->commands;
   using C=fo3dialogue::CommandType;
   if(scriptTrace_)for(const auto& command:commands)if(command.type==C::Global){
@@ -781,7 +782,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       const auto quest=catalog_->pipboy.quests.find(c.form);
       // A missing stage on a valid QUST has no result to run. Continue the
       // calling script so its combat, timer and variable updates still commit.
-      if(quest==catalog_->pipboy.quests.end()||quest->second.stages.count(uint16_t(c.index)))
+      if(!authoredProgram||quest==catalog_->pipboy.quests.end()||quest->second.stages.count(uint16_t(c.index)))
         ok=RunQuestStage(c.form,uint16_t(c.index),depth+1,budget,error);
       break;
     }
