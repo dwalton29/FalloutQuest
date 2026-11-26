@@ -2,6 +2,7 @@
 #include "scripting/fo3-result-bytecode.h"
 #include "fo3-dialogue-results.h"
 #include "player/fo3-actor-values.h"
+#include "npc/fo3-npc-residency.h"
 #include "fo3-dialogue-selection.h"
 #include <sstream>
 #include <cctype>

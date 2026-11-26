@@ -61,11 +61,22 @@ static void Original(const char* path,const std::string& meshRoot){
   const auto faction=c.pipboy.formNames.at("mq01brotherhooddcfaction");
   const auto sarah=c.pipboy.formNames.at("mq01sarahref"),mutant=c.pipboy.formNames.at("mq01citysupermutant01ref");
   assert(player.ActorFactionRank(sarah,faction)==-1);
-  for(int i=0;i<8;++i)player.PumpReferenceGameMode(.25,{trigger});
+  // The ambush timer must survive leaving the volume, a save/reload and a
+  // missing render object. No trigger identity is injected into the scheduler.
+  const float escapedX=placed.x+3200;
+  player.SetScriptPlayerLocation(escapedX,placed.y,placed.z,placed.cell,placed.world);
+  const auto left=player.ScriptTriggerChanges();
+  assert(std::find(left.begin(),left.end(),std::make_pair(trigger,false))!=left.end());
+  player.AcknowledgeScriptTrigger(trigger,false);
+  auto tickScene=[](fo3player::Player& p){
+    std::vector<uint32_t> refs;p.AppendResidentGameModeReferences(refs);
+    p.PumpWorldAwareGameMode(.25,refs,[&](auto plan){return p.CommitScriptTransaction(*plan);});
+  };
+  for(int i=0;i<8;++i)tickScene(player);
   auto save="/tmp/fq-mq01-scene-"+std::to_string(getpid());Check(player.Save(save,error),error);
-  fo3player::Player resumed(c);Check(resumed.Restore(save,error),error);resumed.SetScriptPlayerLocation(placed.x,placed.y,placed.z,placed.cell,placed.world);
+  fo3player::Player resumed(c);Check(resumed.Restore(save,error),error);resumed.SetScriptPlayerLocation(escapedX,placed.y,placed.z,placed.cell,placed.world);
   assert(resumed.Snapshot().pipboy.quests.at(ld).stage==45);
-  for(int i=0;i<16;++i)resumed.PumpReferenceGameMode(.25,{trigger});
+  for(int i=0;i<16;++i)tickScene(resumed);
   assert(resumed.Snapshot().pipboy.quests.at(ld).stage==50&&resumed.Snapshot().pipboy.quests.at(mq).stage==50);
   for(const auto* name:{"mq01sarahref","mq01vargasref","mq01reddinref","mq01colvinref"}){
     const auto actor=c.pipboy.formNames.at(name);float aggression=-1;assert(resumed.ActorFactionRank(actor,faction)==0&&resumed.ActorAIValue(actor,0,aggression)&&aggression==1);
@@ -212,12 +223,13 @@ static void Original(const char* path,const std::string& meshRoot){
     const auto bus=c.pipboy.formNames.at("gnrbus01"),otherBus=c.pipboy.formNames.at("gnrbus02");
     const auto mark=c.pipboy.targets.at(c.pipboy.formNames.at("mq01behemotharrivemarker"));
     battle.SetScriptPlayerLocation(mark.x+1200,mark.y,mark.z,mark.cell,mark.world);
-    Check(battle.RealizeActor(behemoth),"realize plaza Behemoth");
+    assert(battle.Snapshot().actors.count(behemoth));
     const auto step=fo3dialogue::VariableKey(c.pipboy,"MQ01BehemothRef.entryStage");assert(step);
     std::vector<std::pair<uint32_t,uint32_t>> explosions;
     for(unsigned tick=0;tick<1200;++tick){
       battle.SetScriptRuntimeClock(200.+tick*.1,.1);
-      battle.PumpWorldAwareGameMode(.1,{behemoth},[&](auto plan){return battle.CommitScriptTransaction(*plan);});
+      std::vector<uint32_t> refs;battle.AppendResidentGameModeReferences(refs);
+      battle.PumpWorldAwareGameMode(.1,refs,[&](auto plan){return battle.CommitScriptTransaction(*plan);});
       fo3script::Action action;
       while(battle.PollScriptAction(action)){
         if(action.kind==fo3script::ActionKind::Explosion)explosions.emplace_back(action.reference,action.form);

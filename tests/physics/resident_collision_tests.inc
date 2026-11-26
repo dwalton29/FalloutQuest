@@ -124,7 +124,6 @@ static void privateCollisionTests(const Fo3WorldPlacement& a,const Fo3WorldPlace
         {Fo3CollisionSnapshotOwner owner(token);SetFo3CollectedCollisionRefs({a.refFormId});
          assert(!CanExchangeFo3CollisionMutationSnapshot(token)&&!ExchangeFo3CollisionMutationSnapshot(token));}
         SetFo3CollectedCollisionRefs({});
-        if(exterior)continue; // Animated door collision currently belongs to interiors.
         publish(prepare({a,door},exterior,124));
         assert(SetFo3DoorCollisionTransformQ2400(door.refFormId,nullptr,false));
         assert(PrepareFo3ResidentCollisionSnapshot({door},0,0,0,0,0,70,
@@ -132,7 +131,7 @@ static void privateCollisionTests(const Fo3WorldPlacement& a,const Fo3WorldPlace
         {Fo3CollisionSnapshotOwner owner(token);assert(ExchangeFo3CollisionMutationSnapshot(token));emptyQueries(exterior);
          assert(ExchangeFo3CollisionMutationSnapshot(token));}
         assert(PrepareFo3ResidentCollisionSnapshot({door},0,0,0,0,0,70,
-            CaptureFo3CollisionMutationState(),cancelled,&token,false,124));
+            CaptureFo3CollisionMutationState(),cancelled,&token,exterior,124));
         {Fo3CollisionSnapshotOwner owner(token);assert(SetFo3DoorCollisionTransformQ2400(door.refFormId,nullptr,true));
          assert(!CanExchangeFo3CollisionMutationSnapshot(token)&&!ExchangeFo3CollisionMutationSnapshot(token));}
     }

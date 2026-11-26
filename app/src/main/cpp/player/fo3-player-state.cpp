@@ -832,6 +832,11 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
         next.actorTriggerVolumes[actor->second].push_back(volume.first);
     }
     const auto placed=next.pipboy.targets.find(volume.first);
+    if(placed!=next.pipboy.targets.end()&&std::any_of(program->second.blocks.begin(),program->second.blocks.end(),
+          [](const auto& block){return block.event=="gamemode";})){
+      const auto& p=placed->second;
+      next.gameModeTriggersBySpace[p.world?p.world:p.cell].push_back(volume.first);
+    }
     if(unfiltered&&placed!=next.pipboy.targets.end()){
       const auto& p=placed->second;
       next.unfilteredActorTriggersBySpace[p.world?p.world:p.cell].push_back(volume.first);
@@ -849,6 +854,13 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
     const auto& placement=entry.second;
     if((placement.flags&0x20u)||!next.weapons.actors.count(placement.base))continue;
     next.pipboy.targets.emplace(entry.first,placement);
+    const auto association=next.eventBaseScripts.find(placement.base);
+    if(association==next.eventBaseScripts.end())continue;
+    const auto program=next.eventPrograms.find(association->second);
+    if(program!=next.eventPrograms.end()&&program->second.error.empty()&&
+       std::any_of(program->second.blocks.begin(),program->second.blocks.end(),
+                   [](const auto& block){return block.event=="gamemode";}))
+      next.gameModeActors.push_back(entry.first);
   }
   next.fingerprint = fingerprint;
   if(settings.count("fKarmaModStealing")&&std::isfinite(settings.at("fKarmaModStealing")))next.theftKarma=settings.at("fKarmaModStealing");

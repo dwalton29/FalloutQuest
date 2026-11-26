@@ -684,8 +684,8 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       if(!Q240PackageActorTarget(actor,package.target.value,anchor))continue;
       if(package.location.valid&&package.location.type==0&&package.location.value!=package.target.value){
         const auto placed=definitions.targets.find(package.location.value);
-        if(placed==definitions.targets.end()||placed->second.cell!=gCurrentCellFormId||
-            placed->second.world!=gExteriorWorldspaceQ1890)continue;
+        if(placed==definitions.targets.end()||placed->second.world!=gExteriorWorldspaceQ1890||
+            (!placed->second.world&&placed->second.cell!=gCurrentCellFormId))continue;
         anchor={placed->second.x,placed->second.y,placed->second.z};
       }
 #endif
@@ -1420,18 +1420,29 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
   if(!Q240PackageActorTarget(actor,p.target.value,listener)){
     Q240PackageRouteFailed(actor,now,"Dialogue partner no longer resident");return;
   }
+  if(p.target.value==fo3player::PlayerRef){
+    fo3pipdata::Location location;float height=0;
+    if(gPlayerSession->player.ScriptReferenceLocation(p.target.value,location,&height))
+      listener={location.x,location.y,height};
+  }
   const float talkingDistance=p.target.radius>0?float(p.target.radius):128.f; // authored PTDT distance, then VR fallback
   const auto here=Q240GamePosition(actor);
   const bool placed=p.location.valid&&p.location.type==0&&p.location.value!=p.target.value;
-  const auto& destination=placed?anchor:listener;
-  const float arrival=placed?float(std::max(8,p.location.radius)):talkingDistance;
-  if(Q240PlanarDistance(here,destination)<=arrival){
+  // PLD2 bounds the listener's meeting area. Once they enter it the speaker
+  // can close the remaining distance to PTDT, even from a zero-radius marker.
+  const auto distance=[](const auto& a,const auto& b){
+    return std::hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+  };
+  const bool listenerInArea=!p.location2.valid||distance(anchor,listener)<=std::max(8,p.location2.radius);
+  const bool waitAtMarker=placed&&(!p.location2.valid||!listenerInArea);
+  const auto& destination=waitAtMarker?anchor:listener;
+  const float arrival=waitAtMarker?float(std::max(8,p.location.radius)):talkingDistance;
+  if(distance(here,destination)<=arrival){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
     actor.runtime.navigationDoor=0;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Conversation;
     actor.runtime.procedure=fo3npc::Procedure::Waiting;
-    if(now<actor.aiRepathAt||Q240PlanarDistance(here,listener)>talkingDistance||
-       (p.location2.valid&&Q240PlanarDistance(anchor,listener)>std::max(8,p.location2.radius)))return;
+    if(now<actor.aiRepathAt||!listenerInArea||distance(here,listener)>talkingDistance)return;
 #ifdef FO3_NPC_CHAT_REQUEST
     if(FO3_NPC_CHAT_REQUEST(actor.source.refFormId,p.target.value,now)){
       actor.aiRepathAt=now+2.;
@@ -1443,7 +1454,7 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
     actor.aiRepathAt=now+2.;return;
   }
   if(now>=actor.aiRepathAt&&(actor.aiPathIndex>=actor.aiPathGame.size()||
-      Q240PlanarDistance(actor.runtime.pathDestinationGame,destination)>32.f)){
+      distance(actor.runtime.pathDestinationGame,destination)>32.f)){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
     actor.runtime.navigationDoor=0;actor.runtime.pathDestinationGame=destination;
     actor.aiRepathAt=now+.75;
@@ -1616,6 +1627,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     state.packageEndIdle=0;state.packageEndIdleUntil=-1;
   }
   const auto* package=Q280EvaluatePackage(actor,now,packageId,anchor,radius);
+  state.packageWeaponDrawn=package&&(package->flags&0x00800000u);
   state.packageSneak=package&&(package->flags&0x20000u);
   const auto previousDoor=state.xtelDoor;
   state.xtelDoor=state.evaluatedXtelDoor;state.xtelCell=state.evaluatedXtelCell;

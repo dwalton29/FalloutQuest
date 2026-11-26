@@ -2117,8 +2117,7 @@ private:
                             q230Statics.revision=revision;q230Statics.storage=gObjects.data();q230Statics.count=gObjects.size();
                         }
                         scriptedResidents=q230Statics.ids;
-                        for(const auto& actor:gQ230NpcActors)
-                            if(!actor.runtime.offScene&&actor.source.refFormId&&scriptPlayer.HasReferenceEvent(actor.source.refFormId,"GameMode"))scriptedResidents.push_back(actor.source.refFormId);
+                        scriptPlayer.AppendResidentGameModeReferences(scriptedResidents);
                         scriptActorResidence=gQ230NpcResidenceRevision;
                         scriptResidenceElapsed=0;q230ScanUs=fqopaque::Micros(q230ScanStart);
                     }

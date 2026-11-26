@@ -45,7 +45,7 @@ static void Q230RenderWeapon(Q230ActorVisual& actor,bool alpha) {
   const auto& player=gPlayerSession->player;
   const auto state=player.Snapshot().actors.find(actor.source.refFormId);
   const bool alert=state!=player.Snapshot().actors.end()&&state->second.alert&&!state->second.dead;
-  if(!alert&&actor.runtime.activity!=fo3npc::Activity::Combat)return;
+  if(!alert&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.PackageWeaponReady())return;
   const auto* owned=player.ActorWeapon(actor.source.refFormId);
   if(!owned||(!alert&&actor.runtime.equippedWeapon!=owned->id))return;
   const auto prepared=actor.combatWeapons.find(owned->formId);if(prepared==actor.combatWeapons.end())return;
@@ -99,7 +99,11 @@ static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& b
   }
   for(auto& target:gQ230NpcActors)if(target.source.refFormId==reference&&!target.runtime.offScene&&target.runtime.Alive()){
     Q230UpdateActor(target);base=target.source.baseFormId;
-    return Q230LiveBone(target,target.chestBone,point)||Q230LiveBone(target,target.headBone,point);
+    if(Q230LiveBone(target,target.chestBone,point)||Q230LiveBone(target,target.headBone,point))return true;
+    std::array<float,3> lo{},hi{};
+    if(!Q230LiveBounds(target,lo,hi))return false;
+    for(size_t axis=0;axis<3;++axis)point[axis]=(lo[axis]+hi[axis])*.5f;
+    return std::all_of(point.begin(),point.end(),[](float value){return std::isfinite(value);});
   }
   return false;
 }
@@ -568,7 +572,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     actor.aiLastUpdate=now;actor.lastFrame=UINT64_MAX;
   }
   const auto alert=p.Snapshot().actors.find(actor.source.refFormId);
-  if(alert!=p.Snapshot().actors.end()&&alert->second.alert&&!p.ActorWeapon(actor.source.refFormId))
+  if((alert!=p.Snapshot().actors.end()&&alert->second.alert&&!p.ActorWeapon(actor.source.refFormId))||
+     (s.PackageWeaponReady()&&!s.combatWeaponForm&&now>=s.nextThink))
     Q230SelectWeapon(actor);
   if(p.Restrained(actor.source.refFormId)){s.speed=0;s.animation=fo3npc::Animation::Idle;return;}
   const bool reloadAdvanced=Q230AdvanceReload(actor,now);
@@ -718,7 +723,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
 #endif
   if(visible){
     s.lastThreat=target;s.lastSeen=now;Q230RetireSearch(actor);
-  }else target=s.lastThreat;
+  }else {target=s.lastThreat;s.aimPitch=0;}
   const bool coverGrace=s.combatMovement==fo3npc::CombatAction::Cover&&
     hiddenFor<fo3sneak::Setting(settings,"fCombatSearchTargetHiddenMaxTime");
   if(!valid||(!visible&&searchExpired&&!(s.moraleFlee&&now<s.fleeUntil)&&!coverGrace)){
@@ -775,7 +780,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   };
   const float dx=target[0]-s.position[0],dz=target[2]-s.position[2],distance=std::sqrt(dx*dx+dz*dz)*FO3_UNITS_PER_METRE;
   std::array<float,3> aimOrigin{};
-  if(Q230LiveBone(actor,actor.chestBone,aimOrigin)){
+  if(visible&&Q230LiveBone(actor,actor.chestBone,aimOrigin)){
     const float ax=target[0]-aimOrigin[0],az=target[2]-aimOrigin[2];
     s.aimPitch=std::atan2(target[1]-aimOrigin[1],std::hypot(ax,az));
   }else s.aimPitch=0;

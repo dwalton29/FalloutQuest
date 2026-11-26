@@ -15,7 +15,7 @@ bool partialCover=false,captureCoverRays=false;std::vector<float> coverRayOrigin
 bool blocked=false,loading=false,blockSecondSightRay=false;int sightRayCount=0,dialogueEnds=0,shots=0;double emittedDamage=0;
 bool IsFo3LoadingVisible(){return loading;}
 void Q230UpdateActor(Q230ActorVisual&){}
-bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& p){p=actor.runtime.position;p[1]+=bone==actor.headBone?1.7f:1.f;return true;}
+bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& p){if(bone<0)return false;p=actor.runtime.position;p[1]+=bone==actor.headBone?1.7f:1.f;return true;}
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi){
   lo=hi=actor.runtime.position;hi[1]+=1.8f;return true;
 }
@@ -726,13 +726,24 @@ int main(int argc,char** argv){
     blocked=true;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.runtime.nextPath=0;
     assert(!Q230TacticalRoute(actor,threat,0,INFINITY,false,false,2)); // A firing endpoint needs sight.
   }
+  {
+    Prepare();auto catalog=gPlayerSession->player.Definitions();
+    catalog.pipboy.packages.at(50).flags|=0x00800000u;
+    gPlayerSession=std::make_unique<Session>(std::move(catalog));
+    auto& guard=gQ230NpcActors.front();guard.runtime.EndDialogue();blocked=true;
+    Q240UpdateNpcPackage(guard,0);Q230SimulateActor(guard,1);
+    assert(guard.runtime.PackageWeaponReady()&&guard.runtime.equippedWeapon&&shots==0);
+    guard.chestBone=guard.headBone=-1;
+    std::array<float,3> aim{};uint32_t base=0;
+    assert(Q230Target(42,aim,base)&&base==43&&aim[1]>guard.runtime.position[1]);
+  }
   Prepare();auto& a=gQ230NpcActors[0];blocked=true;Q230SimulateActor(a,1);assert(a.runtime.activity==fo3npc::Activity::Dialogue&&shots==0);
   blocked=false;Q230SimulateActor(a,1.3);assert(a.runtime.activity==fo3npc::Activity::Combat&&dialogueEnds==1&&a.runtime.equippedWeapon);
   assert(a.runtime.reloadUntil>0&&!a.runtime.pendingAttack);Q230SimulateActor(a,1.4);assert(shots==0);
   Q230SimulateActor(a,1.9);assert(a.runtime.reloadUntil==0&&gPlayerSession->player.ActorWeapon(42)->loadedRounds==3);
   Q230SimulateActor(a,2);assert(a.runtime.pendingAttack);Q230SimulateActor(a,2.01);assert(shots==1&&emittedDamage==10&&gPlayerSession->player.Health()==90);
   Q230SimulateActor(a,2.1);assert(shots==1);Q230SimulateActor(a,2.3);Q230SimulateActor(a,2.31);assert(shots==2);
-  blocked=true;Q230SimulateActor(a,3);assert(a.runtime.action==fo3npc::CombatAction::Search&&!a.aiPathGame.empty());
+  a.runtime.aimPitch=-1.25f;blocked=true;Q230SimulateActor(a,3);assert(a.runtime.aimPitch==0&&a.runtime.action==fo3npc::CombatAction::Search&&!a.aiPathGame.empty());
   const auto position=a.runtime.position;Q230SimulateActor(a,19);assert(a.runtime.activity==fo3npc::Activity::Package&&a.runtime.package==50&&a.runtime.position==position);
   Q230PersistActor(a);auto saved=gPlayerSession->player.Snapshot().actors.at(42);a.stateRestored=false;a.runtime.position={0,0,0};loading=true;Q230SimulateActor(a,20);loading=false;blocked=true;Q230SimulateActor(a,21);assert(Q240GamePosition(a)==saved.position);
   auto c=gPlayerSession->player.Definitions();c.pipboy.dialogueActors[43].aiData[1]=0;gPlayerSession=std::make_unique<Session>(c);a.stateRestored=false;blocked=false;a.runtime.BeginCombat(0x14);a.runtime.nextPath=0;

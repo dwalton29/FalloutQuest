@@ -376,7 +376,8 @@ struct Catalog {
   std::unordered_map<uint32_t,std::vector<uint32_t>> actorTriggerVolumes;
   // Unfiltered handlers can inspect GetActionRef inside their bodies.
   // The FormID is the owning worldspace outdoors and CELL indoors.
-  std::unordered_map<uint32_t,std::vector<uint32_t>> unfilteredActorTriggersBySpace;
+  std::unordered_map<uint32_t,std::vector<uint32_t>> unfilteredActorTriggersBySpace,gameModeTriggersBySpace;
+  std::vector<uint32_t> gameModeActors;
   std::unordered_set<uint32_t> doorBases, activatorBases, authoredCorpseBases;
   bool AuthoredCorpse(uint32_t reference) const {
     const auto actor=actorPlacements.find(reference);
@@ -702,6 +703,7 @@ public:
   // prepared plan is handed to the resident-world coordinator. The caller
   // must own it until committed, rolled back or cancelled. Never run a second
   // evaluation to capture provenance.
+  void AppendResidentGameModeReferences(std::vector<uint32_t>& refs)const;
   bool PumpWorldAwareGameMode(double realSeconds,const std::vector<uint32_t>& resident,
       const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode=false);
   void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world,float triggerRadius=0,const std::array<float,3>* actorOrigin=nullptr);

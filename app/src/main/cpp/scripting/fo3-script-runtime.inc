@@ -1868,6 +1868,31 @@ bool Player::SourceEventCompileReady(uint32_t script,const char* event,uint32_t 
   }
   return true;
 }
+void Player::AppendResidentGameModeReferences(std::vector<uint32_t>& refs)const {
+  // Invisible trigger volumes can own timers after the player leaves them.
+  // Use the physical scene window, independent of drawables and occupancy.
+  if(!scriptPlayerPositionKnown_)return;
+  const auto triggers=catalog_->gameModeTriggersBySpace.find(scriptPlayerWorld_?scriptPlayerWorld_:scriptPlayerCell_);
+  const auto world=catalog_->pipboy.worlds.find(scriptPlayerWorld_);
+  const bool small=world!=catalog_->pipboy.worlds.end()&&(world->second.flags&1);
+  const auto inScene=[&](uint32_t cell,uint32_t wrld,const std::array<float,3>& position){
+    return fo3npc::Resident(scriptPlayerCell_,scriptPlayerWorld_,small,scriptPlayerPosition_[0],
+                            scriptPlayerPosition_[1],cell,wrld,position);
+  };
+  if(triggers!=catalog_->gameModeTriggersBySpace.end())for(uint32_t ref:triggers->second){
+    const auto& p=catalog_->pipboy.targets.at(ref);
+    if(inScene(p.cell,p.world,{p.x,p.y,p.z}))refs.push_back(ref);
+  }
+  // A newly enabled actor's local script shares residency with its arrival
+  // worker. Loading its rig or textures cannot hold the encounter's clock.
+  for(uint32_t ref:catalog_->gameModeActors){
+    const auto saved=state_.actors.find(ref);
+    if(saved==state_.actors.end())continue;
+    const auto& actor=saved->second;
+    if((!actor.dead||actor.corpse||catalog_->AuthoredCorpse(ref))&&inScene(actor.cell,actor.world,actor.position))
+      refs.push_back(ref);
+  }
+}
 bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& resident,
     const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode) {
   if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
@@ -1955,7 +1980,8 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
   }
   if(menuMode||!referencesDue)return false;
   scriptElapsedSeconds_=referenceElapsed;
-  auto refs=resident;std::sort(refs.begin(),refs.end());
+  auto refs=resident;
+  std::sort(refs.begin(),refs.end());
   refs.erase(std::unique(refs.begin(),refs.end()),refs.end());
   for(const auto id:refs){
     if(!HasReferenceEvent(id,"GameMode"))continue;

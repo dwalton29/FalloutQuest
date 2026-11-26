@@ -31,7 +31,7 @@ bool Event(uint32_t reference,const char* event,uint32_t activator,bool){
 #include "npc/fo3-npc-door-runtime.inc"
 static Q230ActorVisual Prepare(bool locked=false,bool npcKey=false){
   gExteriorWorldspaceQ1890=0;
-  auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();c.references[42].base=43;c.references[20].base=200;c.references[20].locked=locked;c.references[20].key=300;
+  auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();c.references[42].base=43;c.references[20].base=200;c.pipboy.doorBases.insert(200);c.references[20].locked=locked;c.references[20].key=300;
   fo3player::Item key;key.formId=300;key.kind=fo3player::ItemKind::Key;c.items[300]=key;
   c.actorInventories[43].entries.clear();if(npcKey)c.actorInventories[43].entries.push_back({300,0,1,1,1,false});
   gPlayerSession=std::make_unique<Session>(std::move(c));assert(gPlayerSession->player.PrepareActorInventory(42));
@@ -113,6 +113,12 @@ int main(int argc,char** argv){
   a=Prepare();hasChest=false;stepBlocked=false;before=a.runtime.position;
   Q240AdvancePath(a,.014f,1);assert(a.runtime.position!=before); // Creature bounds, no humanoid chest.
   stepBlocked=true;assert(Q230PathBlocked(a,1,0,0,.009f,1)&&toggles==1); // Sub-centimetre movement still finds the door.
+  a=Prepare();gExteriorWorldspaceQ1890=2;a.runtime.speed=2;
+  before=a.runtime.position;Q240AdvancePath(a,.1f,1);
+  assert(toggles==1&&a.runtime.navigationDoor==20&&a.runtime.position==before);
+  stepBlocked=false;Q240AdvancePath(a,.1f,2);assert(a.runtime.position==before&&toggles==1);
+  gQ2400InteriorDoors[20].q2401Moving=false;Q240AdvancePath(a,.1f,3);
+  assert(a.runtime.position!=before&&toggles==1);
   a=Prepare();windowedDoor=true;assert(Q230PathBlocked(a,1,0,0,.009f,1)&&toggles==1);
   if(argc>1)OriginalDoors(argv[1]);
   std::cout<<"NPC local door animation wait, collision, keys, script rejection and XTEL isolation passed\n";

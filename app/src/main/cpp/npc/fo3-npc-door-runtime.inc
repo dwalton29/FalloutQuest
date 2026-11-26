@@ -50,7 +50,7 @@ static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,fl
     pending=0;
   }
   const double now=std::max(0.,actor.aiLastUpdate);
-  const bool reach=!gExteriorWorldspaceQ1890&&now>=actor.runtime.nextDoorProbe;
+  const bool reach=now>=actor.runtime.nextDoorProbe;
   if(reach)actor.runtime.nextDoorProbe=now+.25;
   // Look ahead to arm's reach along the current route. The nearest surface
   // still decides access, and a wall outside the step does not stop movement.
@@ -60,18 +60,27 @@ static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,fl
   const bool obstructed=TraceFo3WorldSurface(origin[0],origin[1],origin[2],dx,dy,dz,
       distance,actor.source.refFormId,0,&hit);
   const bool blocked=obstructed&&hit.distance<stepTrace;
-  if(gExteriorWorldspaceQ1890||now<actor.runtime.nextDoorQuery)return blocked;
-  if((!hit.reference||!Q2400FindSwingDoorObject(hit.reference))&&reach){
+  if(now<actor.runtime.nextDoorQuery)return blocked;
+  // Most exterior ray hits are terrain or statics. Consult the ESM before
+  // looking up a resident leaf in the visual scene.
+  const auto isDoor=[](uint32_t reference){
+    if(!reference||!gPlayerSession)return false;
+    const auto& defs=gPlayerSession->player.Definitions();
+    const auto found=defs.references.find(reference);
+    return found!=defs.references.end()&&defs.pipboy.doorBases.count(found->second.base)&&
+           Q2400FindSwingDoorObject(reference);
+  };
+  bool doorHit=isDoor(hit.reference);
+  if(!doorHit&&reach){
     // Windowed leaves may have no collision surface at chest height.
-    // A second trace must hit a real resident door along the same corridor.
     const float waist=(origin[1]+actor.runtime.position[1])*.5f;
     Fo3WorldSurfaceHit lower;
     if(TraceFo3WorldSurface(origin[0],waist,origin[2],dx,dy,dz,distance,
-         actor.source.refFormId,0,&lower)&&(!obstructed||lower.distance<=hit.distance+.1f))
-      hit=lower;
+         actor.source.refFormId,0,&lower)&&(!obstructed||lower.distance<=hit.distance+.1f)){
+      hit=lower;doorHit=isDoor(hit.reference);
+    }
   }
-  if(!hit.reference||!Q2400FindSwingDoorObject(hit.reference)||
-     Q230DoorSettledOpen(hit.reference))return blocked;
+  if(!doorHit||Q230DoorSettledOpen(hit.reference))return blocked;
   const bool doorInStep=hit.distance<stepTrace;
   const auto door=gQ2400InteriorDoors.find(hit.reference);
   if(door!=gQ2400InteriorDoors.end()&&Q230DoorMoving(door->second))return blocked;

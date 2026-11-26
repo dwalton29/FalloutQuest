@@ -30,7 +30,7 @@ struct CombatPose {
 inline bool LayerWeapon(const fo3anim::Skeleton& skeleton,fo3anim::Pose& base,
     const std::array<fo3anim::Clip,size_t(Animation::Count)>& animations,
     const RuntimeState& runtime,double now,double idleTime,CombatPose& state){
-  const auto selected=WeaponAnimation(runtime,now);
+  const auto selected=runtime.PackageWeaponReady()?Animation::Aim:WeaponAnimation(runtime,now);
   const auto& clip=animations[size_t(selected)];
   if(clip.tracks.empty())return false;
   const bool instance=state.instance!=runtime.equippedWeapon;

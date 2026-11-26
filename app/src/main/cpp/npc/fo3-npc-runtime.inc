@@ -741,7 +741,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   int selected=int(actor.runtime.animation);
   if(selected<0||size_t(selected)>=actor.animations.size())selected=0;
   if(actor.animations[selected].tracks.empty())selected=0;
-  const bool combatLayer=actor.runtime.activity==fo3npc::Activity::Combat&&
+  const bool combatLayer=(actor.runtime.activity==fo3npc::Activity::Combat||actor.runtime.PackageWeaponReady())&&
       actor.runtime.equippedWeapon&&actor.runtime.animation!=fo3npc::Animation::Hit;
   if(combatLayer&&(selected==int(fo3npc::Animation::Attack)||selected==int(fo3npc::Animation::Reload)))
     selected=int(fo3npc::Animation::Aim);
@@ -831,8 +831,8 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       actor.pose.local[size_t(actor.pose.accumulation)]=fo3anim::Transform{};
     fo3anim::ComposePose(actor.skeleton,actor.pose);
   }
-  if(combatLayer&&!furniturePose&&
-     (actor.runtime.action!=fo3npc::CombatAction::Flee||actor.runtime.reloadUntil>0)){
+  if(combatLayer&&!furniturePose&&!responsePose&&
+     (actor.runtime.PackageWeaponReady()||actor.runtime.action!=fo3npc::CombatAction::Flee||actor.runtime.reloadUntil>0)){
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     fo3npc::LayerWeapon(actor.skeleton,actor.pose,actor.animations,actor.runtime,now,elapsed,actor.combatPose);
   }else{

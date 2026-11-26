@@ -57,7 +57,10 @@ struct RuntimeState {
   Animation animation=Animation::Idle;
   std::array<float,3> position{},destination{};
   float crouchHeadHeight=0;
-  bool packageSneak=false;
+  bool packageSneak=false,packageWeaponDrawn=false;
+  bool PackageWeaponReady() const {
+    return activity==Activity::Package&&packageWeaponDrawn&&!dialogue&&!furniture.Active();
+  }
   int passingSide=0;
   double passingUntil=0;
   float aimPitch=0;
@@ -113,10 +116,10 @@ struct RuntimeState {
   void BeginCombat(uint32_t target){
     if(!Alive())return;
     if(activity!=Activity::Combat){if(!dialogue){suspended=activity;suspendedPackage=package;}dialogue=false;speaking=false;}
-    furniture.RequestExit();combatTarget=target;activity=Activity::Combat;speed=0;animation=Animation::Aim;action=CombatAction::Acquire;
+    furniture.RequestExit();aimPitch=0;combatTarget=target;activity=Activity::Combat;speed=0;animation=Animation::Aim;action=CombatAction::Acquire;
     combatMovement=CombatAction::Acquire;tacticalRouteKind=0;hasCoverPoint=hasFiringPoint=false;coverUntil=-1;nextManoeuvre=manoeuvreUntil=nextMeleeDecision=0;crowdBlockedSince=-1;moraleFlee=false;fleeUntil=nextTactic=burstUntil=burstWaitUntil=0;
   }
-  void EndCombat(){if(activity!=Activity::Combat)return;combatTarget=0;activity=suspended;package=suspendedPackage;speed=0;animation=Animation::Idle;reloadUntil=0;combatMovement=CombatAction::Acquire;tacticalRouteKind=0;hasCoverPoint=hasFiringPoint=false;coverUntil=-1;nextManoeuvre=manoeuvreUntil=nextMeleeDecision=0;crowdBlockedSince=-1;moraleFlee=false;fleeUntil=nextTactic=burstUntil=burstWaitUntil=0;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
+  void EndCombat(){if(activity!=Activity::Combat)return;aimPitch=0;combatTarget=0;activity=suspended;package=suspendedPackage;speed=0;animation=Animation::Idle;reloadUntil=0;combatMovement=CombatAction::Acquire;tacticalRouteKind=0;hasCoverPoint=hasFiringPoint=false;coverUntil=-1;nextManoeuvre=manoeuvreUntil=nextMeleeDecision=0;crowdBlockedSince=-1;moraleFlee=false;fleeUntil=nextTactic=burstUntil=burstWaitUntil=0;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
   void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;furniture.Clear();dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
   void BeginDialogue(){if(dialogue||!CanTalk())return;suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
   void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
