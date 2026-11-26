@@ -495,6 +495,11 @@ int main() {
     loading=false;gSceneReady=true;
     const auto revision=gPlayerSession->player.Revision();
     Check(CaptureFo3ResidentInteractionActivity().Idle(),"idle runtime admits preflight");
+    gExteriorWorldspaceQ1890=2;weaponruntime::held=true;
+    Check(CaptureFo3SceneRefreshActivity().Idle()&&!CaptureFo3ResidentInteractionActivity().Idle(),
+        "an exterior full refresh preserves a held weapon and keeps the partial exchange interior-only");
+    weaponruntime::charging=true;Check(!CaptureFo3SceneRefreshActivity().Idle(),"wait for weapon manipulation");
+    weaponruntime::charging=false;weaponruntime::held=false;gExteriorWorldspaceQ1890=0;
     Check(Fo3ResidentInteractionHazard(1000)==Hazard::None,"static identity has no transient hazard");
     ActorTarget resident;resident.source.refFormId=1000;gQ230NpcActors.push_back(resident);
     Check(Fo3ResidentInteractionHazard(1000)==Hazard::Actor,"resident actor registry is independently guarded");gQ230NpcActors.clear();

@@ -126,7 +126,10 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
   auto removed=gFo3ScriptRemovedItems;
   std::string removalError;
   const bool inventory=fo3script::InventoryReferenceRemoval(player,plan,CanRemoveFo3DialogueInventory,removalError);
-  if(!inventory&&(Fo3ResidentAssetLaneBlocked()||gQ230NpcArrival.active)){error="reference publication background work busy";return false;}
+  if(!inventory&&(Fo3ResidentAssetLaneBlocked()||gQ230NpcArrival.active)){
+    if(PublishFo3DialogueSceneRefresh(player,plan,error))return true;
+    error="reference publication background work busy";return false;
+  }
   if(inventory)for(auto ref:plan.AffectedReferences())removed.insert(ref);
   auto snapshot=plan.CandidateReferences();
   if(!player.CommitScriptTransaction(plan)){error="reference transaction changed";return false;}
@@ -141,7 +144,7 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
 void ConfigureFo3DialogueSession(fo3dialogue::Session& session){
   session.previewReferences=[](const auto& player,const auto& plan,std::string& error){
     if(PreviewFo3DialogueReferences(player,plan,error))return true;
-    if(CanDeferFo3DialogueResult()){error.clear();return true;}
+    if(CanRefreshFo3ScriptScene()||CanDeferFo3DialogueResult()){error.clear();return true;}
     return false;
   };
   session.publishReferences=PublishFo3DialogueReferences;
@@ -149,7 +152,7 @@ void ConfigureFo3DialogueSession(fo3dialogue::Session& session){
     return Fo3RadioOnlyResult(player,plan)&&PublishFo3DialogueSceneRefresh(player,plan,error);
   };
   session.deferEndResult=DeferFo3DialogueResult;session.endResultStatus=Fo3DialogueResultStatus;
-  session.readyForEndResult=CanDeferFo3DialogueResult;
+  session.readyForEndResult=[](){return CanRefreshFo3ScriptScene()||CanDeferFo3DialogueResult();};
 }
 void ConfigureFo3Dialogue() {
   gDialogue.diagnostic=DialogueDiagnostic;ConfigureFo3DialogueSession(gDialogue);

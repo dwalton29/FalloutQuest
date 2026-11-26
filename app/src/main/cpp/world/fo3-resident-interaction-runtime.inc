@@ -1,10 +1,10 @@
 // Included after UI, weapon, loose-body and actor declarations. Read-only
 // render-thread probes: never poll effects, close a menu, release a hand or
 // lazily instantiate a body/door/actor while deciding admission.
-fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() noexcept {
+static fo3scene::ResidentInteractionActivity CaptureFo3SceneRefreshActivity() noexcept {
     fo3scene::ResidentInteractionActivity activity;
     activity.ready=gSceneReady&&!gSceneLoad.active&&!IsFo3LoadingVisible()&&
-        gExteriorWorldspaceQ1890==0&&gPlayerSession&&!gPlayerSession->saveBlocked;
+        gPlayerSession&&!gPlayerSession->saveBlocked;
     activity.dialogue=Fo3DialogueFocus();activity.barter=Fo3BarterFocus();
     // Only this finished INFO's owned publication can suspend its dialogue
     // exclusion. Input remains locked and every other interaction gate applies.
@@ -12,9 +12,14 @@ fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() no
     activity.pipboy=Fo3PipboyFocus();activity.message=Fo3ScriptMessageFocus();
     activity.lockpick=Fo3LockpickFocus()||Fo3TerminalFocus();activity.lockpickLatch=Fo3LockpickInputBlocked();
     activity.loot=GetFo3LootPanel().reference!=0;
-    activity.weaponHandling=weaponruntime::held||weaponruntime::support||
-        weaponruntime::magazine||weaponruntime::charging;
+    activity.weaponHandling=weaponruntime::magazine||weaponruntime::charging;
     activity.shoulderTransfer=gShoulderGesture.reference!=0||gShoulderGesture.armed;
+    return activity;
+}
+fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() noexcept {
+    auto activity=CaptureFo3SceneRefreshActivity();
+    activity.ready=activity.ready&&!gExteriorWorldspaceQ1890;
+    activity.weaponHandling=activity.weaponHandling||weaponruntime::held||weaponruntime::support;
     return activity;
 }
 fo3scene::ResidentInteractionHazard Fo3ResidentInteractionHazard(uint32_t reference) noexcept {

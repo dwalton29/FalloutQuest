@@ -190,6 +190,7 @@ bool QueueFo3MegatonEntryQ1860();
 #include <vector>
 
 namespace {
+static fo3scene::ResidentInteractionActivity CaptureFo3SceneRefreshActivity() noexcept;
 fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() noexcept;
 fo3scene::ResidentInteractionHazard Fo3ResidentInteractionHazard(uint32_t reference) noexcept;
 bool Fo3ResidentInteractionAdmissionCurrent() noexcept;
@@ -15708,6 +15709,15 @@ void Q6HClear(GLbitfield mask) {
 
 
 #define FO3_NPC_CHAT_RUNTIME 1
+// The regular scene loader can rebuild an exterior and retain the equipped
+// weapon. It takes ownership of pending streaming and actor arrivals at load.
+static bool CanRefreshFo3ScriptScene(){
+    auto activity=CaptureFo3SceneRefreshActivity();
+    activity.dialogue=false;
+    return activity.Idle()&&!Fo3ResidentFrameBlocked()&&
+        !gFo3ResidentVisualPlan&&!gFo3ResidentInteractionAdmission&&!gFo3ResidentReferencePublicationPlan&&
+        Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp());
+}
 bool CanDeferFo3DialogueResult(){
     auto activity=CaptureFo3ResidentInteractionActivity();activity.dialogue=false;
     return activity.Idle()&& gPlayerSession&&gSceneReady&&!gSceneLoad.active&&!gPlayerSession->saveBlocked&&

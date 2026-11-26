@@ -68,6 +68,8 @@ extern fo3dialogue::Session gDialogue;
 bool deferAllowed=false;int deferredStatus=0;uint64_t deferredSerial=0;
 std::unique_ptr<fo3player::ScriptTransactionPlan> deferredResult;
 bool CanDeferFo3DialogueResult(){return deferAllowed&&!deferredResult;}
+bool exteriorRefresh=false;
+bool CanRefreshFo3ScriptScene(){return !loading&&(CanDeferFo3DialogueResult()||exteriorRefresh);}
 bool refreshAllowed=false;unsigned sceneRefreshes=0;
 bool QueueFo3WorldModelRefresh(uint32_t cell,uint32_t world,float x,float y,float z){
   assert(world==gExteriorWorldspaceQ1890);
@@ -694,4 +696,44 @@ static void OriginalMoiraInterview(const char* path){
   }
   std::cout<<"Original Moira five vault answers with resident display removal and real publication bridge passed\n";
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();FarewellWithB();BarterBridge();CellPublication();NonresidentPublication();IntercomPackageAdmission();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+// The GNR entrance combines a creature Enable/MoveTo, an explosion and a
+// disabled XMarker with four collision children in one exterior transaction.
+static void OriginalPlazaPublication(const char* esm){
+  fo3player::Catalog catalog;std::string error;
+  assert(fo3player::LoadCatalog(esm,catalog,error));
+  gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  auto& player=gPlayerSession->player;player.RegisterOriginalActors();
+  const auto& defs=player.Definitions().pipboy;
+  const auto boss=defs.formNames.at("mq01behemothref"),quest=defs.formNames.at("mq01ld");
+  const auto clip=defs.formNames.at("behemothbusclipmarker");
+  const auto& mark=defs.targets.at(defs.formNames.at("mq01behemotharrivemarker"));
+  gCurrentCellFormId=mark.cell;gExteriorWorldspaceQ1890=mark.world;assert(mark.world);
+  player.SetScriptPlayerLocation(mark.x,mark.y,mark.z,mark.cell,mark.world);
+  auto publishSnapshot=[&](){
+    gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(player.CaptureReferenceState());
+    gFo3ScenePublication.Publish(gFo3ReferenceState);
+  };
+  publishSnapshot();loading=false;deferAllowed=false;exteriorRefresh=true;refreshAllowed=false;
+  const auto count=sceneRefreshes;
+  for(bool allowQueue:{false,true}){
+    auto plan=player.PrepareQuestStageTransaction(quest,105,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    if(!plan)std::cerr<<error<<"\n";assert(plan);
+    auto affected=plan->AffectedReferences();assert(affected.size()==6);
+    assert(std::find(affected.begin(),affected.end(),boss)!=affected.end());
+    refreshAllowed=allowQueue;
+    assert(PublishFo3DialogueReferences(player,*plan,error)==allowQueue);
+    bool disabled=false;
+    assert(player.ReferenceDisabled(boss,disabled,error)&&disabled!=allowQueue);
+    assert(player.ReferenceDisabled(clip,disabled,error)&&disabled==allowQueue);
+    assert(loading==allowQueue&&sceneRefreshes==count+unsigned(allowQueue));
+  }
+  const auto& saved=player.Snapshot().actors.at(boss);
+  assert(saved.position[0]==mark.x&&saved.position[1]==mark.y&&saved.position[2]==mark.z);
+  assert(player.Snapshot().pipboy.quests.at(quest).stage==105);
+  unsigned explosions=0;fo3script::Action action;
+  while(player.PollScriptAction(action))if(action.kind==fo3script::ActionKind::Explosion)++explosions;
+  assert(explosions==1);
+  loading=refreshAllowed=exteriorRefresh=false;
+  std::cout<<"GNR exterior transaction publishes the Behemoth, four collision children and one explosion; queue rejection rolls back."<<std::endl;
+}
+int main(int argc,char** argv){Synthetic();SkipWithA();FarewellWithB();BarterBridge();CellPublication();NonresidentPublication();IntercomPackageAdmission();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);OriginalPlazaPublication(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}

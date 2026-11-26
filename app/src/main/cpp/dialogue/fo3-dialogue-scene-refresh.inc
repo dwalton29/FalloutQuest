@@ -5,7 +5,7 @@ bool PublishFo3DialogueSceneRefresh(fo3player::Player& player,
     fo3player::ScriptTransactionPlan& plan,std::string& error){
     const auto* candidate=plan.CandidateState();
     if(!candidate||!plan.HasReferenceChanges()||candidate->playerMove.pending||
-       !CanDeferFo3DialogueResult()||!player.CanCommitScriptTransaction(plan))return false;
+       !CanRefreshFo3ScriptScene()||!player.CanCommitScriptTransaction(plan))return false;
     const auto snapshot=plan.CandidateReferences();
     if(!player.CommitScriptTransaction(plan))return false;
     if(!QueueFo3WorldModelRefresh(gCurrentCellFormId,gExteriorWorldspaceQ1890,gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730)){

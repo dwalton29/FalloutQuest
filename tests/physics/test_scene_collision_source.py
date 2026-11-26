@@ -10,7 +10,7 @@ assert transition.index('gSceneLoad.collisionComplete = true') < transition.inde
 print('Scene collision independence and publication ordering passed')
 
 refresh=Path('app/src/main/cpp/dialogue/fo3-dialogue-scene-refresh.inc').read_text()
-assert refresh.index('CanDeferFo3DialogueResult()') < refresh.index('CommitScriptTransaction(plan)') < refresh.index('QueueFo3WorldModelRefresh(')
+assert refresh.index('CanRefreshFo3ScriptScene()') < refresh.index('CommitScriptTransaction(plan)') < refresh.index('QueueFo3WorldModelRefresh(')
 assert 'candidate->playerMove.pending' in refresh and 'gExteriorWorldspaceQ1890' in refresh
 assert refresh.index('RollbackScriptTransaction(plan)') < refresh.index('player.CaptureReferenceState()')
 cell_world=Path('app/src/main/cpp/world/fo3-cell-world.cpp').read_text()

@@ -125,7 +125,7 @@ static float gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730;
 static std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 static fo3scene::ReferencePublication gFo3ScenePublication;
 static bool refreshRequested;
-static bool CanDeferFo3DialogueResult(){return true;}
+static bool CanRefreshFo3ScriptScene(){return true;}
 static bool QueueFo3WorldModelRefresh(uint32_t cell,uint32_t world,float,float,float){
   refreshRequested=cell==gCurrentCellFormId&&world==gExteriorWorldspaceQ1890;return refreshRequested;
 }
@@ -135,7 +135,7 @@ static void Configure(Conversation& talk){
   gCurrentCellFormId=origin.cell;gExteriorWorldspaceQ1890=origin.world;
   gSceneCenterXQ1730=origin.x;gSceneCenterYQ1730=origin.y;gSceneFloorZQ1730=origin.z;
   refreshRequested=false;
-  talk.session.previewReferences=[](const auto&,const auto&,auto&){return CanDeferFo3DialogueResult();};
+  talk.session.previewReferences=[](const auto&,const auto&,auto&){return CanRefreshFo3ScriptScene();};
   talk.session.publishReferences=PublishFo3DialogueSceneRefresh;
 }
 }
