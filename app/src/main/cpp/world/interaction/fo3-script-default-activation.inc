@@ -33,6 +33,10 @@ bool DeliverFo3ScriptDefaultActivation(uint32_t reference,uint32_t activator){
         bool disabled=true;std::string error;
         return player.ReferenceDisabled(reference,disabled,error)&&!disabled&&BeginFo3PlayerSit(reference);
     }
+    if(object!=player.Definitions().references.end()&&player.Definitions().pipboy.terminals.count(object->second.base)){
+        bool disabled=true;std::string error;
+        return player.ReferenceDisabled(reference,disabled,error)&&!disabled&&OpenFo3TerminalInterface(reference);
+    }
     if(player.CanScriptActivateContainer(reference)){
         if(!player.OpenScriptContainer(reference))return false;
         FlushFo3PlayerState();return true;

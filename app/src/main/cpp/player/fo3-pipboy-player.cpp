@@ -250,14 +250,17 @@ bool Player::AddAchievement(uint32_t id) {
   if(state_.achievements.insert(id).second)++revision_;
   return true;
 }
-bool Player::ScriptInSameCell(uint32_t reference,bool& result,std::string& error) const {
-  if(!scriptPlayerPositionKnown_||!scriptPlayerCell_){error="GetInSameCell player location unavailable";return false;}
-  uint32_t cell=0;
-  const auto actor=state_.actors.find(reference);
-  if(actor!=state_.actors.end())cell=actor->second.cell;
-  else {const auto ref=catalog_->references.find(reference);if(ref!=catalog_->references.end())cell=ref->second.cell;}
-  if(!cell){error="GetInSameCell reference location unavailable";return false;}
-  result=cell==scriptPlayerCell_;return true;
+bool Player::ScriptInSameCell(uint32_t reference,bool& result,std::string& error,uint32_t target) const {
+  auto cellOf=[&](uint32_t id)->uint32_t{
+    if(id==PlayerRef)return scriptPlayerPositionKnown_?scriptPlayerCell_:0u;
+    const auto actor=state_.actors.find(id);
+    if(actor!=state_.actors.end())return actor->second.cell;
+    const auto ref=catalog_->references.find(id);
+    return ref==catalog_->references.end()?0u:ref->second.cell;
+  };
+  const auto from=cellOf(reference),to=cellOf(target);
+  if(!from||!to){error="GetInSameCell reference location unavailable";return false;}
+  result=from==to;return true;
 }
 bool Player::PollExperienceNotice(ExperienceNotice& out) {
   if(pendingExperienceNotices_.empty())return false;

@@ -10,13 +10,14 @@ assert transition.index('gSceneLoad.collisionComplete = true') < transition.inde
 print('Scene collision independence and publication ordering passed')
 
 refresh=Path('app/src/main/cpp/dialogue/fo3-dialogue-scene-refresh.inc').read_text()
-assert refresh.index('CanDeferFo3DialogueResult()') < refresh.index('CommitScriptTransaction(plan)') < refresh.index('QueueFo3SceneRefreshQ74(')
+assert refresh.index('CanDeferFo3DialogueResult()') < refresh.index('CommitScriptTransaction(plan)') < refresh.index('QueueFo3WorldModelRefresh(')
 assert 'candidate->playerMove.pending' in refresh and 'gExteriorWorldspaceQ1890' in refresh
 assert refresh.index('RollbackScriptTransaction(plan)') < refresh.index('player.CaptureReferenceState()')
 cell_world=Path('app/src/main/cpp/world/fo3-cell-world.cpp').read_text()
-refresh_queue=cell_world[cell_world.index('bool QueueFo3SceneRefreshQ74('):cell_world.index('namespace Q1840Prompt')]
+refresh_queue=cell_world[cell_world.index('bool QueueFo3WorldModelRefresh('):cell_world.index('namespace Q1840Prompt')]
 assert refresh_queue.index('gHasPendingTransitionQ74') < refresh_queue.index('gPendingTransitionQ74={}')
-assert refresh_queue.index('preserveView=true') < refresh_queue.index('BeginFo3Loading(cell,0)')
+assert refresh_queue.index('preserveView=true') < refresh_queue.index('BeginFo3Loading(cell,world)')
+assert refresh_queue.index('gPendingTransitionQ74.worldspaceFormId=world') < refresh_queue.index('BeginFo3Loading(cell,world)')
 assert 'gPlayerResetPendingQ74 = !gPendingTransitionQ74.preserveView' in cell_world
 assert 'gPendingTransitionQ74.valid&&!gPendingTransitionQ74.preserveView' in cell_world
 print('Script scene refresh commits under loader admission, rolls back queue failure and preserves the existing view')
@@ -624,7 +625,7 @@ assert master_match.index('if(seen.size()!=wanted.size())')<master_match.index('
 assert 'e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo' in master_match
 assert 'owners[e.owner].push_back(n)' in master_match
 assert 'pass==0&&(info||programs[index].origin.kind==Kind::PackageResult)&&type!="ACHR"&&type!="ACRE"' in master_match
-assert 'programs[index].origin.kind==Kind::ReferenceEvent&&association!=' in master_match
+assert '(programs[index].origin.kind==Kind::ReferenceEvent||programs[index].origin.kind==Kind::InventoryEvent)&&association!=programs[index].origin.record' in master_match
 assert 'requiredQuests[info.quest].push_back(index);requiredSpeakers[index]=info.speaker;' in master_match
 assert 'Same(programs[index].questConditions,quest->second.conditions)' in master_match
 assert 'Same(e.conditions,stage->second.items[o.item].conditions)' in master_match

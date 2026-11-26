@@ -9,7 +9,8 @@
 namespace fo3burst {
 struct Layer {
     std::string texture;
-    std::array<float,3> origin{},volume{};
+    fo3_q6f_collision_detail::Mat4 emitterToModel=fo3_q6f_collision_detail::Identity();
+    std::array<float,3> volume{};
     float speed=0,speedVariation=0,declination=0,declinationVariation=0,angle=0,angleVariation=0;
     float radius=0,radiusVariation=0,life=0,lifeVariation=0,begin=0,window=0;
     float fadeIn=0,fadeOut=1,grow=0,shrink=0;
@@ -22,6 +23,8 @@ inline std::vector<Layer> Decode(const std::vector<uint8_t>& bytes){
     auto get=[&](uint32_t id,const char* type,size_t n)->const uint8_t*{
         return id<h.numBlocks&&h.blockSizes[id]>=n&&BlockType(h,id)==type?BlockData(bytes,h,id):nullptr;
     };
+    TargetHierarchy hierarchy;
+    if(!hierarchy.Read(bytes,h))return {};
     struct Birth {float rate=0;std::vector<std::pair<float,float>> windows;};
     std::map<uint32_t,Birth> births;
     for(uint32_t i=0;i<h.numBlocks;++i)if(const auto seq=get(i,"NiControllerSequence",12)){
@@ -58,6 +61,8 @@ inline std::vector<Layer> Decode(const std::vector<uint8_t>& bytes){
         const size_t off=68+extras*4;const uint32_t props=ReadLe32(ps+off);
         if(size-off<12||props>(size-off-12)/4)continue;
         Layer l;l.sphere=sphere;
+        const auto emitterNode=ReadLe32(emitter+69);
+        if(emitterNode!=INVALID_REF&&!hierarchy.Matrix(bytes,h,emitterNode,l.emitterToModel))continue;
         for(uint32_t j=0;j<props;++j){
             const auto prop=ReadLe32(ps+off+4+j*4);
             if(const auto shader=get(prop,"BSShaderNoLightingProperty",38)){

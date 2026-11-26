@@ -17,6 +17,8 @@ struct Bone {
   int parent = -1;
   Transform bind;
   bool visible=true;
+  bool collisionOwner=false;
+  int billboardMode=-1; // NiBillboardNode mode, or an ordinary transform node.
 };
 struct Skeleton {
   std::vector<Bone> bones;
@@ -62,6 +64,11 @@ struct TextKey {
   float time = 0;
   std::string text;
 };
+// Direct NiTimeControllers have independent periods even on the same shape.
+struct ControllerClock {
+  float frequency=1, phase=0, start=0, stop=0;
+  float LoopTime(double elapsed) const;
+};
 struct Clip {
   std::string name, accumulationRoot;
   float start = 0, stop = 0, frequency = 1;
@@ -70,6 +77,8 @@ struct Clip {
   std::vector<Track> tracks;
   std::vector<PropertyTrack> properties;
   std::vector<TextKey> textKeys;
+  std::vector<ControllerClock> transformClocks, propertyClocks;
+  bool DirectControllers() const {return !transformClocks.empty()||!propertyClocks.empty();}
   size_t compressedTracks = 0, ignoredControllers = 0;
 };
 // A response sequence that authors the accumulation root owns actor motion
@@ -92,6 +101,7 @@ struct Pose {
   std::vector<uint8_t> evaluated;
   std::vector<uint8_t> priorities, channels;
 };
+void DiffuseRowsForBone(const Pose&,int bone,float (&rows)[2][4]);
 Matrix Identity();
 Matrix Multiply(const Matrix &a, const Matrix &b);
 Matrix ToMatrix(const Transform &t);

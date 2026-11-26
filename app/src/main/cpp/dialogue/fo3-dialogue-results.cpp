@@ -72,6 +72,8 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     std::istringstream in(line);std::string op,a,b,c,extra;Command cmd{};cmd.type=CommandType::Variable;
     if(!(in>>op))continue;
     if(!op.empty()&&op.back()=='.'){std::string verb;if(!(in>>verb)){error="missing reference command";return false;}op+=verb;}
+    const auto receiverDot=op.find('.');
+    const auto commandName=receiverDot==std::string::npos?op:op.substr(receiverDot+1);
     if(op=="ref"||op=="reference"){
       if(!referencePreamble||!(in>>a)||(in>>extra)||!referenceDeclarations.insert(a).second){error="invalid reference local declaration";return false;}
       continue;
@@ -226,9 +228,32 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       cmd.type=CommandType::MoveTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));
       if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){error="invalid MoveTo references";return false;}
       for(auto& offset:cmd.offset){if(!(in>>a)){in.clear();break;}if(!number(a,offset)){error="unsupported MoveTo offset expression";return false;}}
-    } else if(op=="kill"||(op.size()>5&&op.substr(op.size()-5)==".kill")){
-      cmd.type=CommandType::Kill;cmd.form=op=="kill"?owner:form(op.substr(0,op.size()-5));
+    } else if(commandName=="pushactoraway"){
+      cmd.type=CommandType::PushActorAway;
+      cmd.form=receiverDot==std::string::npos?owner:form(op.substr(0,receiverDot));
+      if(!cmd.form||!(in>>a>>b)||!(cmd.index=form(a))||!number(b,cmd.value)||
+         cmd.value!=std::trunc(cmd.value)||double(cmd.value)<INT32_MIN||double(cmd.value)>INT32_MAX){
+        error="invalid PushActorAway origin, target or integer force";return false;
+      }
+    } else if(commandName=="kill"||commandName=="killactor"){
+      const auto dot=op.find('.');
+      cmd.type=CommandType::Kill;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(in>>a){
+        if(a!="0"&&!(cmd.index=form(a))){error="invalid Kill actor";return false;}
+      }else in.clear();
       if(!cmd.form){error="invalid Kill receiver";return false;}
+    } else if(commandName=="resurrect"||commandName=="resurrectactor"){
+      const auto dot=op.find('.');
+      cmd.type=CommandType::Resurrect;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form){error="invalid resurrection receiver";return false;}
+      if(in>>a){
+        if(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid resurrection animation flag";return false;}
+      }else in.clear();
+    } else if(commandName=="setunconscious"||commandName=="setghost"){
+      cmd.form=receiverDot==std::string::npos?owner:form(op.substr(0,receiverDot));
+      cmd.type=commandName=="setghost"?CommandType::SetGhost:CommandType::SetUnconscious;
+      if(!cmd.form||!(in>>a)||(a!="0"&&a!="1")){error="invalid "+commandName+" actor or flag";return false;}
+      cmd.value=a=="1";
     } else if(op=="resethealth"||(op.size()>12&&op.substr(op.size()-12)==".resethealth")){
       cmd.type=CommandType::ResetHealth;cmd.form=op=="resethealth"?owner:form(op.substr(0,op.size()-12));
       if(!cmd.form){error="invalid ResetHealth receiver";return false;}
@@ -337,6 +362,9 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       cmd.type=CommandType::SetEssential;
       if(!(in>>a>>b)||!(cmd.form=form(a))||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-2147483648.f||double(cmd.value)>2147483647.0){error="invalid SetEssential";return false;}
       cmd.value=cmd.value>0?1:0;
+    } else if(op=="setlastextdooractivated"){
+      cmd.type=CommandType::LastExteriorDoor;
+      if(!(in>>a)||!(cmd.form=form(a))){error="missing last exterior door";return false;}
     } else if(op=="setquestdelay") {
       cmd.type=CommandType::SetQuestDelay;
       if(!(in>>a>>b)||!(cmd.form=form(a))||!d.quests.count(cmd.form)||!number(b,cmd.value)||cmd.value<0){error="invalid SetQuestDelay";return false;}
@@ -422,6 +450,21 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     } else if(op=="triggerscreenblood"){
       cmd.type=CommandType::ScreenBlood;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<0||cmd.value>1000||std::floor(cmd.value)!=cmd.value){error="invalid screen blood count";return false;}
+    } else if(op.substr(op.find('.')+1)=="pms"||op.substr(op.find('.')+1)=="playmagicshadervisuals"||
+              op.substr(op.find('.')+1)=="sms"||op.substr(op.find('.')+1)=="stopmagicshadervisuals"){
+      const auto dot=op.find('.');
+      const auto verb=op.substr(dot+1);
+      const bool play=verb=="pms"||verb=="playmagicshadervisuals";
+      cmd.type=play?CommandType::PlayMagicShader:CommandType::StopMagicShader;
+      cmd.index=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.index||!(in>>a)||!(cmd.form=form(a))||!d.effectShaders.count(cmd.form)){
+        error="invalid magic shader or receiver";return false;
+      }
+      cmd.value=-1;
+      if(play){
+        if(in>>b){if(!number(b,cmd.value)||(cmd.value<0&&cmd.value!=-1)){error="invalid magic shader duration";return false;}}
+        in.clear();
+      }
     } else if(op=="rimod"||op=="removeimagespacemodifier"){
       cmd.type=CommandType::RemoveImageModifier;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}

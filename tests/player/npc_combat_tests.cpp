@@ -90,7 +90,8 @@ static void ScriptedRelationsAndEssential(){
   using namespace fo3npc;auto c=Fixture();c.factionFlags[600]=0;c.factionFlags[601]=0;
   c.pipboy.formNames["fa"]=600;c.pipboy.formNames["fb"]=601;c.pipboy.formNames["baseactor"]=200;
   c.pipboy.targets[102].base=200;c.pipboy.targets[102].cell=1;c.references[102].base=200;
-  Player p(c);std::string error;
+  for(uint32_t reference:{100,102})c.actorPlacements[reference]=c.pipboy.targets.at(reference);
+  Player p(c);p.RegisterOriginalActors();std::string error;
   auto run=[&](const char* source){fo3pipdata::ResultScript script;script.source=source;return p.ExecuteDialogueResult(script,error);};
   auto relation=[&](uint32_t a,uint32_t b){return Relationship(p.Definitions(),a,b,{},{},&p.Snapshot().factionRelations);};
   assert(relation(200,201)==Reaction::Enemy);
@@ -99,14 +100,18 @@ static void ScriptedRelationsAndEssential(){
   assert(run("SetEnemy fa fa 1 1")&&relation(200,200)==Reaction::Neutral);
   assert(c.weapons.relations.at(600).at(601)==1);
   assert(run("SetEssential baseactor 2")&&p.Essential(100)&&p.Essential(102));
-  assert(p.ApplyWeaponHit(10,100,1000)&&p.ActorHealth(100)==1);
+  assert(p.ApplyWeaponHit(10,100,1000)&&p.ActorHealth(100)==0&&p.ActorKnockedOut(100));
+  bool dead=true;assert(p.ActorDeathState(100,dead)&&!dead);
   assert(run("SetEssential baseactor -1")&&!p.Essential(100)&&!p.Essential(102));
   assert(p.ApplyWeaponHit(10,102,1000)&&p.ActorHealth(102)==0);
   assert(run("SetEssential baseactor 1")&&p.ActorHealth(102)==0);
   const auto revision=p.Revision();assert(!run("SetEssential baseactor 0\nSetEnemy fa baseactor")&&p.Revision()==revision&&p.Essential(100));
   auto file="/tmp/fq-scripted-ai-"+std::to_string(getpid());assert(p.Save(file,error));Player restored(c);assert(restored.Restore(file,error));unlink(file.c_str());
-  assert(restored.Essential(100)&&restored.ActorHealth(100)==1&&restored.ActorHealth(102)==0);
+  assert(restored.Essential(100)&&restored.ActorHealth(100)==0&&restored.ActorKnockedOut(100)&&restored.ActorHealth(102)==0);
   assert(restored.Snapshot().factionRelations==p.Snapshot().factionRelations);
+  restored.AdvanceActorRecovery(c.essentialDeathTime);
+  assert(!restored.ActorKnockedOut(100)&&std::fabs(restored.ActorHealth(100)-100*c.essentialRecoverFraction)<.001f);
+  assert(restored.ActorHealth(102)==0&&restored.ActorDeathState(102,dead)&&dead);
 }
 static void ScriptedNotes(){
   auto c=Fixture();c.items[400].formId=400;c.items[400].kind=ItemKind::Note;c.items[400].name="Authored note";
@@ -240,10 +245,13 @@ static void InventoryDamagePersistence(bool finite) {
   assert(p.Snapshot().actors.at(101).hostile==100);
   const float before=p.Health();assert(p.ApplyAttack(100,10,0x14,20)&&p.Health()==before-20);
   assert(!p.ApplyAttack(100,10,100,20)&&!p.ApplyAttack(100,10,101,NAN));
-  c.weapons.actors[201].flags=2;c.actorPlacements[101].base=201;Player essential(c);assert(essential.PrepareActorInventory(101));
+  c.weapons.actors[201].flags=2;c.actorPlacements[101]=c.pipboy.targets.at(101);
+  Player essential(c);essential.RegisterOriginalActors();assert(essential.PrepareActorInventory(101));
   assert(essential.SetIgnoreCrime(101,true));
-  assert(essential.ApplyAttack(0x14,10,101,10000)&&essential.ActorHealth(101)==1&&!essential.CanLootContainer(101));
+  assert(essential.ApplyAttack(0x14,10,101,20)&&essential.ActorHealth(101)==90);
   assert(essential.Snapshot().actors.at(101).hostile==0x14); // IgnoreCrime does not remove direct self-defence.
+  assert(essential.ApplyAttack(0x14,10,101,10000)&&essential.ActorHealth(101)==0&&essential.ActorKnockedOut(101)&&!essential.CanLootContainer(101));
+  assert(essential.Snapshot().actors.at(101).hostile==0);
   ActorState a=p.Snapshot().actors.at(100);a.position={123,456,789};a.yaw=.7f;a.package=77;a.sequence=4;a.packageWaitSeconds=7.5f;
   assert(p.UpdateActor(100,a));a.position[1]=NAN;assert(!p.UpdateActor(100,a));a=p.Snapshot().actors.at(100);a.packageWaitSeconds=-1;assert(!p.UpdateActor(100,a));
   const std::string path="/tmp/fq-npc-combat-"+std::to_string(getpid());std::string error;assert(p.Save(path,error));

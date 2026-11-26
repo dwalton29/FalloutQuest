@@ -13,6 +13,7 @@ struct Body {
  float radius=0,mass=0,linearDamping=0,angularDamping=0,friction=0,restitution=0;
  std::array<float,9> inertia{};
  std::vector<Capsule> extraCapsules;
+ uint8_t bodyPart=0;
  bool collideWithSelf=true;
 };
 struct Joint {

@@ -68,7 +68,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
-      if(ref==d.targets.end()||(c.function!=46&&c.function!=47&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=157&&c.function!=159&&c.function!=160)){error="reference context unavailable";return false;}
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=47&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=409&&c.function!=143&&c.function!=157&&c.function!=159&&c.function!=160)){error="reference context unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}
@@ -95,7 +95,12 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 35: {bool disabled=false;
     if(!p.ReferenceDisabled(who.reference,disabled,error))return false;
     value=disabled;return true;}
+  case 107:case 237:case 242:
+    if(!pc&&!p.Definitions().actorPlacements.count(who.reference)){error="actor state unavailable";return false;}
+    value=c.function==107?p.ActorKnockedOut(who.reference):c.function==237?p.ActorGhost(who.reference):p.ActorUnconscious(who.reference);
+    return true;
   case 84:return DeadCount(p,c.a,value,error);
+  case 550:value=p.Definitions().goreDisabled;return true;
   case 46:{bool dead=false;if(!p.ActorDeathState(pc?fo3player::PlayerRef:who.reference,dead)){error="actor death state unavailable";return false;}value=dead;return true;}
   case 47:
     value=p.ScriptItemCount(who.reference,c.a);
@@ -124,6 +129,12 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 131:value=uint32_t(p.PlayerFemale())==c.a;return true;
   case 136:value=who.reference==c.a;return true;
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
+  case 409:
+    if(!p.IsActorKiller(who.reference,c.a,value)){error="invalid death attribution actor";return false;}
+    return true;
+  case 143:
+    if(!p.ScriptActorProcedure(who.reference,value)){error="actor AI procedure unavailable";return false;}
+    return true;
   case 157:value=p.ScriptOpenState(who.reference);return true;
   case 159:case 160:{uint32_t ref=0;uint8_t marker=0,sitting=0;if(!p.ScriptFurniture(who.reference,ref,marker,sitting)){error="actor furniture observation unavailable";return false;}value=c.function==159?sitting:marker;return true;}
   case 161:if(!who.packageKnown){error="package not executing";return false;}value=who.package==c.a;return true;

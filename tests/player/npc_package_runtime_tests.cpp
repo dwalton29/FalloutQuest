@@ -19,7 +19,7 @@
 #include <fstream>
 #include <functional>
 #include <unistd.h>
-#ifndef FO3_NPC_FURNITURE_HOST_TEST
+#if !defined(FO3_NPC_FURNITURE_HOST_TEST) && !defined(FO3_NPC_LOOSE_MESH_HOST_TEST)
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) {return false;}
 #endif
 bool LoadFalloutTextureRgba(const std::string&,Fo3RgbaTexture&) {return false;}

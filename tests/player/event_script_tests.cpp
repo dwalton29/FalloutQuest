@@ -1,4 +1,5 @@
 #include "player/fo3-player-state.h"
+#include "player/fo3-new-game.h"
 #include <cassert>
 #include <cmath>
 #include <algorithm>
@@ -80,6 +81,107 @@ static void EquipmentInstanceEvents(){
   if(!restored.Restore(save,error)){std::cerr<<error<<std::endl;std::abort();}unlink(save);
   assert(scoped(restored,first)->reference==a->reference&&scoped(restored,first)->numbers.at(1)==11);
   assert(restored.Unequip(second)&&scoped(restored,second)->numbers.at(1)==11);
+}
+static void Resurrection(){
+  auto catalog=Catalog();
+  auto& placement=catalog.actorPlacements[100];
+  placement.base=30;placement.cell=77;placement.x=42;placement.scale=1;
+  catalog.pipboy.targets[100]=placement;catalog.pipboy.cellWorlds[77]=0;
+  catalog.weapons.actors[30].health=80;catalog.authoredCorpseBases.insert(30);
+  catalog.pipboy.formNames["bodyref"]=100;
+  fo3player::Player player(catalog);player.RegisterOriginalActors();
+  assert(player.ActorHealth(100)==0);
+  // Exact 108c stream with the receiver in SCRO slot 1, animation flag 0.
+  fo3pipdata::ResultScript restore;
+  restore.references={100};restore.compiled={0x1c,0,1,0,0x8c,0x10,7,0,1,0,'n',0,0,0,0};
+  std::string error;
+  if(!player.ExecuteDialogueResult(restore,error)){std::cerr<<"Resurrection: "<<error<<std::endl;std::abort();}
+  assert(player.ActorHealth(100)==80&&player.Snapshot().actors.at(100).position[0]==42);
+  const auto revision=player.Revision();
+  assert(player.ExecuteDialogueResult(restore,error)&&player.Revision()==revision);
+  char save[]="/tmp/fq-revived-XXXXXX";const int fd=mkstemp(save);assert(fd>=0);close(fd);
+  assert(player.Save(save,error));fo3player::Player reloaded(catalog);
+  if(!reloaded.Restore(save,error)){std::cerr<<"Resurrection save: "<<error<<std::endl;std::abort();}
+  unlink(save);reloaded.RegisterOriginalActors();assert(reloaded.ActorHealth(100)==80);
+  assert(reloaded.KillActor(100)&&reloaded.ActorHealth(100)==0);
+  restore.compiled.clear();restore.source="BodyRef.Resurrect 0";
+  assert(reloaded.ExecuteDialogueResult(restore,error)&&reloaded.ActorHealth(100)==80);
+}
+static void DeathEventOrdering(){
+  auto c=Catalog();
+  auto& placed=c.actorPlacements[100];placed.cell=77;placed.base=30;placed.scale=1;
+  c.pipboy.targets[100]=placed;c.weapons.actors[30].health=80;
+  c.pipboy.formNames["victim"]=100;
+  c.pipboy.scripts[102].source="scn NPC\nBegin OnDeath Player\nif GetStage ExampleQuest == 10\nRewardKarma 20\nendif\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  fo3player::Player player(c);player.RegisterOriginalActors();
+  fo3pipdata::ResultScript action;std::string error;
+  action.source="victim.kill player\nsetstage ExampleQuest 10\nreturn\nRewardKarma 100";
+  assert(player.ExecuteDialogueResult(action,error));
+  assert(player.ActorHealth(100)==0&&player.Snapshot().karma==20);
+  assert(player.ExecuteDialogueResult(action,error)&&player.Snapshot().karma==20);
+}
+static void GoreSettingAndBlastPresentation(){
+  for(bool disabled:{false,true}){
+    std::istringstream settings(disabled?"[Other]\nbDisableAllGore=0\n[GENERAL]\nbDisableAllGore = 1 ; installed setting\n":
+                                       "[Other]\nbDisableAllGore=1\n[General]\nsLanguage=ENGLISH\n");
+    auto c=Catalog();c.goreDisabled=fo3newgame::ReadGoreDisabled(settings);
+    assert(c.goreDisabled==disabled);fo3player::Player p(c);std::string error;
+    fo3pipdata::ResultScript command;command.source="if IsGoreDisabled == 0\nRewardKarma 10\nendif";
+    assert(p.ExecuteDialogueResult(command,error)&&p.Snapshot().karma==(disabled?0:10));
+    fo3dialogue::Context context;context.player=&p;context.speaker.reference=fo3player::PlayerRef;
+    fo3pipdata::Condition condition;condition.function=550;condition.value=disabled?1:0;
+    assert(fo3dialogue::Conditions({condition},context,error));
+  }
+  fo3script::ImageModifier modifier;modifier.valid=true;modifier.duration=1;
+  modifier.fade.keys.push_back({0,{.25f,.5f,1.f,1.f}});
+  modifier.blur.keys.push_back({0,{8.f,0,0,0}});
+  modifier.contrastMult.keys.push_back({0,{2.f,0,0,0}});
+  fo3script::ImageStack stack;
+  const float fraction=fo3player::ExplosionDefinition::RadialFraction(50,100);
+  stack.Apply(1,modifier,0,fraction);
+  const auto presentation=stack.Sample(0);
+  assert(fraction==.75f&&presentation.blur==6&&presentation.fade[3]==.75f&&presentation.contrast==1.75f);
+}
+static void ScriptedHealthDamage(){
+  auto c=Catalog();
+  auto& placed=c.actorPlacements[100];placed.cell=77;placed.base=30;placed.scale=1;
+  c.pipboy.targets[100]=placed;c.weapons.actors[30].health=80;
+  c.pipboy.formNames["patient"]=100;
+  c.pipboy.scripts[102].source="scn NPC\nBegin OnDeath\nif GetStage ExampleQuest == 10\nRewardKarma 20\nendif\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  fo3player::Player p(c);p.RegisterOriginalActors();
+  fo3pipdata::ResultScript command;std::string error;
+  command.source="Patient.DamageAV Health 12\nPatient.RestoreAV Health 5";
+  assert(p.ExecuteDialogueResult(command,error)&&p.ActorHealth(100)==73);
+  command.source="Patient.DamageAV Health 73\nSetStage ExampleQuest 10";
+  assert(p.ExecuteDialogueResult(command,error)&&p.ActorHealth(100)==0&&p.Snapshot().karma==20);
+  command.source="Patient.RestoreAV Health 100\nPatient.DamageAV Health 50";
+  assert(p.ExecuteDialogueResult(command,error)&&p.ActorHealth(100)==0&&p.Snapshot().karma==20);
+}
+static void EssentialKnockout(){
+  auto catalog=Catalog();
+  auto& placement=catalog.actorPlacements[100];placement.cell=77;placement.base=30;placement.scale=1;
+  catalog.pipboy.targets[100]=placement;catalog.pipboy.cellWorlds[77]=0;
+  catalog.weapons.actors[30].flags=2;catalog.weapons.actors[30].health=80;
+  catalog.pipboy.formNames["patient"]=100;
+  fo3player::Player p(catalog);p.RegisterOriginalActors();
+  fo3pipdata::ResultScript command;command.source="Patient.Kill";std::string error;
+  assert(p.ExecuteDialogueResult(command,error)&&p.ActorKnockedOut(100)&&!p.ActorUnconscious(100));
+  bool dead=true;assert(p.ActorDeathState(100,dead)&&!dead&&!p.Snapshot().actors.at(100).dead);
+  assert(!p.Snapshot().pipboy.quests.count(20)); // OnDeath is exclusive to a death.
+  p.AdvanceActorRecovery(4);
+  command.source="Patient.SetUnconscious 1";assert(p.ExecuteDialogueResult(command,error)&&p.ActorUnconscious(100));
+  command.source="Patient.SetGhost 1";assert(p.ExecuteDialogueResult(command,error)&&p.ActorGhost(100));
+  char path[]="/tmp/fq-knockout-XXXXXX";const int fd=mkstemp(path);assert(fd>=0);close(fd);
+  assert(p.Save(path,error));fo3player::Player returned(catalog);
+  if(!returned.Restore(path,error)){std::cerr<<"knockout save: "<<error<<std::endl;std::abort();}
+  unlink(path);assert(returned.ActorKnockedOut(100)&&returned.ActorUnconscious(100)&&returned.ActorGhost(100));
+  returned.AdvanceActorRecovery(5);assert(returned.ActorKnockedOut(100));
+  returned.AdvanceActorRecovery(1);assert(!returned.ActorKnockedOut(100)&&returned.ActorUnconscious(100));
+  assert(std::fabs(returned.ActorHealth(100)-24)<.001);
+  command.source="if Patient.GetIsGhost\nPatient.SetGhost 0\nendif";assert(returned.ExecuteDialogueResult(command,error)&&!returned.ActorGhost(100));
+  command.source="Patient.SetUnconscious 0";assert(returned.ExecuteDialogueResult(command,error)&&!returned.ActorUnconscious(100));
 }
 static void WeaponFilteredHit(){
   auto c=Catalog();c.items[40].formId=40;c.items[40].kind=fo3player::ItemKind::Weapon;c.items[40].weapon.valid=true;
@@ -496,11 +598,11 @@ static void ResultBytecodeBranches(){
   assert(player.ExecuteDialogueResult(arithmetic,error)&&player.GlobalValue(400,value)&&value==20);
   arithmetic.compiled.back()='?';
   assert(!player.ExecuteDialogueResult(arithmetic,error)&&player.GlobalValue(400,value)&&value==20);
-  // The bytes identify SetGhost even though the world handler is missing.
-  // Entering it rolls back the preceding global write.
+  // The original SetGhost opcode on a global has no actor receiver.
+  // Rejecting it rolls back the preceding global write.
   auto unavailable=body;unavailable.compiled.clear();
   unavailable.compiled={0x15,0,7,0,'G',2,0,2,0,' ','9',0x1c,0,2,0,0xec,0x10,7,0,1,0,'n',1,0,0,0};
-  assert(!player.ExecuteDialogueResult(unavailable,error)&&error.find("setghost")!=std::string::npos);
+  assert(!player.ExecuteDialogueResult(unavailable,error)&&!error.empty());
   assert(player.GlobalValue(400,value)&&value==20);
   // One skipped logical line includes both the receiver prefix and opcode.
   bytes.clear();gate(0x16,'0');
@@ -827,7 +929,7 @@ int main(int argc,char** argv){
   ReferenceLocalBranches();
   AdditionalQuestPoints();
   CompiledProgramsRemainLive();
-  Parsing();EquipmentInstanceEvents();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
+  Parsing();Resurrection();DeathEventOrdering();GoreSettingAndBlastPresentation();ScriptedHealthDamage();EssentialKnockout();EquipmentInstanceEvents();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

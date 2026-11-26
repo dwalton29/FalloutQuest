@@ -107,7 +107,7 @@ inline size_t Fo3SuppressIntactGoreCaps(Fo3StaticNifMesh& mesh){
 // NPC_ also identifies assembled player equipment. Its NIF root is part of
 // the authored actor/bone coordinate system, not a standalone placed REFR.
 inline bool Fo3UsesPlacedReferenceRoot(const std::string& recordType) {
-    return recordType != "NPC_" && recordType != "CREA";
+    return recordType != "NPC_" && recordType != "CREA" && recordType != "DEBR";
 }
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an

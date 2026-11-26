@@ -60,7 +60,7 @@ static void Q230RenderWeapon(Q230ActorVisual& actor,bool alpha) {
 #endif
 static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& base) {
   FQ_PERF_SCOPE(Target);
-  if(!gPlayerSession||gPlayerSession->player.ActorHealth(reference)<=0)return false;
+  if(!gPlayerSession||gPlayerSession->player.ActorGhost(reference)||gPlayerSession->player.ActorHealth(reference)<=0)return false;
   if(reference==0x14){base=7;
 #ifdef FO3_NPC_COMBAT_HOST_TEST
     point={gQ210Head[0],gQ210Head[1],gQ210Head[2]};return true;
@@ -138,7 +138,7 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
   if(old!=p.Snapshot().actors.end()){
     saved.hostile=old->second.hostile;saved.alert=old->second.alert;saved.weaponLocked=old->second.weaponLocked;
   }
-  saved.dead=(old!=p.Snapshot().actors.end()&&old->second.dead)||(p.ActorHealth(actor.source.refFormId)==0&&!p.Essential(actor.source.refFormId));
+  saved.dead=(old!=p.Snapshot().actors.end()&&old->second.dead)||(p.ActorHealth(actor.source.refFormId)==0&&!p.ActorKnockedOut(actor.source.refFormId)&&!p.Essential(actor.source.refFormId));
   const auto* weapon=p.ActorWeapon(actor.source.refFormId);saved.equippedWeapon=weapon?weapon->id:0;
   p.UpdateActor(actor.source.refFormId,saved);
 #ifndef FO3_NPC_COMBAT_HOST_TEST
@@ -541,6 +541,15 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   }
   const float health=p.ActorHealth(actor.source.refFormId);
   if(health<0){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"actor statistics unresolved; AI suspended, not dead");return;}
+  if(p.ActorKnockedOut(actor.source.refFormId)||(health>0&&p.ActorUnconscious(actor.source.refFormId))){
+    if(s.activity!=fo3npc::Activity::Unconscious){
+      if(s.dialogue)EndFo3Dialogue("actor unconscious");
+      s.EndCombat();s.furniture.Clear();s.pendingAttack=false;s.speed=0;s.activity=fo3npc::Activity::Unconscious;
+      s.animation=p.ActorKnockedOut(actor.source.refFormId)?fo3npc::Animation::Death:fo3npc::Animation::Idle;
+      s.deathAt=now;s.combatTarget=0;actor.aiPathGame.clear();++s.actionSerial;actor.lastFrame=UINT64_MAX;
+    }
+    return;
+  }
   if(health==0){
     if(s.activity!=fo3npc::Activity::Dying&&s.activity!=fo3npc::Activity::Dead){
       if(s.dialogue)EndFo3Dialogue("actor death");s.Die(now);actor.lastFrame=UINT64_MAX;
@@ -552,6 +561,11 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       s.activity=fo3npc::Activity::Dead;actor.lastFrame=UINT64_MAX;Q6H_LOGI("NPC CORPSE actor=%08X",actor.source.refFormId);
     }
     return;
+  }
+  if(s.activity==fo3npc::Activity::Dead||s.activity==fo3npc::Activity::Dying||s.activity==fo3npc::Activity::Unconscious){
+    s.activity=fo3npc::Activity::Idle;s.animation=fo3npc::Animation::Idle;s.speed=0;
+    s.procedure=fo3npc::Procedure::Interrupted;s.nextPackageEvaluation=0;++s.actionSerial;
+    actor.aiLastUpdate=now;actor.lastFrame=UINT64_MAX;
   }
   const auto alert=p.Snapshot().actors.find(actor.source.refFormId);
   if(alert!=p.Snapshot().actors.end()&&alert->second.alert&&!p.ActorWeapon(actor.source.refFormId))

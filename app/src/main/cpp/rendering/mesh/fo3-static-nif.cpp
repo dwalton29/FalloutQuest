@@ -124,6 +124,7 @@ struct NifHeader {
 };
 
 struct NifTransform {
+    uint32_t collision=INVALID_REF;
     uint16_t flags=0;
     float translation[3]{0.0f, 0.0f, 0.0f};
     float rotation[9]{
@@ -228,12 +229,14 @@ const uint8_t* BlockData(const std::vector<uint8_t>& nif,
     return nif.data() + header.blockOffsets[block];
 }
 
-bool ParseObjectNetPrefix(Cursor& c) {
+bool ParseObjectNetPrefix(Cursor& c,uint32_t* linkedController=nullptr) {
     uint32_t nameIndex = 0;
     uint32_t numExtraData = 0;
     uint32_t controller = 0;
-    return c.U32(nameIndex) && c.U32(numExtraData) && numExtraData <= MAX_BLOCKS &&
-           c.Skip(static_cast<size_t>(numExtraData) * 4u) && c.U32(controller);
+    if(!c.U32(nameIndex)||!c.U32(numExtraData)||numExtraData>MAX_BLOCKS||
+       !c.Skip(static_cast<size_t>(numExtraData)*4)||!c.U32(controller))return false;
+    if(linkedController)*linkedController=controller;
+    return true;
 }
 
 bool ParseAvObjectPrefix(Cursor& c, const NifHeader& header,
@@ -266,6 +269,7 @@ bool ParseAvObjectPrefix(Cursor& c, const NifHeader& header,
 
     uint32_t collisionRef = INVALID_REF;
     if (!c.U32(collisionRef)) return false;
+    transform.collision=collisionRef;
     transform.valid = true;
     return true;
 }

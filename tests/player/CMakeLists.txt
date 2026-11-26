@@ -254,8 +254,17 @@ target_include_directories(npc_combat_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(npc_combat_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_combat_tests COMMAND npc_combat_tests)
 
-add_executable(npc_combat_runtime_tests npc_combat_runtime_tests.cpp ${dialogue_shared}
-    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+# Original-asset fixture: executable takes Fallout3.esm, mesh root and an active burn save.
+add_executable(actor_effect_addon_tests actor_effect_addon_tests.cpp quest_object_animation_fixture.cpp
+    ${dialogue_shared} ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(actor_effect_addon_tests PRIVATE cxx_std_17)
+target_compile_options(actor_effect_addon_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
+target_include_directories(actor_effect_addon_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
+target_link_libraries(actor_effect_addon_tests PRIVATE ZLIB::ZLIB)
+
+add_executable(npc_combat_runtime_tests npc_combat_runtime_tests.cpp quest_object_animation_fixture.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
 target_compile_features(npc_combat_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_combat_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
 target_include_directories(npc_combat_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
@@ -334,7 +343,8 @@ target_link_libraries(barter_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME barter_tests COMMAND barter_tests)
 
 add_executable(mq01_progression_tests mq01_progression_tests.cpp quest_object_animation_fixture.cpp
-    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp ${dialogue_shared})
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
 set_source_files_properties(quest_object_animation_fixture.cpp PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
 target_compile_features(mq01_progression_tests PRIVATE cxx_std_17)
 target_compile_options(mq01_progression_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
@@ -425,10 +435,10 @@ target_link_libraries(ms03_progression_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME ms03_progression_tests COMMAND ms03_progression_tests)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FalloutPhysics.cmake)
-add_executable(npc_ragdoll_runtime_tests npc_ragdoll_runtime_tests.cpp ${dialogue_shared} ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+add_executable(npc_ragdoll_runtime_tests npc_ragdoll_runtime_tests.cpp quest_object_animation_fixture.cpp ${dialogue_shared} ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
 target_compile_features(npc_ragdoll_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_ragdoll_runtime_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
-target_include_directories(npc_ragdoll_runtime_tests PRIVATE ../../app/src/main/cpp)
+target_include_directories(npc_ragdoll_runtime_tests PRIVATE ../nif ../../app/src/main/cpp/data ../../app/src/main/cpp)
 target_link_libraries(npc_ragdoll_runtime_tests PRIVATE ZLIB::ZLIB fq_physics)
 add_test(NAME npc_ragdoll_runtime_tests COMMAND npc_ragdoll_runtime_tests)
 
@@ -439,8 +449,9 @@ target_include_directories(sneak_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(sneak_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME sneak_tests COMMAND sneak_tests)
 
-add_executable(npc_detection_runtime_tests npc_combat_runtime_tests.cpp ${dialogue_shared}
-    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+add_executable(npc_detection_runtime_tests npc_combat_runtime_tests.cpp quest_object_animation_fixture.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
 target_compile_definitions(npc_detection_runtime_tests PRIVATE FO3_NPC_DETECTION_HOST_TEST=1)
 target_compile_features(npc_detection_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_detection_runtime_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)

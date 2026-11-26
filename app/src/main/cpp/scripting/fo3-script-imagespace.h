@@ -64,10 +64,11 @@ inline ImagePresentation SampleImageModifier(const ImageModifier& m,double elaps
 // Ordered independent modifiers: a static base remains until Remove, while
 // animated entries expire on their original duration. Reapplying restarts one.
 struct ImageStack {
-  struct Entry {uint32_t form;ImageModifier modifier;double started;};
+  struct Entry {uint32_t form;ImageModifier modifier;double started;float strength;};
   std::vector<Entry> entries;
-  void Apply(uint32_t form,const ImageModifier& modifier,double now){
-    Remove(form);if(modifier.valid&&entries.size()<32)entries.push_back({form,modifier,now});
+  void Apply(uint32_t form,const ImageModifier& modifier,double now,float strength=1.f){
+    if(!(strength>0)||!std::isfinite(strength))return;
+    Remove(form);if(modifier.valid&&entries.size()<32)entries.push_back({form,modifier,now,std::min(strength,1.f)});
   }
   void Remove(uint32_t form){entries.erase(std::remove_if(entries.begin(),entries.end(),[&](const auto& e){return e.form==form;}),entries.end());}
   ImagePresentation Sample(double now){
@@ -78,7 +79,11 @@ struct ImageStack {
       for(size_t c=0;c<3;++c)dst[c]=out>0?(src[c]*a+dst[c]*b*(1-a))/out:0;
       dst[3]=out;
     };
-    for(const auto& e:entries){const auto p=SampleImageModifier(e.modifier,now-e.started);
+    for(const auto& e:entries){auto p=SampleImageModifier(e.modifier,now-e.started);
+      p.fade[3]*=e.strength;p.tint[3]*=e.strength;p.blur*=e.strength;
+      p.saturation=1+(p.saturation-1)*e.strength;
+      p.brightness=1+(p.brightness-1)*e.strength;
+      p.contrast=1+(p.contrast-1)*e.strength;
       over(result.fade,p.fade);over(result.tint,p.tint);result.blur=std::max(result.blur,p.blur);
       result.saturation*=p.saturation;result.brightness*=p.brightness;result.contrast*=p.contrast;
     }return result;

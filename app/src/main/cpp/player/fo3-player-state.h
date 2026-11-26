@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include "video/fo3-movie-request.h"
 #include "player/fo3-player-scale.h"
 #include "fo3-corpse-pose.h"
@@ -129,6 +130,8 @@ struct WorldWeapon {
   fo3weapon::WorldPose pose;
 };
 struct Rules {
+  // Fallout3.exe settings used by the actor knockback calculation.
+  float knockbackAgilBase=1.f,knockbackAgilMult=-.008f,knockbackDamageBase=50.f,knockbackDamageMult=10.f;
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
   float apBase = 0, apMult = 0, carryBase = 0, carryMult = 0;
   float skillPrimaryMult=2,skillLuckMult=.5f; // Verified native fAVDSkill defaults.
@@ -171,12 +174,17 @@ struct LootList {
 };
 // Scene-independent game coordinates. Nonresident actors freeze here rather
 // than moving through unavailable geometry. No tracking/render pointers.
+struct RagdollPush {
+  std::array<float,3> originOffset{}; // OpenXR metres from actor origin at the instruction.
+  float speed=0;
+  bool operator==(const RagdollPush& other)const{return originOffset==other.originOffset&&speed==other.speed;}
+};
 struct ActorState {
   uint32_t cell=0,world=0,package=0,sequence=0,hostile=0;
   std::array<float,3> position{};
   float yaw=0,packageWaitSeconds=0; // OpenXR scene yaw for actor poses.
   uint64_t equippedWeapon=0;
-  bool dead=false, alert=false, weaponLocked=false;
+  bool dead=false, alert=false, weaponLocked=false, revivedAuthoredCorpse=false;
   std::shared_ptr<const CorpsePose> corpse;
 };
 enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
@@ -207,6 +215,9 @@ struct ActiveAid {
   double remaining=0;
 };
 inline constexpr size_t MaxActiveAid=1024;
+struct ShaderPlayback {float elapsed=0,duration=-1;uint32_t variantSeed=0;};
+struct PlacedBlastHit {uint32_t explosion=0,target=0;float distance=0;};
+struct PlacedEffect {uint32_t target=0,enchantment=0,index=0;float remaining=0,magnitude=0;};
 struct State {
   bool inCharGen=false,locationSpecificLoadScreens=false;
   float playerScale=1;
@@ -285,6 +296,14 @@ struct State {
   std::unordered_set<uint32_t> achievements; // local authored events, no platform unlock
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
+  std::unordered_map<uint32_t,float> actorKnockouts;
+  std::unordered_map<uint32_t,uint32_t> actorKillers;
+  // Scene-axis velocity changes waiting for the actor's articulated physics rig.
+  std::map<uint32_t,std::vector<RagdollPush>> ragdollPushes;
+  std::map<std::pair<uint32_t,uint32_t>,ShaderPlayback> magicShaders;
+  std::vector<PlacedEffect> placedEffects;
+  std::vector<PlacedBlastHit> placedBlastHits;
+  std::unordered_set<uint32_t> unconsciousActors,ghostActors;
   std::unordered_map<uint32_t,float> actorDamage;
   std::unordered_map<uint64_t,float> actorLimbDamage; // REFR and BPTD part type -> fraction lost.
   PagedStateMap<ActorState> actors;
@@ -302,6 +321,16 @@ struct BarterSession {
   std::vector<BarterSelection> selections;
 };
 struct ExplosionDefinition {
+  // Fallout3.exe 0x5bde70 is shared by the actor hit and image-space paths.
+  static float RadialFraction(float distance,float range){
+    if(!std::isfinite(distance)||!std::isfinite(range)||distance<0||range<=0||distance>=range)return 0;
+    const float ratio=distance/range;
+    return 1.f-ratio*ratio;
+  }
+  float PlacedHitDamage(float distance,const fo3weapon::Definitions& rules)const{
+    // A script-placed EXPL starts with condition 1 (0x8424e2).
+    return damage*(rules.conditionBase+rules.conditionMult)*RadialFraction(distance,radius);
+  }
   std::string model;
   float force=0,damage=0,radius=0,imageRadius=0,radiation=0,radiationTime=0,radiationRadius=0;
   uint32_t light=0,sound=0,flags=0,impactData=0,sound2=0,imageModifier=0,placedObject=0,enchantment=0;
@@ -316,6 +345,7 @@ struct DestructibleDefinition {
   std::vector<DestructionStage> stages;
 };
 struct Catalog {
+  bool goreDisabled=false;
   std::unordered_map<uint32_t,ExplosionDefinition> explosions;
   std::unordered_map<uint32_t,DestructibleDefinition> destructibles;
   // Complete XTEL records, keyed by placed source door.
@@ -377,6 +407,7 @@ struct Catalog {
   int32_t karmaMajorThreshold=250;
   float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
   std::unordered_map<std::string,float> sneakSettings=fo3sneak::NativeSettings();
+  float essentialDeathTime=10.f,essentialRecoverFraction=.3f;
   float npcRunMultiplier = 1.0f; // Optional original fMoveRunMult GMST; do not invent.
   float npcBaseSpeed = 0.f; // Original fMoveBaseSpeed, in game units/second.
   // Optional original GMSTs. Missing data disables the added morale/range policy.
@@ -596,7 +627,15 @@ public:
   const fo3pipdata::ActorDefinition* ActorCategory(uint32_t reference,uint16_t category)const;
   bool ActorVariable(uint32_t reference,uint32_t slot,float& value) const;
   bool SetActorVariable(uint32_t reference,uint32_t slot,float value);
-  bool KillActor(uint32_t reference);
+  bool KillActor(uint32_t reference,uint32_t killer=0);
+  bool IsActorKiller(uint32_t victim,uint32_t killer,float& result)const;
+  bool ResurrectActor(uint32_t reference);
+  bool SetActorGhost(uint32_t reference,bool ghost);
+  bool ActorGhost(uint32_t reference)const{return state_.ghostActors.count(reference)!=0;}
+  bool SetActorUnconscious(uint32_t reference,bool value);
+  bool ActorUnconscious(uint32_t reference)const{return state_.unconsciousActors.count(reference)!=0;}
+  bool ActorKnockedOut(uint32_t reference)const{return state_.actorKnockouts.count(reference)!=0;}
+  void AdvanceActorRecovery(double seconds);
   bool SetActorAlert(uint32_t reference,bool alert);
   bool ScriptEquipActorItem(uint32_t reference,uint32_t form,bool locked);
   bool ScriptEquippedItem(uint32_t actor,uint32_t form,bool& equipped)const;
@@ -609,6 +648,14 @@ public:
   bool ScriptIdlePlaying(uint32_t actor) const;
   void SetScriptPlayingIdles(std::unordered_set<uint32_t> actors){
     if(actors!=scriptPlayingIdles_){scriptPlayingIdles_=std::move(actors);++scriptEffectRevision_;}
+  }
+  void SetScriptActorProcedures(std::unordered_map<uint32_t,uint8_t> procedures){
+    if(procedures!=scriptActorProcedures_){scriptActorProcedures_=std::move(procedures);++scriptEffectRevision_;}
+  }
+  bool ScriptActorProcedure(uint32_t reference,float& value)const{
+    const auto it=scriptActorProcedures_.find(reference);
+    if(it==scriptActorProcedures_.end())return false;
+    value=it->second;return true;
   }
   bool AnyScriptActorTalking()const{return !scriptTalking_.empty();}
   bool ScriptActorTalking(uint32_t reference)const{return scriptTalking_.count(reference)!=0;}
@@ -684,7 +731,7 @@ public:
   bool SetCellFullName(uint32_t cell,uint32_t message);
   std::string CellFullName(uint32_t cell) const;
   bool AddAchievement(uint32_t id);
-  bool ScriptInSameCell(uint32_t reference,bool& result,std::string& error) const;
+  bool ScriptInSameCell(uint32_t reference,bool& result,std::string& error,uint32_t target=PlayerRef) const;
   bool ReevaluatePackage(uint32_t reference);
   // Returns false for an unknown/deleted reference or malformed/cyclic graph.
   bool ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const;
@@ -706,11 +753,19 @@ public:
   uint64_t ScriptRuntimeGeneration() const {return scriptRuntimeGeneration_;}
   void SetScriptRuntimeClock(double now,double elapsed);
   void SetScriptAnimationRegistry(std::shared_ptr<const fo3script::AnimationRegistry> registry);
+  const fo3script::AnimationRun* ScriptAnimation(uint32_t reference) const {
+    const auto it=scriptAnimations_.find(reference);
+    return it==scriptAnimations_.end()?nullptr:&it->second;
+  }
   bool ScriptAnimationPlaying(uint32_t reference,bool& playing,const std::string& group={}) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   void FinishScriptAnimation(uint32_t reference,const std::string& group);
   bool QueueScriptAction(fo3script::Action action);
-  bool QueueExplosion(uint32_t reference,uint32_t form);
+  bool QueueExplosion(uint32_t reference,uint32_t form,std::string* error=nullptr);
+  // Health phase of a script-placed explosion on one observed target; the
+  // caller owns enchantment delivery and the resulting script events.
+  bool ApplyPlacedExplosionHealthHit(uint32_t source,uint32_t explosion,uint32_t target,
+                                     bool lineOfSight,float& applied);
   const DestructionStage* ObjectDamageStage(uint32_t reference,bool requireModel=false) const;
   bool DamageDestructible(uint32_t reference,float amount);
   bool QueueWeaponHit(uint32_t reference,uint32_t attacker,uint32_t weapon);
@@ -721,7 +776,7 @@ public:
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;
   std::vector<std::pair<uint32_t,bool>> ScriptActorTriggerChanges(
-      uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position)const;
+      uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position,float yaw=0)const;
   std::vector<uint32_t> ScriptOccupiedTriggers() const;
   void AcknowledgeScriptTrigger(uint32_t reference,bool inside,uint32_t actor=PlayerRef);
   bool QueueScriptSound(uint32_t form);
@@ -777,6 +832,8 @@ public:
   bool SetAddiction(uint32_t spell,bool enabled);
   bool DispelIngestible(uint32_t source);
   void AdvanceAid(double seconds);
+  bool BeginPlacedEnchantment(uint32_t enchantment,uint32_t target,std::string& error);
+  bool AdvancePlacedEffects(double seconds,std::string& error);
   bool CanUse(uint64_t stack,std::string* reason=nullptr) const;
   bool Use(uint64_t stack,std::string* reason=nullptr);
   bool Add(uint32_t formId, int32_t count, float condition = 1);
@@ -830,13 +887,14 @@ public:
   float ActorUnarmedDamage(uint32_t reference) const;
   float DamageResistance(uint32_t reference) const;
   bool UpdateActor(uint32_t reference,const ActorState& state);
+  bool AcceptRagdollPush(uint32_t reference,const CorpsePose& pose);
   bool SetCorpsePose(uint32_t reference,const CorpsePose& pose);
   bool MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset);
   uint64_t ScriptActorMoveEpoch(uint32_t reference) const {const auto i=scriptActorMoves_.find(reference);return i==scriptActorMoves_.end()?0:i->second;}
   bool SetActorHostile(uint32_t reference,uint32_t target);
   bool StopActorCombat(uint32_t reference,bool targetingActor=false);
   bool DoorInteractionCrime(uint32_t reference) const;
-  bool ScriptReferenceLocation(uint32_t reference,fo3pipdata::Location& location) const;
+  bool ScriptReferenceLocation(uint32_t reference,fo3pipdata::Location& location,float* height=nullptr) const;
   bool ScriptPackage(uint32_t reference,uint32_t package,bool add);
   OwnershipResult ResolveOwnership(uint32_t reference, const OwnershipData* item=nullptr) const;
   OwnershipResult ContainerStackOwnership(uint32_t reference,uint64_t stack) const;
@@ -931,6 +989,9 @@ private:
       const std::unordered_map<uint32_t,bool>& roots,uint64_t revision) const;
   std::shared_ptr<const uint8_t> referencePlanIdentity_=std::make_shared<const uint8_t>(0);
   void CommitTheft(uint32_t reference,uint32_t item,int32_t count,uint32_t container,const OwnershipResult& ownership);
+  bool StartPlacedEffectsDirect(uint32_t enchantment,uint32_t target,std::string& reason);
+  bool ApplyPlacedHealthAtDistance(const PlacedBlastHit& hit,float& applied);
+  bool ResolvePlacedBlastHit(const PlacedBlastHit& hit,std::string& error,bool deliverDeath);
   bool RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
                       uint32_t activator,std::string& error,uint32_t filterForm=0);
   void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
@@ -985,6 +1046,7 @@ private:
   size_t scriptTraceBytes_=0;
   mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
+  std::unordered_map<uint32_t,uint8_t> scriptActorProcedures_;
   std::unordered_set<uint32_t> scriptDetection_, scriptTalking_, scriptPlayingIdles_;
   std::vector<fo3script::Action> pendingScriptActions_;
   std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;

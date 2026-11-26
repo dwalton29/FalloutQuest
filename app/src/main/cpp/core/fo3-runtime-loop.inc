@@ -460,6 +460,7 @@ public:
             return;
         }
         FlushFo3PlayerState();
+        fo3addonrenderer::Shutdown();
         fo3worldfx::Shutdown();
         ShutdownFo3LoadingVr();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
@@ -2084,7 +2085,12 @@ private:
                     if(!scriptMenu&&!Fo3PipboyFocus())
                         scriptPlayer.RestoreActionPoints(float(seconds)*scriptPlayer.Definitions().weapons.vats.restoreRate);
                     const auto beforeScripts=scriptPlayer.Revision();
-                    if(!scriptMenu&&!Fo3PipboyFocus())scriptPlayer.AdvanceAid(seconds);
+                    if(!scriptMenu&&!Fo3PipboyFocus()){
+                        scriptPlayer.AdvanceAid(seconds);
+                        std::string effectError;
+                        if(!scriptPlayer.AdvancePlacedEffects(seconds,effectError))
+                            FQ_LOGI("Placed enchantment update failed: %s",effectError.c_str());
+                    }
                     // Discover resident identities at 4 Hz or a publication change;
                     // drive quest cadence every application frame, not per eye.
                     struct Q230ScriptedStatics {

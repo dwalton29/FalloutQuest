@@ -39,11 +39,18 @@ static void Start(const fo3script::Action& a,const fo3player::ExplosionDefinitio
             Particle p;p.start=a.position;
             std::array<float,3> v{};
             do {for(auto& n:v)n=signedUnit();}while(layer.sphere&&v[0]*v[0]+v[1]*v[1]+v[2]*v[2]>1);
-            for(size_t n=0;n<3;++n)p.start[n]+=v[n]*layer.volume[n]*(layer.sphere?1.f:.5f);
+            for(size_t n=0;n<3;++n)v[n]*=layer.volume[n]*(layer.sphere?1.f:.5f);
+            const auto& transform=layer.emitterToModel;
+            fo3_q6f_collision_detail::TransformPoint(transform,v[0],v[1],v[2]);
+            for(size_t n=0;n<3;++n)p.start[n]+=v[n];
             const float d=layer.declination+signedUnit()*layer.declinationVariation;
             const float theta=layer.angle+signedUnit()*layer.angleVariation;
             const float speed=layer.speed+.5f*signedUnit()*layer.speedVariation;
-            p.velocity={speed*std::sin(d)*std::cos(theta),speed*std::sin(d)*std::sin(theta),speed*std::cos(d)};
+            const std::array<float,3> localVelocity{speed*std::sin(d)*std::cos(theta),speed*std::sin(d)*std::sin(theta),speed*std::cos(d)};
+            for(size_t axis=0;axis<3;++axis){
+                const float* row=transform.m+4*axis;
+                p.velocity[axis]=row[0]*localVelocity[0]+row[1]*localVelocity[1]+row[2]*localVelocity[2];
+            }
             p.birth=layer.begin+layer.window*(float(i)+.5f)/layer.count;
             p.radius=std::max(0.f,layer.radius+.5f*signedUnit()*layer.radiusVariation);
             p.life=std::max(0.f,layer.life+.5f*signedUnit()*layer.lifeVariation);

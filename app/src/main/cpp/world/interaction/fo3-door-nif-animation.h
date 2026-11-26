@@ -148,4 +148,34 @@ inline bool ModelDeltaToScene(const float placement[16],
     return true;
 }
 
+// Mode 5 replaces the node's world rotation after animation. Corrections
+// propagate to descendants while the simulation keeps the authored pose.
+inline void BillboardCorrections(const Asset& asset,const fo3anim::Pose& pose,
+                                 const float placement[16],float unitsPerMetre,const float eye[3],
+                                 std::vector<fo3anim::Matrix>& corrections){
+    using namespace fo3anim;
+    Matrix modelToScene;
+    std::copy_n(placement,16,modelToScene.begin());
+    for(int col=0;col<3;++col)for(int row=0;row<3;++row)modelToScene[col*4+row]/=unitsPerMetre;
+    corrections.resize(asset.hierarchy.bones.size());
+    for(size_t i=0;i<corrections.size();++i){
+        const auto& bone=asset.hierarchy.bones[i];
+        auto& correction=corrections[i];
+        correction=bone.parent<0?Identity():corrections[size_t(bone.parent)];
+        if(bone.billboardMode!=5)continue;
+        const auto authored=Multiply(modelToScene,pose.global[i]);
+        const auto world=Multiply(correction,authored);
+        const float dx=eye[0]-world[12],dz=eye[2]-world[14],length=std::hypot(dx,dz);
+        const float scale=std::hypot(world[0],world[1],world[2]);
+        // At the pole the original keeps identity in Gamebryo world axes.
+        Matrix facing={scale,0,0,0, 0,0,-scale,0, 0,scale,0,0, world[12],world[13],world[14],1};
+        if(length>=1.e-12f*scale&&length>0){
+            facing[0]=scale*(dz/length);facing[2]=-scale*(dx/length);
+            facing[4]=scale*(dx/length);facing[6]=scale*(dz/length);
+        }
+        Matrix inverse;
+        if(Inverse(authored,inverse))correction=Multiply(facing,inverse);
+    }
+}
+
 } // namespace fo3dooranim

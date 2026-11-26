@@ -1,4 +1,5 @@
 #include "fo3-player-state.h"
+#include "fo3-new-game.h"
 #include "fo3-actor-values.h"
 #include "fo3-tag-skills.h"
 #include "data/fo3-esm-reader.h"
@@ -299,6 +300,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
   if (fileSize < 24)
     return fail("Truncated ESM");
   Catalog next;
+  const auto slash=path.find_last_of('/');
+  const auto ini=fo3newgame::FindInstallationIni(slash==std::string::npos?".":path.substr(0,slash));
+  std::ifstream iniStream(ini);
+  next.goreDisabled=fo3newgame::ReadGoreDisabled(iniStream);
   std::unordered_map<uint32_t,std::string> activatorModels;
   std::vector<uint64_t> groups;
   std::vector<uint32_t> groupCells,groupWorlds,groupTopics;
@@ -724,7 +729,9 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
     const auto setting=settings.find(entry.first);
     if(setting!=settings.end()&&std::isfinite(setting->second)&&setting->second>=0&&setting->second<=10)*entry.second=setting->second;
   }
-  for(const auto& setting:std::array<std::pair<const char*,float*>,5>{{
+  for(const auto& setting:std::array<std::pair<const char*,float*>,9>{{
+      {"fKnockbackAgilBase",&next.rules.knockbackAgilBase},{"fKnockbackAgilMult",&next.rules.knockbackAgilMult},
+      {"fKnockbackDamageBase",&next.rules.knockbackDamageBase},{"fKnockbackDamageMult",&next.rules.knockbackDamageMult},
       {"fMagicMedicineSkillBase",&next.rules.medicineBase},
       {"fMagicMedicineSkillMult",&next.rules.medicineMult},
       {"fAddictionUsageMonitorThreshold",&next.rules.addictionThreshold},
@@ -737,6 +744,9 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
   if(tagBonus!=settings.end()){if(!std::isfinite(tagBonus->second)||tagBonus->second<0||tagBonus->second>100)return fail("Invalid tag skill bonus");next.rules.tagSkillBonus=tagBonus->second;}
   // Fast NPC flee locomotion uses the actual Fallout3.esm run multiplier;
   // absent/invalid source fails closed to current walk speed.
+  const auto downTime=settings.find("fEssentialDeathTime"),recover=settings.find("fEssentialHealthPercentReGain");
+  if(downTime!=settings.end()&&std::isfinite(downTime->second)&&downTime->second>0)next.essentialDeathTime=downTime->second;
+  if(recover!=settings.end()&&std::isfinite(recover->second)&&recover->second>0&&recover->second<=1)next.essentialRecoverFraction=recover->second;
   const auto runSetting=settings.find("fMoveRunMult");
   if(runSetting!=settings.end()&&std::isfinite(runSetting->second)&&
      runSetting->second>=1.f&&runSetting->second<=10.f)
@@ -921,6 +931,7 @@ bool Player::AdvanceGameHours(double hours) {
       if(++state_.gameMonth>=12){state_.gameMonth=0;++state_.gameYear;}
     }
   }
+  if(catalog_->gameTimeScale>0)AdvanceActorRecovery(hours*3600.0/catalog_->gameTimeScale);
   return true;
 }
 bool Player::GlobalValue(uint32_t form,float& value) const {
@@ -951,7 +962,7 @@ ActorCensusReport Player::RegisterOriginalActors() {
     const auto existing=state_.actors.find(id);
     const auto& p=catalog_->actorPlacements.at(id);
     const bool authoredDead=catalog_->authoredCorpseBases.count(p.base)!=0;
-    if(existing!=state_.actors.end()&&(!authoredDead||existing->second.dead)){
+    if(existing!=state_.actors.end()&&(!authoredDead||existing->second.dead||existing->second.revivedAuthoredCorpse)){
       ++report.alreadyTracked;continue;
     }
     // Track conditional actors too. Canonical enable evaluation controls
@@ -1009,10 +1020,14 @@ bool Player::Add(uint32_t form, int32_t count, float condition) {
     if (static_cast<size_t>(count) > MaxStacks - state_.inventory.size() ||
         static_cast<uint64_t>(count) > UINT64_MAX - state_.nextStackId)
       return false;
+    const auto first=state_.nextStackId;
     state_.inventory.reserve(state_.inventory.size() + count);
     for (int32_t i = 0; i < count; ++i)
       state_.inventory.push_back({state_.nextStackId++, form, 1, condition, false});
     ++revision_;
+    if(item.script){
+      for(int32_t i=0;i<count;++i)if(!DispatchEquipmentEvent(first+uint64_t(i),form,"OnAdd"))return false;
+    }
     return true;
   }
   for (auto &s : state_.inventory)
@@ -1021,14 +1036,14 @@ bool Player::Add(uint32_t form, int32_t count, float condition) {
         return false;
       s.count += count;
       ++revision_;
-      return true;
+      return !item.script||DispatchEquipmentEvent(s.id,form,"OnAdd");
     }
   if (state_.inventory.size() >= MaxStacks || state_.nextStackId == UINT64_MAX)
     return false;
   state_.inventory.push_back(
       {state_.nextStackId++, form, count, condition, false});
   ++revision_;
-  return true;
+  return !item.script||DispatchEquipmentEvent(state_.inventory.back().id,form,"OnAdd");
 }
 bool Player::Remove(uint64_t id, int32_t count) {
   auto &v = state_.inventory;
@@ -1241,8 +1256,12 @@ bool Player::CanPickupPlacedItem(uint32_t id,bool scripted) const {
   const auto i = catalog_->items.find(ref.base);
   if(!ref.valid || (ref.flags & 0x20) || !ResolveOwnership(id).known || ref.locked ||
      i==catalog_->items.end() || !i->second.playable ||
-     (i->second.script&&(!scripted||HasReferenceEvent(id,"OnAdd"))) ||
      !(i->second.maxCondition>0 || ref.condition==1))return false;
+  if(i->second.script&&!scripted){
+    const auto program=catalog_->eventPrograms.find(i->second.script);
+    if(program==catalog_->eventPrograms.end()||!program->second.error.empty()||
+       HasReferenceEvent(id,"OnActivate")||!HasReferenceEvent(id,"OnAdd"))return false;
+  }
   bool disabled=false;std::string error;
   return ReferenceDisabled(id,disabled,error)&&!disabled;
 }
@@ -1549,7 +1568,27 @@ float Player::HealthPercentage(uint32_t reference) const {
   return maximum>0?health/maximum:0;
 }
 bool Player::ChangeActorValueDamage(uint32_t reference,uint32_t id,float amount,bool restore){
-  if(reference!=PlayerRef||!std::isfinite(amount)||amount<0)return false;
+  if(!std::isfinite(amount)||amount<0)return false;
+  if(reference!=PlayerRef){
+    if(id!=16)return false;
+    const float health=ActorHealth(reference);
+    if(health<0)return false;
+    if(!amount||!health)return true; // RestoreAV cannot resurrect an actor.
+    const auto prior=state_.actorDamage.find(reference);
+    if(restore){
+      if(prior==state_.actorDamage.end())return true;
+      if(prior->second<=amount)state_.actorDamage.erase(prior);
+      else prior->second-=amount;
+    }else{
+      if(amount>=health){
+        if(!KillActor(reference))return false;
+        if(ActorKnockedOut(reference))return true; // KillActor recorded the health loss.
+      }
+      state_.actorDamage[reference]+=std::min(amount,health);
+    }
+    ++revision_;
+    return true;
+  }
   if(id==16)return restore?RestoreHealth(amount):DamageHealth(amount);
   if(id==12){if(restore)return RestoreActionPoints(amount);const float next=std::min(MaxActionPoints(),state_.apSpent+amount);if(next!=state_.apSpent){state_.apSpent=next;++revision_;}return true;}
   if(id!=54&&(id<25||id>30))return false;
@@ -1683,7 +1722,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(auto id:actorIds){const auto& a=state_.actors.at(id);Put32(payload,id);
     for(auto v:{a.cell,a.world,a.package,a.sequence,a.hostile})Put32(payload,v);
     for(float v:a.position)PutFloat(payload,v);
-    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,(a.dead?1u:0u)|(a.alert?2u:0u)|(a.weaponLocked?4u:0u));PutFloat(payload,a.packageWaitSeconds);
+    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,(a.dead?1u:0u)|(a.alert?2u:0u)|(a.weaponLocked?4u:0u)|(a.revivedAuthoredCorpse?8u:0u));PutFloat(payload,a.packageWaitSeconds);
   }
   // v10: appended after v9 actor records. v1-v9 remain readable verbatim.
   PutFloat(payload,state_.gameHour);
@@ -1727,7 +1766,15 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(const auto& stack:state_.inventory)collectScript(stack);
   for(const auto& container:state_.containers)for(const auto& stack:container.second)collectScript(stack);
   for(const auto& weapon:state_.worldWeapons)collectScript(weapon.instance);
-  const bool hasObjectDamage=!itemScripts.empty()||hasEquipmentLocks||hasPlayerOwnership||!state_.objectDamage.empty();
+  const bool hasRevivedCorpse=std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& entry){return entry.second.revivedAuthoredCorpse;});
+  const bool seededShaders=!state_.magicShaders.empty();
+  const bool hasAnimations=seededShaders||!scriptAnimations_.empty();
+  const bool hasEffects=hasAnimations||!state_.placedBlastHits.empty()||!state_.placedEffects.empty()||!state_.magicShaders.empty();
+  const bool hasPushes=hasEffects||!state_.ragdollPushes.empty();
+  const bool hasKillers=hasPushes||!state_.actorKillers.empty();
+  const bool hasIncapacity=hasKillers||!state_.actorKnockouts.empty()||!state_.unconsciousActors.empty()||!state_.ghostActors.empty();
+  const bool hasItemScriptSection=hasIncapacity||hasRevivedCorpse||!itemScripts.empty();
+  const bool hasObjectDamage=hasItemScriptSection||hasEquipmentLocks||hasPlayerOwnership||!state_.objectDamage.empty();
   const bool hasLimbs=hasObjectDamage||hasActorApparel||!state_.actorLimbDamage.empty();
   const bool hasAid=hasLimbs||!state_.activeAid.empty()||!state_.addictions.empty();
   const bool hasAppearance=hasAid||state_.appearance.race||state_.appearanceDraft.race;
@@ -2048,7 +2095,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(damage.size()));
     for(const auto& object:damage){Put32(payload,object.first);PutFloat(payload,object.second);}
   }
-  if(!itemScripts.empty()){
+  if(hasItemScriptSection){
     Put32(payload,0x31534949); // IIS1, locals belong to an individual inventory instance.
     Put32(payload,uint32_t(itemScripts.size()));
     for(const auto& [id,instance]:itemScripts){
@@ -2058,7 +2105,68 @@ bool Player::Save(const std::string &path, std::string &error) const {
       for(const auto& [slot,value]:instance->references){Put32(payload,slot);Put32(payload,value);}
     }
   }
-  Put32(bytes, !itemScripts.empty() ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasIncapacity){
+    Put32(payload,0x31434e49); // INC1
+    std::vector<uint32_t> forced(state_.unconsciousActors.begin(),state_.unconsciousActors.end());
+    std::sort(forced.begin(),forced.end());Put32(payload,uint32_t(forced.size()));
+    for(auto ref:forced)Put32(payload,ref);
+    std::vector<uint32_t> ghosts(state_.ghostActors.begin(),state_.ghostActors.end());
+    std::sort(ghosts.begin(),ghosts.end());Put32(payload,uint32_t(ghosts.size()));
+    for(auto ref:ghosts)Put32(payload,ref);
+    std::map<uint32_t,float> timed(state_.actorKnockouts.begin(),state_.actorKnockouts.end());
+    Put32(payload,uint32_t(timed.size()));
+    for(const auto& [ref,remaining]:timed){Put32(payload,ref);PutFloat(payload,remaining);}
+  }
+  if(hasKillers){
+    Put32(payload,0x31524c4b); // KLR1
+    std::map<uint32_t,uint32_t> killers(state_.actorKillers.begin(),state_.actorKillers.end());
+    Put32(payload,uint32_t(killers.size()));
+    for(const auto& [victim,killer]:killers){Put32(payload,victim);Put32(payload,killer);}
+  }
+  if(hasPushes){
+    Put32(payload,0x31485350); // PSH1
+    Put32(payload,uint32_t(state_.ragdollPushes.size()));
+    for(const auto& [reference,pushes]:state_.ragdollPushes){
+      Put32(payload,reference);Put32(payload,uint32_t(pushes.size()));
+      for(const auto& push:pushes){
+        for(float v:push.originOffset)PutFloat(payload,v);
+        PutFloat(payload,push.speed);
+      }
+    }
+  }
+  if(hasEffects){
+    Put32(payload,0x31584645); // EFX1
+    Put32(payload,uint32_t(state_.magicShaders.size()));
+    for(const auto& [key,playback]:state_.magicShaders){
+      Put32(payload,key.first);Put32(payload,key.second);PutFloat(payload,playback.elapsed);PutFloat(payload,playback.duration);
+      Put32(payload,playback.variantSeed);
+    }
+    Put32(payload,uint32_t(state_.placedEffects.size()));
+    for(const auto& effect:state_.placedEffects){
+      Put32(payload,effect.target);Put32(payload,effect.enchantment);Put32(payload,effect.index);
+      PutFloat(payload,effect.remaining);PutFloat(payload,effect.magnitude);
+    }
+    Put32(payload,uint32_t(state_.placedBlastHits.size()));
+    for(const auto& hit:state_.placedBlastHits){
+      Put32(payload,hit.explosion);Put32(payload,hit.target);PutFloat(payload,hit.distance);
+    }
+  }
+  if(hasAnimations){
+    Put32(payload,0x314d4e41); // ANM1
+    Put32(payload,uint32_t(scriptAnimations_.size()));
+    for(const auto& [reference,run]:scriptAnimations_){
+      Put32(payload,reference);
+      const double elapsed=std::max(0.,scriptRuntimeSeconds_-run.started);
+      const double phase=run.loop?elapsed:std::min(elapsed,run.duration);
+      for(double value:{phase,run.duration}){
+        uint64_t bits;std::memcpy(&bits,&value,8);Put64(payload,bits);
+      }
+      payload.push_back(run.loop);
+      Put32(payload,uint32_t(run.group.size()));
+      payload.insert(payload.end(),run.group.begin(),run.group.end());
+    }
+  }
+  Put32(bytes, seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -2118,7 +2226,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 42))
+      (version < 1 || version > 49))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2128,12 +2236,13 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (fo3esm::ReadU32(h + 16) != Crc(payload))
     return fail("Player save checksum failed");
   const auto *p = payload.data();
+  decltype(scriptAnimations_) restoredAnimations;
   State next = catalog_->initial;
   std::vector<ScriptMessage> restoredPrompts;std::unordered_map<uint32_t,int> restoredButtons;
   next.referenceEnabled.clear();
   next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
-  next.actorDamage.clear();
+  next.actorDamage.clear();next.actorKillers.clear();next.ragdollPushes.clear();next.magicShaders.clear();next.placedEffects.clear();next.placedBlastHits.clear();next.actorKnockouts.clear();next.unconsciousActors.clear();next.ghostActors.clear();
   next.actors.clear();
   next.developmentWeaponGranted = false;
   next.healthDamage = fo3esm::ReadF32(p);
@@ -2333,7 +2442,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
           a.package=fo3esm::ReadU32(p+at+12);a.sequence=fo3esm::ReadU32(p+at+16);a.hostile=fo3esm::ReadU32(p+at+20);
           for(size_t j=0;j<3;++j)a.position[j]=fo3esm::ReadF32(p+at+24+j*4);
           a.yaw=fo3esm::ReadF32(p+at+36);a.equippedWeapon=U64(p+at+40);
-          if(version>=8){const auto life=fo3esm::ReadU32(p+at+48);if(life>7)return fail("Invalid actor lifecycle");a.dead=life&1u;a.alert=life&2u;a.weaponLocked=life&4u;if(a.dead&&Essential(id))return fail("Essential actor cannot be a corpse");}
+          if(version>=8){const auto life=fo3esm::ReadU32(p+at+48);if(life>(version>=43?15u:7u))return fail("Invalid actor lifecycle");a.revivedAuthoredCorpse=life&8u;if(a.revivedAuthoredCorpse&&!catalog_->AuthoredCorpse(id))return fail("Invalid authored corpse override");a.dead=life&1u;a.alert=life&2u;a.weaponLocked=life&4u;if(a.dead&&Essential(id))return fail("Essential actor cannot be a corpse");}
           if(version>=9)a.packageWaitSeconds=fo3esm::ReadF32(p+at+52);
           if(!std::isfinite(a.packageWaitSeconds)||a.packageWaitSeconds<0)return fail("Invalid actor package wait");
           if(a.equippedWeapon){
@@ -2798,6 +2907,114 @@ bool Player::Restore(const std::string &path, std::string &error) {
           stack->second->scriptInstance=std::move(instance);
         }
       }
+      if(version>=44){
+        if(payload.size()-at<12||fo3esm::ReadU32(p+at)!=0x31434e49)return fail("Missing actor incapacity");
+        const auto forced=fo3esm::ReadU32(p+at+4);at+=8;
+        if(forced>10000||payload.size()-at<4+size_t(forced)*4)return fail("Invalid unconscious actor count");
+        for(uint32_t i=0;i<forced;++i,at+=4){
+          const auto ref=fo3esm::ReadU32(p+at);
+          if(!catalog_->actorPlacements.count(ref)||!next.unconsciousActors.insert(ref).second)return fail("Invalid unconscious actor");
+        }
+        const auto ghosts=fo3esm::ReadU32(p+at);at+=4;
+        if(ghosts>10001||payload.size()-at<4+size_t(ghosts)*4)return fail("Invalid ghost count");
+        for(uint32_t i=0;i<ghosts;++i,at+=4){
+          const auto ref=fo3esm::ReadU32(p+at);
+          if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||!next.ghostActors.insert(ref).second)return fail("Invalid ghost actor");
+        }
+        const auto timed=fo3esm::ReadU32(p+at);at+=4;
+        if(timed>10000||payload.size()-at<size_t(timed)*8)return fail("Invalid knockout count");
+        for(uint32_t i=0;i<timed;++i,at+=8){
+          const auto ref=fo3esm::ReadU32(p+at);const float remaining=fo3esm::ReadF32(p+at+4);
+          if(!catalog_->actorPlacements.count(ref)||!std::isfinite(remaining)||remaining<=0||
+             !next.actorKnockouts.emplace(ref,remaining).second)return fail("Invalid actor knockout");
+        }
+      }
+      if(version>=45){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524c4b)return fail("Missing death attribution");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>catalog_->actorPlacements.size()||payload.size()-at<size_t(count)*8)return fail("Invalid death attribution count");
+        for(uint32_t i=0;i<count;++i,at+=8){
+          const auto victim=fo3esm::ReadU32(p+at),killer=fo3esm::ReadU32(p+at+4);
+          if(!catalog_->actorPlacements.count(victim)||(killer!=PlayerRef&&!catalog_->actorPlacements.count(killer))||
+             !next.actorKillers.emplace(victim,killer).second)return fail("Invalid actor death attribution");
+        }
+      }
+      if(version>=46){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31485350)return fail("Missing ragdoll pushes");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>next.actors.size())return fail("Invalid ragdoll push count");
+        for(uint32_t i=0;i<count;++i){
+          if(payload.size()-at<8)return fail("Missing actor push");
+          const auto ref=fo3esm::ReadU32(p+at),n=fo3esm::ReadU32(p+at+4);at+=8;
+          const auto actor=next.actors.find(ref);
+          if(!n||n>64||payload.size()-at<size_t(n)*16||actor==next.actors.end()||
+             !actor->second.dead||next.ragdollPushes.count(ref))return fail("Invalid saved ragdoll push");
+          auto& pushes=next.ragdollPushes[ref];
+          for(unsigned j=0;j<n;++j,at+=16){
+            RagdollPush push;push.speed=fo3esm::ReadF32(p+at+12);
+            for(unsigned k=0;k<3;++k)push.originOffset[k]=fo3esm::ReadF32(p+at+4*k);
+            if(!std::isfinite(push.speed)||!std::all_of(push.originOffset.begin(),push.originOffset.end(),
+               [](float v){return std::isfinite(v);}))return fail("Invalid ragdoll velocity");
+            pushes.push_back(push);
+          }
+        }
+      }
+      if(version>=47){
+        if(payload.size()-at<12||fo3esm::ReadU32(p+at)!=0x31584645)return fail("Missing saved magic effects");
+        const auto shaders=fo3esm::ReadU32(p+at+4);at+=8;
+        const size_t shaderBytes=version>=49?20:16;
+        if(shaders>1024||payload.size()-at<shaderBytes*shaders+4)return fail("Invalid saved shader count");
+        for(unsigned i=0;i<shaders;++i,at+=shaderBytes){
+          const auto target=fo3esm::ReadU32(p+at),shader=fo3esm::ReadU32(p+at+4);
+          ShaderPlayback play{fo3esm::ReadF32(p+at+8),fo3esm::ReadF32(p+at+12),
+                              version>=49?fo3esm::ReadU32(p+at+16):target^(shader*2654435761u)};
+          if((target!=PlayerRef&&!catalog_->references.count(target))||!catalog_->pipboy.effectShaders.count(shader)||
+             !std::isfinite(play.elapsed)||play.elapsed<0||!std::isfinite(play.duration)||(play.duration<0&&play.duration!=-1)||
+             !next.magicShaders.emplace(std::make_pair(target,shader),play).second)return fail("Invalid saved magic shader");
+        }
+        const auto count=fo3esm::ReadU32(p+at);at+=4;
+        if(count>1024||payload.size()-at<20ull*count+4)return fail("Invalid saved enchantment count");
+        for(unsigned i=0;i<count;++i,at+=20){
+          PlacedEffect entry{fo3esm::ReadU32(p+at),fo3esm::ReadU32(p+at+4),fo3esm::ReadU32(p+at+8),
+                             fo3esm::ReadF32(p+at+12),fo3esm::ReadF32(p+at+16)};
+          const auto enchant=catalog_->pipboy.enchantments.find(entry.enchantment);
+          if((entry.target!=PlayerRef&&!catalog_->actorPlacements.count(entry.target))||enchant==catalog_->pipboy.enchantments.end()||
+             entry.index>=enchant->second.effects.size())return fail("Invalid saved enchantment binding");
+          const auto& effect=enchant->second.effects[entry.index];
+          const auto m=catalog_->pipboy.magic.find(effect.id);
+          if(m==catalog_->pipboy.magic.end()||(m->second.archetype!=fo3pipdata::MagicScript&&m->second.archetype!=fo3pipdata::MagicValue)||
+             !std::isfinite(entry.remaining)||entry.remaining<=0||entry.remaining>effect.duration||
+             !std::isfinite(entry.magnitude)||entry.magnitude<0||entry.magnitude>float(effect.magnitude))return fail("Invalid saved enchantment timing");
+          next.placedEffects.push_back(entry);
+        }
+        const auto hits=fo3esm::ReadU32(p+at);at+=4;
+        if(hits>1024||payload.size()-at<12ull*hits)return fail("Invalid saved blast count");
+        for(unsigned i=0;i<hits;++i,at+=12){
+          PlacedBlastHit hit{fo3esm::ReadU32(p+at),fo3esm::ReadU32(p+at+4),fo3esm::ReadF32(p+at+8)};
+          const auto blast=catalog_->explosions.find(hit.explosion);
+          if(blast==catalog_->explosions.end()||(hit.target!=PlayerRef&&!catalog_->actorPlacements.count(hit.target))||
+             !std::isfinite(hit.distance)||hit.distance<0||!(hit.distance<blast->second.radius))return fail("Invalid saved blast hit");
+          next.placedBlastHits.push_back(hit);
+        }
+      }
+      if(version>=48){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314d4e41)return fail("Missing object animations");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>(payload.size()-at)/26)return fail("Invalid object animation count");
+        for(uint32_t i=0;i<count;++i){
+          if(payload.size()-at<25)return fail("Truncated object animation");
+          const auto ref=fo3esm::ReadU32(p+at),length=fo3esm::ReadU32(p+at+21);
+          const auto phaseBits=U64(p+at+4),durationBits=U64(p+at+12);
+          double phase,duration;std::memcpy(&phase,&phaseBits,8);std::memcpy(&duration,&durationBits,8);
+          const auto loop=p[at+20];at+=25;
+          if(!catalog_->references.count(ref)||!length||length>payload.size()-at||
+             !std::isfinite(phase)||phase<0||!std::isfinite(duration)||duration<0||loop>1||(!loop&&phase>duration))
+            return fail("Invalid object animation");
+          std::string group(reinterpret_cast<const char*>(p+at),length);at+=length;
+          if(group.find(char(0))!=std::string::npos||!restoredAnimations.emplace(ref,
+             fo3script::AnimationRun{std::move(group),-phase,duration,bool(loop)}).second)return fail("Invalid object animation binding");
+        }
+      }
       if(at!=payload.size())return fail("Trailing player save data");
     }
     if (version == 3 && at != payload.size())
@@ -2829,7 +3046,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
   scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;ClearScriptActorFurniture();
-  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptPlayingIdles_.clear();scriptDetection_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
+  pendingScriptActions_.clear();scriptActorMoves_.clear();scriptActorProcedures_.clear();scriptTalking_.clear();scriptPlayingIdles_.clear();scriptDetection_.clear();scriptAnimations_=std::move(restoredAnimations);scriptRuntimeSeconds_=scriptElapsedSeconds_=0;scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
   scriptPrompts_=restoredPrompts;pendingScriptMessages_=std::move(restoredPrompts);scriptButtons_=std::move(restoredButtons);
   pendingScriptSounds_.clear();pendingBarters_.clear();EndContainerInteraction();
   ++revision_;

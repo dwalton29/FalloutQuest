@@ -1,6 +1,6 @@
 // Shares the existing bounds-checked Fallout 3 NIF header and block reader.
 // Layouts: niftools/nifxml nif.xml (20.2.0.7, user 11, Bethesda 34).
-#include "fo3-actor-animation.h"
+#include "../../npc/fo3-actor-animation.h"
 #include <functional>
 #include <limits>
 namespace {
@@ -197,7 +197,9 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
   std::unordered_map<uint32_t, size_t> index;
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
     const auto &type = BlockType(h, block);
-    if (type != "NiNode" && type != "BSFadeNode" &&
+    const bool billboard = type == "NiBillboardNode";
+    const bool branch = type == "NiNode" || type == "BSFadeNode" || billboard;
+    if (!branch &&
         !(blockBones && (Q970IsShapeType(type)||type=="NiParticleSystem")))
       continue;
     Cursor name(BlockData(bytes, h, block), h.blockSizes[block]);
@@ -211,6 +213,11 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
     Node node;
     node.block = block;
     node.bone.name = h.strings[ni];
+    if(branch&&transform.collision<h.numBlocks&&h.blockSizes[transform.collision]>=4){
+      Cursor collision(BlockData(bytes,h,transform.collision),h.blockSizes[transform.collision]);
+      uint32_t target=INVALID_REF;
+      node.bone.collisionOwner=collision.U32(target)&&target==block;
+    }
     node.bone.visible=(transform.flags&1u)==0;
     for (int i = 0; i < 3; ++i)
       node.bone.bind.translation[i] = transform.translation[i];
@@ -225,12 +232,19 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
     if (!ActorValid(transform.scale) || transform.scale <= 0)
       return false;
     uint32_t children = 0;
-    if ((type=="NiNode"||type=="BSFadeNode") && (!c.U32(children) || children > h.numBlocks))
+    if (branch && (!c.U32(children) || children > h.numBlocks))
       return false;
     node.children.resize(children);
     for (auto &ref : node.children)
       if (!c.U32(ref))
         return false;
+    if (billboard) {
+      uint32_t effects = 0;
+      uint16_t mode = 0;
+      if (!c.U32(effects) || effects > h.numBlocks || !c.Skip(size_t(effects)*4) ||
+          !c.U16(mode) || c.remaining()) return false;
+      node.bone.billboardMode = mode;
+    }
     index[block] = nodes.size();
     nodes.push_back(std::move(node));
   }
@@ -497,13 +511,68 @@ bool fo3anim::DecodeClip(const std::vector<uint8_t> &bytes, Clip &out) {
   return true;
 }
 
+// Embedded, always-running controllers are linked by NiObjectNET rather than
+// by a named sequence. Property controllers target a property owned by a shape.
+static bool DecodeDirectControllers(const std::vector<uint8_t>& bytes,const fo3anim::Skeleton& skeleton,
+                                    const std::vector<int>& mapping,std::vector<fo3anim::Clip>& clips){
+  using namespace fo3anim;
+  NifHeader h;if(!ActorHeader(bytes,h)||mapping.size()!=h.numBlocks)return false;
+  for(const auto& type:h.blockTypes)if(type=="NiControllerManager"||type=="NiControllerSequence")return false;
+  Clip result;
+  auto readChain=[&](uint32_t owner,const Bone& bone){
+    Cursor object(BlockData(bytes,h,owner),h.blockSizes[owner]);
+    uint32_t controller=INVALID_REF;
+    if(!ParseObjectNetPrefix(object,&controller))return false;
+    for(uint32_t n=0;controller!=INVALID_REF;++n){
+      if(n>=h.numBlocks||controller>=h.numBlocks)return false;
+      Cursor c(BlockData(bytes,h,controller),h.blockSizes[controller]);
+      ControllerClock clock;uint16_t flags=0;uint32_t next,target,interpolator;
+      if(!c.U32(next)||!c.U16(flags)||!c.F32(clock.frequency)||!c.F32(clock.phase)||
+         !c.F32(clock.start)||!c.F32(clock.stop)||!c.U32(target)||target!=owner)return false;
+      if(flags&8){
+        // Admit active forward looping, local-time controllers only.
+        const auto& type=BlockType(h,controller);
+        if(flags!=72||!ActorValid(clock.frequency)||!ActorValid(clock.phase)||
+           !ActorValid(clock.start)||!ActorValid(clock.stop)||clock.stop<clock.start||
+           !c.U32(interpolator)||interpolator>=h.numBlocks)return false;
+        if(type=="NiTransformController"){
+          Track track;track.bone=bone.name;
+          if(!ActorTrack(bytes,h,interpolator,track))return false;
+          result.tracks.push_back(std::move(track));result.transformClocks.push_back(clock);
+        }else if(type=="NiTextureTransformController"){
+          PropertyTrack property;property.bone=bone.name;
+          if(!DecodeProperty(bytes,h,interpolator,controller,type,property))return false;
+          result.properties.push_back(std::move(property));result.propertyClocks.push_back(clock);
+        }else return false;
+        result.stop=std::max(result.stop,clock.stop);
+      }
+      controller=next;
+    }
+    return true;
+  };
+  for(uint32_t block=0;block<h.numBlocks;++block){
+    if(mapping[block]<0)continue;
+    const auto& bone=skeleton.bones[size_t(mapping[block])];
+    if(!readChain(block,bone))return false;
+    if(!Q970IsShapeType(BlockType(h,block)))continue;
+    NifTransform transform;std::vector<uint32_t> properties;
+    Cursor shape(BlockData(bytes,h,block),h.blockSizes[block]);
+    if(!ParseAvObjectPrefix(shape,h,transform,&properties))return false;
+    for(auto property:properties)
+      if(property>=h.numBlocks||!readChain(property,bone))return false;
+  }
+  if(!result.DirectControllers())return false;
+  clips={std::move(result)};return true;
+}
+
 bool fo3anim::DecodeObjectAnimation(const std::vector<uint8_t> &bytes, Skeleton &out,
                                std::vector<int> &blockBones, std::vector<Clip> &clips,
                                bool allowOptionalEffects) {
   out = {}; blockBones.clear(); clips.clear();
   Skeleton hierarchy; std::vector<int> mapping; std::vector<Clip> sequences;
-  if (!DecodeHierarchy(bytes, hierarchy, &mapping) || !DecodeClips(bytes, sequences,allowOptionalEffects))
-    return false;
+  if (!DecodeHierarchy(bytes, hierarchy, &mapping))return false;
+  if (!DecodeClips(bytes,sequences,allowOptionalEffects) &&
+      !(allowOptionalEffects&&DecodeDirectControllers(bytes,hierarchy,mapping,sequences)))return false;
   for (auto &clip : sequences) {
     // UI root transforms are part of the authored canvas, not actor root motion.
     clip.accumulationRoot.clear();
@@ -523,7 +592,7 @@ bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t>& bytes,Skeleton& out,
   return true;
 }
 
-#include "fo3-furniture.h"
+#include "../../npc/fo3-furniture.h"
 bool fo3furniture::DecodeMarkers(const std::vector<uint8_t>& bytes,std::vector<Marker>& out) {
   out.clear();NifHeader h;if(!ActorHeader(bytes,h)||h.userVersion!=11||h.bsVersion!=34)return false;
   std::vector<Marker> decoded;
