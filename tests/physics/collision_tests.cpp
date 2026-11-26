@@ -348,6 +348,25 @@ int main(int argc,char**argv) {
     assert(x<.8f && std::fabs(y)<.01f);
     assert(HasFo3InteractionOccluder(0,1,0,1,0,0,2,0));
 
+    // One exterior REFR changes model at a destruction stage. Keep its old
+    // wall active until the replacement snapshot publishes, even on a cache hit.
+    const auto intact=placement(9,"Wall.nif");
+    publish(prepare({b,intact},true,106));
+    auto wreck=intact;wreck.modelPath=nonMegaton;
+    assert(IsFo3CollisionPlacementCachedQ1820(intact)&&!IsFo3CollisionPlacementCachedQ1820(wreck));
+    uint64_t replacement=0;
+    assert(!PrepareFo3CollisionSnapshotQ1930({b,wreck},0,0,0,0,0,70,&replacement,true,106));
+    size_t wreckTriangles=0;
+    assert(PrimeFo3CollisionPlacementCacheQ1820(wreck,0,0,0,0,0,70,&wreckTriangles)&&wreckTriangles);
+    assert(PrepareFo3CollisionSnapshotQ1930({b,wreck},0,0,0,0,0,70,&replacement,true,106));
+    assert(HasFo3InteractionOccluder(0,1,0,1,0,0,2,0));
+    publish(replacement);
+    assert(!HasFo3InteractionOccluder(0,1,0,1,0,0,2,0));
+    auto missing=wreck;missing.modelPath="MissingModel.nif";
+    assert(PrimeFo3CollisionPlacementCacheQ1820(missing,0,0,0,0,0,70,&wreckTriangles)&&!wreckTriangles);
+    assert(IsFo3CollisionPlacementCachedQ1820(missing)&&!IsFo3CollisionPlacementCachedQ1820(intact));
+    assert(PrimeFo3CollisionPlacementCacheQ1820(intact,0,0,0,0,0,70,&wreckTriangles)&&wreckTriangles);
+
     assets["Door.nif"]=packedNif(1,true);
     auto door=placement(10,"Door.nif","DOOR");
     publish(prepare({b,door},false,107));

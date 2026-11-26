@@ -142,6 +142,7 @@ std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> gSurfaceSourcesQ722;
 // each rolling 3x3 rebuild can then memcpy the six overlapping cells and transform
 // only the entering strip. The cache is scoped to one immutable exterior origin.
 struct Q1990CachedCollisionPlacement {
+    std::string modelPath;
     std::vector<CollisionTriangle> triangles;
     // One source record per authored Havok surface, not one per triangle.
     // Q18.2 uses this to rebuild the active source map without hashing every
@@ -153,7 +154,7 @@ struct Q1990CachedCollisionPlacement {
     uint64_t lastUse = 0u;
 };
 std::unordered_map<uint32_t, Q1990CachedCollisionPlacement> gQ1990CollisionPlacementCache;
-std::unordered_set<uint32_t> gQ1820NegativeCollisionPlacementCache;
+std::unordered_map<uint32_t,std::string> gQ1820NegativeCollisionPlacementCache;
 
 // Immutable NIF collision assets are process-lifetime. Q18.2 needs the same
 // caches both for active-world assembly and for budgeted prewarming.
@@ -836,18 +837,32 @@ void SetNextFo3CollisionExteriorModeQ1931(bool exterior) {
     gNextCollisionExteriorOverrideQ1931 = exterior ? 1 : 0;
 }
 
-bool IsFo3CollisionPlacementCachedQ1820(uint32_t refFormId) {
-    if (refFormId == 0u) return true;
-    return gQ1990CollisionPlacementCache.find(refFormId) !=
-               gQ1990CollisionPlacementCache.end() ||
-           gQ1820NegativeCollisionPlacementCache.find(refFormId) !=
-               gQ1820NegativeCollisionPlacementCache.end();
+static bool MissingCollisionModel(const Fo3WorldPlacement& p) {
+    const auto missing=gQ1820NegativeCollisionPlacementCache.find(p.refFormId);
+    return missing!=gQ1820NegativeCollisionPlacementCache.end()&&missing->second==p.modelPath;
+}
+bool IsFo3CollisionPlacementCachedQ1820(const Fo3WorldPlacement& p) {
+    if(!p.refFormId)return true;
+    const auto found=gQ1990CollisionPlacementCache.find(p.refFormId);
+    return (found!=gQ1990CollisionPlacementCache.end()&&found->second.modelPath==p.modelPath)||
+        MissingCollisionModel(p);
+}
+// Only the serialized collision builder changes this cache. Published scene
+// triangles keep their ownership while a new destruction stage is prepared.
+static void DiscardObsoleteCollisionModel(const Fo3WorldPlacement& p) {
+    const auto old=gQ1990CollisionPlacementCache.find(p.refFormId);
+    if(old!=gQ1990CollisionPlacementCache.end()&&old->second.modelPath!=p.modelPath)
+        gQ1990CollisionPlacementCache.erase(old);
+    const auto missing=gQ1820NegativeCollisionPlacementCache.find(p.refFormId);
+    if(missing!=gQ1820NegativeCollisionPlacementCache.end()&&missing->second!=p.modelPath)
+        gQ1820NegativeCollisionPlacementCache.erase(missing);
 }
 
 bool BuildFo3CollisionPlacementChunk(const Fo3WorldPlacement& placement,
         const std::vector<Fo3NifCollisionShapeQ6F>& shapes,const Fo3PackedMetadataMapQ714& modelMetadata,
         float centerX,float centerY,float floorZ,float sceneForward,float floorY,float unitsPerMetre,
         Q1990CachedCollisionPlacement& entry,bool requireComplete=false) {
+    entry.modelPath=placement.modelPath;
     if(placement.baseRecordType=="MSTT"&&Fo3MovablePropBody(shapes))return true;
     std::unordered_set<uint64_t> uniqueSurfaceKeys;
     for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
@@ -971,6 +986,7 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
                  oldEntries, centerX, centerY, floorZ);
     }
 
+    DiscardObsoleteCollisionModel(placement);
     auto already = gQ1990CollisionPlacementCache.find(placement.refFormId);
     if (already != gQ1990CollisionPlacementCache.end()) {
         already->second.lastUse = ++gQ1990CollisionCacheSerial;
@@ -982,7 +998,7 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
 
     if (gQ1820NoCollisionModels.find(placement.modelPath) !=
         gQ1820NoCollisionModels.end()) {
-        gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
+        gQ1820NegativeCollisionPlacementCache[placement.refFormId]=placement.modelPath;
         return true;
     }
 
@@ -992,7 +1008,7 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
         if (!LoadFo3NifCollisionShapesQ6F(placement.modelPath, shapes) ||
             shapes.empty()) {
             gQ1820NoCollisionModels.insert(placement.modelPath);
-            gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
+            gQ1820NegativeCollisionPlacementCache[placement.refFormId]=placement.modelPath;
             return true;
         }
         modelIt = gQ1820CollisionModelCache.emplace(
@@ -1118,6 +1134,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         ++bhkAttemptsQ78A;
 
         if (exteriorAllBhksQ78A) {
+            DiscardObsoleteCollisionModel(placement);
             auto q1990CachedPlacement = gQ1990CollisionPlacementCache.find(placement.refFormId);
             if (q1990CachedPlacement != gQ1990CollisionPlacementCache.end()) {
                 Q1990CachedCollisionPlacement& q1990Entry = q1990CachedPlacement->second;
@@ -1160,7 +1177,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         }
         if (noCollisionModelsQ78A.find(placement.modelPath) != noCollisionModelsQ78A.end()) {
             if (exteriorAllBhksQ78A && placement.refFormId != 0u)
-                gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
+                gQ1820NegativeCollisionPlacementCache[placement.refFormId]=placement.modelPath;
             ++negativeCacheHitsQ78A;
             continue;
         }
@@ -1311,6 +1328,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
             if (exteriorAllBhksQ78A && !capped && placement.refFormId != 0u &&
                 q1990PlacementTriangleStart < gWorldTriangles.size()) {
                 Q1990CachedCollisionPlacement q1990Entry;
+                q1990Entry.modelPath=placement.modelPath;
                 q1990Entry.triangles.assign(
                     gWorldTriangles.begin() + static_cast<std::ptrdiff_t>(q1990PlacementTriangleStart),
                     gWorldTriangles.end());
@@ -1706,9 +1724,8 @@ bool Q1930AssembleCachedAuthored(
 
         const auto cached =
             chunks.find(placement.refFormId);
-        if (cached == chunks.end()) {
-            if (!privateChunks && gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
-                gQ1820NegativeCollisionPlacementCache.end()) {
+        if (cached == chunks.end()||cached->second.modelPath!=placement.modelPath) {
+            if (!privateChunks && MissingCollisionModel(placement)) {
                 ++snapshot.bhkMissing;
                 continue;
             }

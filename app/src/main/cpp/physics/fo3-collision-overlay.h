@@ -33,7 +33,7 @@ void ResetFo3CollisionSceneCache();
 // Q18.2: prepare one exterior REFR's transformed authored bhk chunk without
 // replacing the currently active collision world. The streaming runtime calls
 // this under a small per-frame budget, then performs a cheap cached 3x3 publish.
-bool IsFo3CollisionPlacementCachedQ1820(uint32_t refFormId);
+bool IsFo3CollisionPlacementCachedQ1820(const Fo3WorldPlacement& placement);
 bool PrimeFo3CollisionPlacementCacheQ1820(
     const Fo3WorldPlacement& placement,
     float centerX, float centerY, float floorZ,

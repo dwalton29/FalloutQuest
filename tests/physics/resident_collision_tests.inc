@@ -44,7 +44,7 @@ static void privateCollisionTests(const Fo3WorldPlacement& a,const Fo3WorldPlace
         // Poison ordinary caches: the private path must decode from source and
         // must not read, clear, prime or append to those published-scope caches.
         gQ1820NoCollisionModels.insert(item.modelPath);
-        gQ1820NegativeCollisionPlacementCache.insert(candidate.refFormId);
+        gQ1820NegativeCollisionPlacementCache.emplace(candidate.refFormId,candidate.modelPath);
         gQ1990CollisionCacheContextValid=false; // private chunks have their own explicit context
         const auto cacheCount=gQ1990CollisionPlacementCache.size();
         const auto negative=gQ1820NegativeCollisionPlacementCache;

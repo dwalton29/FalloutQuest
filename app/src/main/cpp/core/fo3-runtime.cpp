@@ -6856,7 +6856,7 @@ void Q1900AdvanceCollision() {
                 continue;
             }
             gPendingStreamQ1900.collisionPlacements.push_back(placement);
-            if (!IsFo3CollisionPlacementCachedQ1820(placement.refFormId))
+            if (!IsFo3CollisionPlacementCachedQ1820(placement))
                 gPendingStreamQ1900.collisionPrimePlacements.push_back(placement);
         }
         gPendingStreamQ1900.collisionWindowPrepared = true;
