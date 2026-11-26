@@ -343,7 +343,8 @@ target_link_libraries(barter_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME barter_tests COMMAND barter_tests)
 
 add_executable(mq01_progression_tests mq01_progression_tests.cpp quest_object_animation_fixture.cpp
-    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp ${dialogue_shared})
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
 set_source_files_properties(quest_object_animation_fixture.cpp PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
 target_compile_features(mq01_progression_tests PRIVATE cxx_std_17)
 target_compile_options(mq01_progression_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
