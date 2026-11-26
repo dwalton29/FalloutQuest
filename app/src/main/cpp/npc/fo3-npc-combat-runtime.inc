@@ -640,7 +640,9 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     if(!acquire&&(s.activity!=fo3npc::Activity::Combat||s.search.active)){
       float nearest=ai.radiusEnabled?float(ai.radius):c.weapons.detectionDistance;
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
-      nearest=ai.radiusEnabled?float(ai.radius):fo3sneak::Setting(c.sneakSettings,"fSneakMaxDistance")*(gExteriorWorldspaceQ1890?fo3sneak::Setting(c.sneakSettings,"fSneakExteriorDistanceMult"):1);
+      const float sightDistance=fo3sneak::Setting(c.sneakSettings,"fSneakMaxDistance")*
+          (gExteriorWorldspaceQ1890?fo3sneak::Setting(c.sneakSettings,"fSneakExteriorDistanceMult"):1);
+      nearest=ai.radiusEnabled?std::min(float(ai.radius),sightDistance):sightDistance;
 #endif
       auto candidate=[&](uint32_t ref){
         if(ref==actor.source.refFormId)return;
@@ -656,7 +658,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
         if(ref==0x14){
           perceived=actor.playerDetection.detected;
           if(perceived)point=actor.playerDetection.lastKnown;
-        }else perceived=range<c.weapons.detectionDistance&&
+        }else perceived=
           Q230InSightCone(actor,point,fo3sneak::Setting(c.sneakSettings,"fDetectionViewCone"))&&Q230Sight(actor,ref,point);
 #else
         perceived=Q230Sight(actor,ref,point);

@@ -55,6 +55,7 @@ struct Q1900CellWorkerTaskQ19 {
     bool needVisual = false;
     bool primeCollision = false;
     bool placementsProvided = false;
+    std::unordered_set<uint32_t> replacementRefs;
 
     std::vector<Fo3WorldPlacement> placements;
     std::vector<CpuObject> cpu;
@@ -79,6 +80,7 @@ struct Q1900CellStateQ19 {
     int32_t gridY = 0;
     Q1900CellStageQ19 stage = Q1900CellStageQ19::Requested;
     bool visualReady = false;
+    std::unordered_set<uint32_t> replacementRefs;
     bool metadataReady = false;
     bool collisionPrimed = false;
     bool wanted = false;
@@ -134,6 +136,7 @@ struct Fo3WorldStreamingState {
     float originX = 0.0f;
     float originY = 0.0f;
     float originZ = 0.0f;
+    uint64_t collisionDamageRevision = 0;
     bool collisionCentreValid = false;
     int32_t collisionCentreX = 0;
     int32_t collisionCentreY = 0;
@@ -324,7 +327,9 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     gWorldStreaming.originX = gExteriorOriginXQ1890;
     gWorldStreaming.originY = gExteriorOriginYQ1890;
     gWorldStreaming.originZ = gExteriorOriginZQ1890;
-    gWorldStreaming.collisionCentreValid = true;
+    const auto snapshot=gFo3ScenePublication.Snapshot();
+    gWorldStreaming.collisionCentreValid=!snapshot||
+        gWorldStreaming.collisionDamageRevision==snapshot->damageModelRevision;
     gWorldStreaming.collisionCentreX = gExteriorWindowGridXQ1890;
     gWorldStreaming.collisionCentreY = gExteriorWindowGridYQ1890;
     gWorldStreaming.terrainCentreValid = true;
@@ -350,6 +355,19 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
             gWorldStreaming.cells.emplace(
                 Q1900CellKeyQ19(state.gridX, state.gridY),
                 std::move(state));
+        }
+    }
+    // A same-cell script publication retains the previous live meshes. A
+    // destroyed reference can have several parts; invalidate its owning cell
+    // once, and let the normal cell worker stage the complete replacement.
+    if(snapshot&&!snapshot->modelOverrides.empty()){
+        for(const auto& object:gObjects){
+            const auto model=snapshot->modelOverrides.find(object.refFormId);
+            if(model==snapshot->modelOverrides.end()||object.q1990NativeLod||
+               fo3script::Lower(model->second)==fo3script::Lower(object.modelPath))continue;
+            auto& cell=Q1900EnsureCellStateQ19(object.q1970GridX,object.q1970GridY);
+            if(cell.visualReady||!cell.replacementRefs.empty())cell.replacementRefs.insert(object.refFormId);
+            cell.visualReady=false;
         }
     }
     Q1900SeedTextureKnowledgeQ19();
@@ -520,12 +538,17 @@ void Q1900RunCellWorkerQ19(
         const auto cpuStarted = std::chrono::steady_clock::now();
         std::unordered_set<std::string> textureSeen;
         for (const Fo3WorldPlacement& placement : task->placements) {
+            if(!task->replacementRefs.empty()&&!task->replacementRefs.count(placement.refFormId))continue;
             if (Q74ShouldSkipPlacement(placement)) {
                 ++task->skipped;
                 continue;
             }
             std::vector<CpuObject> parts;
             if (!BuildCpuObjects(placement, parts)) {
+                if(!task->replacementRefs.empty()){
+                    task->ready.store(true,std::memory_order_release);
+                    return;
+                }
                 ++task->unsupported;
                 continue;
             }
@@ -733,6 +756,7 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
         task->originY = gExteriorOriginYQ1890;
         task->originZ = gExteriorOriginZQ1890;
         task->needVisual = !best->visualReady;
+        task->replacementRefs=best->replacementRefs;
         task->primeCollision =
             best->visualReady && !best->collisionPrimed;
         if (best->metadataReady && best->publication == task->publication) {
@@ -1139,6 +1163,11 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
 
 void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     if (!Fo3AcceptsScenePublication(state.publication)) return;
+    if(!state.replacementRefs.empty()&&state.stagedGpu.size()!=state.cpu.size()){
+        Q2015DiscardCellUploadQ19(state);
+        state.stage=Q1900CellStageQ19::Failed;
+        return;
+    }
     gFo3VisualPublication.Changed();
     const auto retireStarted = std::chrono::steady_clock::now();
     size_t retired = 0u;
@@ -1149,7 +1178,8 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
         const bool replace =
             !object.q1990NativeLod &&
             object.q1970GridX == state.gridX &&
-            object.q1970GridY == state.gridY;
+            object.q1970GridY == state.gridY &&
+            (state.replacementRefs.empty()||state.replacementRefs.count(object.refFormId));
         if (replace) {
             Q1910QueueGpuDeleteQ19(object);
             ++retired;
@@ -1177,6 +1207,7 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     state.cpu.clear();
     state.textures.clear();
     state.visualReady = true;
+    state.replacementRefs.clear();
     Q1900LogLifetimeQ19(entering, retired);
     Q6H_LOGI("DETAIL COMMIT cell=(%d,%d) before=%zu retained=%zu entered=%zu retired=%zu finalLive=%zu balance=%d",
         state.gridX,state.gridY,oldLive,oldLive-retired,entering,retired,gObjects.size(),
@@ -1382,6 +1413,8 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
             const bool ready = PublishFo3CollisionSnapshotQ1930(
                 task->snapshotToken, &swapUs);
             if (ready) {
+                const auto snapshot=gFo3ScenePublication.Snapshot();
+                gWorldStreaming.collisionDamageRevision=snapshot?snapshot->damageModelRevision:0;
                 gWorldStreaming.collisionCentreValid = true;
                 gWorldStreaming.collisionCentreX = actualGridX;
                 gWorldStreaming.collisionCentreY = actualGridY;

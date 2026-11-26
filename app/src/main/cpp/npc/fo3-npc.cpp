@@ -9,6 +9,7 @@
 #include <android/log.h>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -258,12 +259,19 @@ bool ResolveNpc(FILE* f, uint32_t id,
         visiting.erase(id);return ok;
     }
     if((it->second.type!="NPC_"&&it->second.type!="CREA")||!ParseNpc(f,it->second,id,npc))return false;
-    if(npc.templateId && (npc.templateFlags & (1u|64u|128u|256u))) {
+    // Leveled humanoids may carry the GECK marker instead of a skeleton
+    // even when only Stats is inherited. Use the chosen template's skeleton
+    // in that case while retaining the placed NPC's own face and outfit.
+    std::string model=npc.skeleton;
+    std::transform(model.begin(),model.end(),model.begin(),[](unsigned char c){return char(std::tolower(c));});
+    const bool markerSkeleton=!npc.creature&&model=="marker_creature.nif";
+    if(npc.templateId && (markerSkeleton||(npc.templateFlags & (1u|64u|128u|256u)))) {
         NpcBase parent;
         if(!ResolveNpc(f,npc.templateId,locators,visiting,parent,seed,select)) {
             Q230_LOGW("ACTOR TEMPLATE UNSUPPORTED: actor=%08X template=%08X",id,npc.templateId);
             return false;
         }
+        if(markerSkeleton)npc.skeleton=parent.skeleton;
         if(npc.templateFlags & 1u) {
             npc.race=parent.race;
             npc.height=parent.height;

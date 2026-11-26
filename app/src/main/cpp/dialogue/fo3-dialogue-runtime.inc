@@ -55,6 +55,27 @@ static bool Fo3RetainedSwitchResult(const fo3player::ScriptTransactionPlan& plan
         return gFo3RetainedSwitches.count(ref);
     });
 }
+// Actors have their own residency, MoveTo and equipment pipeline. These
+// editor markers have no world mesh. Script triggers read the canonical
+// enable state, including enable-parent children, on their next update.
+static bool Fo3ActorAndMarkerResult(const fo3player::Player& player,
+                                    const fo3player::ScriptTransactionPlan& plan){
+  if(!plan.CandidateReferences()||plan.AffectedReferences().empty())return false;
+  const auto& defs=player.Definitions();
+  const auto& names=defs.pipboy.formNames;
+  auto marker=[&](uint32_t base,const char* editor){
+    const auto it=names.find(editor);return it!=names.end()&&it->second==base;
+  };
+  for(uint32_t id:plan.AffectedReferences()){
+    const auto ref=defs.references.find(id);
+    if(ref==defs.references.end()||!ref->second.valid||(ref->second.flags&0x20u))return false;
+    if(defs.actorPlacements.count(id)&&plan.CandidateState()->actors.count(id))continue;
+    const auto base=ref->second.base;
+    if(!marker(base,"xmarker")&&!marker(base,"xmarkerheading")&&!marker(base,"collisionmarker"))return false;
+    if(std::any_of(gObjects.begin(),gObjects.end(),[&](const auto& object){return object.refFormId==id;}))return false;
+  }
+  return true;
+}
 bool PreviewFo3DialogueReferences(const fo3player::Player& player,
     const fo3player::ScriptTransactionPlan& plan,std::string& error) {
   if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp())){
@@ -62,7 +83,7 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
   }
   std::vector<uint32_t> live;
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890))return !Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active;
-  if(Fo3RetainedSwitchResult(plan))return !Fo3ResidentAssetLaneBlocked();
+  if(Fo3RetainedSwitchResult(plan)||Fo3ActorAndMarkerResult(player,plan))return !Fo3ResidentAssetLaneBlocked();
   for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
   for(const auto& object:gObjects)live.push_back(object.refFormId);
   return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error)||
@@ -85,7 +106,7 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
   if(!PreviewFo3DialogueReferences(player,plan,error)){
     // Ready switches can retry in place. Unprepared transmitters can use the
     // resident resource exchange.
-    if(Fo3RetainedSwitchResult(plan)||(!gExteriorWorldspaceQ1890&&Fo3RadioOnlyResult(player,plan)))return false;
+    if(Fo3RetainedSwitchResult(plan)||Fo3ActorAndMarkerResult(player,plan)||(!gExteriorWorldspaceQ1890&&Fo3RadioOnlyResult(player,plan)))return false;
     return PublishFo3DialogueSceneRefresh(player,plan,error);
   }
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890)){
@@ -98,6 +119,12 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
     }
     gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(snapshot);
     Q6H_LOGI("SCRIPT CELL HANDOFF queued canonical state and reference snapshot for full scene load");return true;
+  }
+  if(Fo3ActorAndMarkerResult(player,plan)){
+    auto snapshot=plan.CandidateReferences();
+    if(!player.CommitScriptTransaction(plan)){error="actor transaction changed";return false;}
+    gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(std::move(snapshot));
+    return true;
   }
   if(Fo3RetainedSwitchResult(plan)){
     auto snapshot=plan.CandidateReferences();

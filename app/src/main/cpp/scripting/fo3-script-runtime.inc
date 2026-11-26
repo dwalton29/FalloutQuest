@@ -777,7 +777,14 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Restrain:ok=SetRestrained(c.form,c.value!=0);break;
     case C::StartQuest:ok=StartQuest(c.form);break;
     case C::StopQuest:ok=StopQuest(c.form);break;
-    case C::Stage:ok=RunQuestStage(c.form,uint16_t(c.index),depth+1,budget,error);break;
+    case C::Stage:{
+      const auto quest=catalog_->pipboy.quests.find(c.form);
+      // A missing stage on a valid QUST has no result to run. Continue the
+      // calling script so its combat, timer and variable updates still commit.
+      if(quest==catalog_->pipboy.quests.end()||quest->second.stages.count(uint16_t(c.index)))
+        ok=RunQuestStage(c.form,uint16_t(c.index),depth+1,budget,error);
+      break;
+    }
     case C::CompleteQuest:ok=EnsureQuestInstance(c.form)&&FinishQuest(c.form,fo3pipdata::Completion::Complete);break;
     case C::ObjectiveDisplay:case C::ObjectiveComplete: {
       auto q=state_.pipboy.quests.find(c.form);fo3pipdata::ObjectiveState existing;

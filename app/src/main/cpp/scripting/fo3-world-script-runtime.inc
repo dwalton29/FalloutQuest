@@ -371,7 +371,7 @@ void SpeechTick(){
         if(speechLanes[i].dialogue.resultTicket)break;
     }
     if(bark.reference&&speechPending.empty()&&!gQ230NpcChat.Active()&&!IsFo3LoadingVisible()&&
-       CanDeferFo3DialogueResult()&&!player.ScriptActorTalking(bark.reference)&&
+       !Fo3ResidentFrameBlocked()&&!player.ScriptActorTalking(bark.reference)&&
        std::none_of(speechLanes.begin(),speechLanes.end(),[](const auto& lane){
            return lane.dialogue.Active()||lane.pendingPackageDone.first;
        })){
@@ -385,7 +385,7 @@ void SpeechTick(){
         }
     }
     if(!speechPending.empty()&&!gDialogue.Active()&&!gQ230NpcChat.Active()&&
-       !IsFo3LoadingVisible()&&CanDeferFo3DialogueResult()){
+       !IsFo3LoadingVisible()&&!Fo3ResidentFrameBlocked()){
         const auto& next=speechPending.front();
         const bool occupied=std::any_of(speechLanes.begin(),speechLanes.end(),
             [](const auto& lane){return lane.dialogue.Active();});

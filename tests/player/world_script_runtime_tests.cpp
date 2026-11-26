@@ -593,7 +593,7 @@ int main(int argc,char** argv){try{
   Check(fo3worldscript::PackageEvent(40,852,false),"start world-result package");
   Check(p.QueueScriptSpeech(40,830,fo3player::PlayerRef,false,false,852),"queue world-result speech");
   worldBusy=true;fo3worldscript::Actions();fo3worldscript::SpeechTick();
-  Check(!p.ScriptActorTalking(40)&&!fo3worldscript::speechPending.empty(),"busy admission preserves queued speech");
+  Check(p.ScriptActorTalking(40)&&fo3worldscript::speechPending.empty(),"script speech starts while the optional scene exchange is unavailable");
   worldBusy=false;fo3worldscript::SpeechTick();
   worldBusy=true;fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
   Check(fo3worldscript::speechLanes[0].dialogue.phase==fo3dialogue::Phase::Results&&!worldResultPlan,"busy world work retains the closing INFO");

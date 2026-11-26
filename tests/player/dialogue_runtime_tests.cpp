@@ -715,18 +715,15 @@ static void OriginalPlazaPublication(const char* esm){
   };
   publishSnapshot();loading=false;deferAllowed=false;exteriorRefresh=true;refreshAllowed=false;
   const auto count=sceneRefreshes;
-  for(bool allowQueue:{false,true}){
-    auto plan=player.PrepareQuestStageTransaction(quest,105,error,fo3player::ScriptProgramCapture::EnteredPrograms);
-    if(!plan)std::cerr<<error<<"\n";assert(plan);
-    auto affected=plan->AffectedReferences();assert(affected.size()==6);
-    assert(std::find(affected.begin(),affected.end(),boss)!=affected.end());
-    refreshAllowed=allowQueue;
-    assert(PublishFo3DialogueReferences(player,*plan,error)==allowQueue);
-    bool disabled=false;
-    assert(player.ReferenceDisabled(boss,disabled,error)&&disabled!=allowQueue);
-    assert(player.ReferenceDisabled(clip,disabled,error)&&disabled==allowQueue);
-    assert(loading==allowQueue&&sceneRefreshes==count+unsigned(allowQueue));
-  }
+  gQ230NpcArrival.active=true;
+  auto plan=player.PrepareQuestStageTransaction(quest,105,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+  assert(plan&&plan->AffectedReferences().size()==6);
+  assert(PreviewFo3DialogueReferences(player,*plan,error)&&PublishFo3DialogueReferences(player,*plan,error));
+  bool disabled=false;
+  assert(player.ReferenceDisabled(boss,disabled,error)&&!disabled);
+  assert(player.ReferenceDisabled(clip,disabled,error)&&disabled);
+  assert(!loading&&sceneRefreshes==count);
+  gQ230NpcArrival.active=false;
   const auto& saved=player.Snapshot().actors.at(boss);
   assert(saved.position[0]==mark.x&&saved.position[1]==mark.y&&saved.position[2]==mark.z);
   assert(player.Snapshot().pipboy.quests.at(quest).stage==105);
@@ -734,6 +731,6 @@ static void OriginalPlazaPublication(const char* esm){
   while(player.PollScriptAction(action))if(action.kind==fo3script::ActionKind::Explosion)++explosions;
   assert(explosions==1);
   loading=refreshAllowed=exteriorRefresh=false;
-  std::cout<<"GNR exterior transaction publishes the Behemoth, four collision children and one explosion; queue rejection rolls back."<<std::endl;
+  std::cout<<"GNR exterior transaction publishes the Behemoth, four collision children and one explosion; no scene load during live actor preparation."<<std::endl;
 }
 int main(int argc,char** argv){Synthetic();SkipWithA();FarewellWithB();BarterBridge();CellPublication();NonresidentPublication();IntercomPackageAdmission();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);OriginalPlazaPublication(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}

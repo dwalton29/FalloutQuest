@@ -4509,6 +4509,7 @@ struct Q230NpcArrivalBatch {
 struct Q230NpcArrivalWork {
     fo3scene::PublicationStamp publication;
     fo3scene::Preparation<Q230NpcArrivalBatch> preparation;
+    std::unordered_map<uint32_t,std::array<float,3>> doorArrivals;
     std::unordered_set<uint32_t> pending;
     std::unordered_set<uint32_t> requested;
     size_t actorIndex=0,partIndex=0;
@@ -4525,6 +4526,7 @@ void Q230ResetNpcArrivals() {
         }
     }
     gQ230NpcArrival.preparation.Reset();
+    gQ230NpcArrival.doorArrivals.clear();
     gQ230NpcArrival.pending.clear();
     gQ230NpcArrival.requested.clear();
     gQ230NpcArrival.actorIndex=0;
@@ -13285,6 +13287,7 @@ static void Q230TickUnloadedActors(float hour) {
             gCurrentCellFormId,gExteriorWorldspaceQ1890,state.cell,state.world,defs.cellWorlds);
         if(!player.UpdateActor(actor,state))return false;
         if(isResident&&!wasResident){
+            gQ230NpcArrival.doorArrivals[actor]=state.position;
             gQ230NpcArrival.pending.insert(actor);
             Q6H_LOGI("NPC LIVE ARRIVAL QUEUED actor=%08X cell=%08X world=%08X pending=%zu",
               actor,state.cell,state.world,gQ230NpcArrival.pending.size());
@@ -13325,10 +13328,12 @@ void Q230PumpNpcArrivals(){
         // Do not stall a render frame joining asset work. Reclaim only once the
         // worker is ready, before any further part uploads or actor registration.
         if(!work.preparation.Ready())return;
+        auto doors=std::move(work.doorArrivals);
         auto pending=std::move(work.pending);
         pending.insert(work.requested.begin(),work.requested.end());
         Q230ResetNpcArrivals();
         work.pending=std::move(pending);
+        work.doorArrivals=std::move(doors);
         return;
     }
     if(!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return;
@@ -13340,6 +13345,16 @@ void Q230PumpNpcArrivals(){
     const auto alreadyVisible=[&](uint32_t id){
         return std::any_of(gQ230NpcActors.begin(),gQ230NpcActors.end(),
             [id](const Q230ActorVisual& v){return v.source.refFormId==id;});
+    };
+    auto occupiedDoor=[&](uint32_t id,const fo3player::ActorState& state){
+        const auto arrival=work.doorArrivals.find(id);
+        if(arrival==work.doorArrivals.end()||state.dead||state.position!=arrival->second)return false;
+        for(const auto& other:gQ230NpcActors){
+            if(other.runtime.offScene||!other.runtime.Alive()||other.source.refFormId==id)continue;
+            const auto feet=Q240CrowdPosition(other);
+            if(std::abs(feet[2]-state.position[2])<90&&Q240PlanarDistance(feet,state.position)<70)return true;
+        }
+        return false;
     };
     static double reconciled=-1;
     static std::unordered_map<uint32_t,double> retryAfter;
@@ -13421,7 +13436,13 @@ void Q230PumpNpcArrivals(){
                 // Publish at the original XTEL arrival only after the previous
                 // resident has cleared it. No invented spawn offsets and no
                 // simultaneous actors on the exact same door root.
-                if(!saved->second.dead&&Q230RoamEndpointOccupied(actor.source.refFormId,saved->second.position))return;
+                if(occupiedDoor(actor.source.refFormId,saved->second)){
+                    Q74DeleteGpuObjects(actor.objects);
+                    retryAfter[actor.source.refFormId]=now+.5;
+                    ++work.actorIndex;work.partIndex=0;
+                    return;
+                }
+                work.doorArrivals.erase(actor.source.refFormId);
                 for(const auto& resident:gQ230NpcActors)if(resident.runtime.furniture.Pool()){
                     fo3furniture::JoinResidentActivities(actor.runtime.furniture,resident.runtime.furniture);break;
                 }
@@ -13455,6 +13476,7 @@ void Q230PumpNpcArrivals(){
     for(uint32_t id:work.pending){
         const auto it=player.Snapshot().actors.find(id);
         if(it==player.Snapshot().actors.end()||!isResident(id,it->second)||!enabled(id)||alreadyVisible(id))continue;
+        if(occupiedDoor(id,it->second)){retryAfter[id]=now+.5;continue;}
         if(!player.RealizeActor(id)){retryAfter[id]=now+30.;continue;}
         saved.emplace(id,it->second);refs.insert(id);retryAfter[id]=now+30.;
     }

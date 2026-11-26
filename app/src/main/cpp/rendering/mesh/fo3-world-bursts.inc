@@ -79,7 +79,9 @@ static bool RefreshModels(fo3player::Player& player,const std::unordered_set<uin
             resident=true;break;
         }
     }
-    if(resident&&!QueueFo3WorldModelRefresh(gCurrentCellFormId,gExteriorWorldspaceQ1890,
+    // Exterior cells replace their own render and collision data off-thread.
+    // Keep the old shapes visible until their replacement has finished upload.
+    if(resident&&!gExteriorStreamingActiveQ1890&&!QueueFo3WorldModelRefresh(gCurrentCellFormId,gExteriorWorldspaceQ1890,
            gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730))return false;
     gFo3ReferenceState=state;gFo3ScenePublication.Publish(state);return true;
 }

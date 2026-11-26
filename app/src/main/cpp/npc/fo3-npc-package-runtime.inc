@@ -1047,7 +1047,7 @@ static bool Q240CorridorLine(const Q230ActorVisual& actor,
   }
   return true;
 }
-static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
+static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now,bool catchUp=false) {
   FQ_PERF_SCOPE(Movement);
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
   Q240GroundPathRoot(actor);
@@ -1119,7 +1119,7 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   const auto pack=catalog.pipboy.packages.find(actor.aiPackage);
   const bool packageMove=actor.runtime.activity==fo3npc::Activity::Package&&pack!=catalog.pipboy.packages.end();
   const bool sneak=packageMove&&(pack->second.flags&0x20000u);
-  const bool fast=(packageMove&&!sneak&&((pack->second.flags&0x2000u)||pack->second.type==10))||
+  const bool fast=(packageMove&&!sneak&&(catchUp||(pack->second.flags&0x2000u)||pack->second.type==10))||
     (actor.runtime.activity==fo3npc::Activity::Combat&&(actor.runtime.action==fo3npc::CombatAction::Flee||
       actor.runtime.action==fo3npc::CombatAction::Pursue||actor.runtime.action==fo3npc::CombatAction::Cover));
   const float maximum=walk*(fast?catalog.npcRunMultiplier:sneak?fo3sneak::Setting(catalog.sneakSettings,"fMoveSneakMult"):1.f);
@@ -1357,7 +1357,7 @@ static void Q240AdvancePlayerEscort(Q230ActorVisual& actor,const fo3pipdata::Pac
     actor.runtime.pathDestinationGame=target;actor.aiRepathAt=now+.75;
     Q6H_LOGI("NPC PATH actor=%08X package=%08X type=Escort phase=%u waypoints=%zu",actor.source.refFormId,actor.aiPackage,actor.aiSequence,actor.aiPathGame.size());
   }
-  Q240AdvancePath(actor,dt,now);
+  Q240AdvancePath(actor,dt,now,separation>package.escortDistance);
 }
 // Script-free Flee From without a start location. Staying out of combat is
 // package ownership, not immunity: perception/damage may still override it.
@@ -1409,7 +1409,7 @@ static void Q240AdvanceAccompany(Q230ActorVisual& actor,const fo3pipdata::Packag
     if(!Q240ActorPath(actor,*actor.navigationGraph,here,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||actor.aiPathGame.empty()||Q240PlanarDistance(actor.aiPathGame.back(),destination)>8.f){Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,p.target.value,"UNSUPPORTED","NAVM endpoint unavailable");Q240PackageRouteFailed(actor,now,"Accompany NAVM endpoint unavailable");return;}
     Q6H_LOGI("NPC ACCOMPANY %s actor=%08X package=%08X target=%08X destination=(%.1f,%.1f,%.1f) distance=%d",firstRoute?"ROUTE":"REPATH",actor.source.refFormId,actor.aiPackage,p.target.value,destination[0],destination[1],destination[2],p.target.radius);
   }
-  Q240AdvancePath(actor,dt,now);
+  Q240AdvancePath(actor,dt,now,separation>distance);
 }
 // Conversation AI: approach the ORIGINAL PTDT actor via local NAVM, then
 // request a mutually reserved single-voice HELLO from the resident director.
@@ -1820,7 +1820,12 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
         actor.navigationGraph->meshes.size(),actor.navigationGraph->triangleCount,actor.aiSequence);
     actor.aiRepathAt=now+1;
   }
-  Q240AdvancePath(actor,dt,now);
+  // Follow and Travel-to-actor have a moving destination. Outside the
+  // authored spacing, close the gap at a run, then resume package spacing.
+  const bool catchUp=(package->type==1&&package->target.radius>0&&
+      Q240PlanarDistance(here,anchor)>package->target.radius+fo3npc::MovementPolicy::CrowdBodyClearance)||
+      (travelToActor&&radius>0&&actorDistance>radius+fo3npc::MovementPolicy::CrowdBodyClearance);
+  Q240AdvancePath(actor,dt,now,catchUp);
 }
 void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
   FQ_PERF_SCOPE(Packages);
