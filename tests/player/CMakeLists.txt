@@ -263,7 +263,8 @@ target_include_directories(actor_effect_addon_tests PRIVATE ../nif ../../app/src
 target_link_libraries(actor_effect_addon_tests PRIVATE ZLIB::ZLIB)
 
 add_executable(npc_combat_runtime_tests npc_combat_runtime_tests.cpp quest_object_animation_fixture.cpp ${dialogue_shared}
-    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
 target_compile_features(npc_combat_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_combat_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
 target_include_directories(npc_combat_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
@@ -448,7 +449,8 @@ target_link_libraries(sneak_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME sneak_tests COMMAND sneak_tests)
 
 add_executable(npc_detection_runtime_tests npc_combat_runtime_tests.cpp quest_object_animation_fixture.cpp ${dialogue_shared}
-    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
 target_compile_definitions(npc_detection_runtime_tests PRIVATE FO3_NPC_DETECTION_HOST_TEST=1)
 target_compile_features(npc_detection_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_detection_runtime_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
