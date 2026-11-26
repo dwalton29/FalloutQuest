@@ -7,7 +7,9 @@ static bool Q230InSightCone(const Q230ActorVisual& actor,const fo3sneak::Point& 
 }
 // Loaded player/observer evidence, on the NPC's existing think cadence.
 static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
- auto& observer=actor.playerDetection;if(now<observer.next)return;
+ auto& observer=actor.playerDetection;
+ if(gPlayerSession->player.ActorGhost(fo3player::PlayerRef)){observer={};return;}
+ if(now<observer.next)return;
  auto& player=gPlayerSession->player;const auto& settings=player.Definitions().sneakSettings;
  const auto* stats=player.ActorStatistics(actor.source.refFormId);if(!stats)return;
  fo3sneak::Point point{gQ210Head[0],gQ210Head[1],gQ210Head[2]};

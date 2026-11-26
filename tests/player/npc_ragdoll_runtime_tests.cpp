@@ -1,12 +1,15 @@
 #include "player/fo3-player-state.h"
 #include "physics/fo3-rigid-world.h"
 #include "npc/fo3-npc.h"
+#include "physics/fo3-nif-collision.h"
+#include "data/fo3-esm-reader.h"
 #include "npc/fo3-npc-state.h"
 #include "npc/fo3-ragdoll-pose.h"
 #include "rendering/quest-render-policy.h"
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <unistd.h>
 #include <cstdio>
@@ -33,7 +36,102 @@ static Q230ActorVisual Actor(){
  actor.skeleton.bones.resize(3);actor.skeleton.bones[0].name="pelvis";actor.skeleton.bones[1].name="chest";actor.skeleton.bones[1].parent=0;actor.skeleton.bones[1].bind.translation={0,.4f,0};actor.skeleton.bones[2].name="eyes";actor.skeleton.bones[2].parent=1;actor.skeleton.bones[2].bind.translation={0,.2f,0};assert(fo3anim::FinalizeSkeleton(actor.skeleton));fo3anim::BindClip(actor.skeleton,{},actor.pose);assert(fo3anim::Sample(actor.skeleton,{},0,actor.pose));
  auto d=std::make_shared<fo3rag::Definition>();for(const char* name:{"pelvis","chest"}){fo3rag::Body b;b.bone=name;b.a={0,-.15f,0};b.b={0,.15f,0};b.radius=.1f;b.mass=5;b.friction=.5f;d->bodies.push_back(b);}fo3rag::Joint j;j.a=0;j.b=1;j.frameA=At(0,.2f,0);j.frameB=At(0,-.2f,0);j.minimum={-.5f,-.5f,-.5f};j.maximum={.5f,.5f,.5f};d->joints.push_back(j);actor.ragdollDefinition=d;actor.ragdollBones={0,1};return actor;
 }
-int main(){
+static std::vector<uint8_t> OriginalRecord(const char* master,uint32_t id,const char* type){
+ auto closeFile=[](FILE* f){fclose(f);};std::unique_ptr<FILE,decltype(closeFile)> file(fopen(master,"rb"),closeFile);assert(file);
+ uint8_t h[fo3esm::HEADER_SIZE];
+ while(fo3esm::ReadExact(file.get(),h,sizeof(h))){
+   if(!memcmp(h,"GRUP",4))continue;
+   const uint32_t size=fo3esm::ReadU32(h+4);
+   if(fo3esm::ReadU32(h+12)==id&&!memcmp(h,type,4)){
+     std::vector<uint8_t> bytes;
+     assert(fo3esm::ReadPayloadCurrent(file.get(),size,fo3esm::ReadU32(h+8),bytes));return bytes;
+   }
+   assert(fseeko(file.get(),size,SEEK_CUR)==0);
+ }
+ return {};
+}
+static void HendersonStairs(const char* master,const char* root,const fo3player::ActorState& start){
+ constexpr uint32_t stairs=0x93ab8;
+ const auto placed=OriginalRecord(master,stairs,"REFR");assert(!placed.empty());
+ fo3pipdata::Definitions defs;fo3pipdata::Decode(defs,"REFR",stairs,0,placed,start.cell,0,0);
+ const auto& ref=defs.targets.at(stairs);std::string model;
+ fo3esm::WalkSubrecords(OriginalRecord(master,ref.base,"STAT"),[&](const char* name,const uint8_t* data,uint32_t size){
+   if(!memcmp(name,"MODL",4))model=fo3esm::ZString(data,size);
+ });
+ for(char& ch:model)ch=ch=='\\'?'/' :char(std::tolower(static_cast<unsigned char>(ch)));
+ std::vector<Fo3NifCollisionShapeQ6F> shapes;
+ assert(!model.empty()&&LoadFo3NifCollisionShapesComplete(std::string(root)+"/"+model,shapes));
+ assert(ref.rx==0&&ref.ry==0);
+ const float co=std::cos(ref.rz),si=std::sin(ref.rz);
+ std::vector<fo3rigid::Triangle> tris;
+ for(const auto& shape:shapes){
+   assert(shape.kind==Fo3CollisionShapeKindQ6F::TriangleMesh);
+   auto point=[&](size_t i)->fo3rigid::V{
+     const float* v=&shape.positions.at(3*shape.indices.at(i));
+     return {(ref.x-start.position[0]+ref.scale*(co*v[0]-si*v[1]))/70,
+             (ref.z-start.position[2]+ref.scale*v[2])/70,
+             (start.position[1]-ref.y-ref.scale*(si*v[0]+co*v[1]))/70};
+   };
+   for(size_t i=0;i<shape.indices.size();i+=3)tris.push_back({point(i),point(i+1),point(i+2)});
+ }
+ assert(!tris.empty());fo3rigid::Live().Static(stairs,tris);
+}
+static void HendersonRagdoll(const char* master,const char* save,const char* root){
+ fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(master,c,error));
+ gPlayerSession=std::make_unique<RagdollTestSession>(c);auto& player=gPlayerSession->player;
+ assert(player.Restore(save,error));
+ const auto id=c.pipboy.formNames.at("mabelhendersonref");
+ const auto push=player.Snapshot().ragdollPushes.at(id).at(0);
+ auto& world=fo3rigid::Live();world.ClearBodies();world.ClearStatics();gQ230NpcActors.clear();
+ auto& actor=gQ230NpcActors.emplace_back();actor.source.refFormId=id;actor.source.skeletonModel="characters/_male/skeleton.nif";
+ HendersonStairs(master,root,player.Snapshot().actors.at(id));
+ std::ifstream f(std::string(root)+"/"+actor.source.skeletonModel,std::ios::binary);std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(f),{}};
+ auto rig=std::make_shared<fo3rag::Definition>();assert(fo3rag::Read(bytes,*rig,error));
+ assert(fo3anim::DecodeSkeleton(bytes,actor.skeleton));actor.ragdollDefinition=rig;
+ for(const auto& body:rig->bodies){
+   const int index=fo3anim::FindBone(actor.skeleton,body.bone);assert(index>=0);actor.ragdollBones.push_back(index);
+ }
+ fo3anim::BindClip(actor.skeleton,{},actor.pose);assert(fo3anim::Sample(actor.skeleton,{},0,actor.pose));
+ actor.rigs.resize(1);auto& scene=actor.rigs[0].scenePlacement;
+ scene[0]=scene[9]=1.f/70;scene[6]=-1.f/70;scene[5]=scene[10]=0;
+ actor.runtime.yaw=player.Snapshot().actors.at(id).yaw;
+ Q230PrepareRagdolls();assert(actor.ragdollStarted&&player.Snapshot().ragdollPushes.empty());
+ std::vector<fo3rigid::M> start,advanced;std::vector<fo3rigid::V> linear;
+ assert(world.RagdollPose(id,start,nullptr,&linear));assert(start.size()==18);
+ assert(std::abs(std::hypot(linear[0][0],linear[0][1],linear[0][2])-push.speed)<.001f);
+ assert(linear.front()!=linear.back());
+ for(size_t i=0;i<linear.size();++i){
+   float outward=0;auto center=rig->bodies[i].center;
+   for(float& v:center)v*=actor.ragdollScales[i];
+   center=fo3anim::Point(start[i],center);
+   for(unsigned axis=0;axis<3;++axis)outward+=(center[axis]-push.originOffset[axis])*linear[i][axis];
+   assert(outward>=0);
+ }
+ Q230PrepareRagdolls();world.Step(1.f/60);Q230CaptureRagdolls();
+ assert(world.RagdollPose(id,advanced)&&advanced!=start);
+ const std::string path=std::string(save)+".motion";assert(player.Save(path,error));
+ const auto moving=*actor.corpsePose;world.ClearBodies();
+ assert(player.Restore(path,error)&&player.Snapshot().ragdollPushes.empty());
+ actor.corpsePose=player.Snapshot().actors.at(id).corpse;assert(*actor.corpsePose==moving);
+ Q230PrepareRagdolls();Q230CaptureRagdolls();assert(world.HasRagdoll(id));
+ for(size_t n=0;n<moving.bones.size();++n)for(size_t i=0;i<3;++i)
+   assert(std::abs(actor.corpsePose->bones[n].linear[i]-moving.bones[n].linear[i])<.005f);
+ for(unsigned tick=0;tick<2400&&!world.RagdollSleeping(id);++tick)world.Step(1.f/120);
+ Q230CaptureRagdolls();
+ assert(world.RagdollPose(id,advanced));
+ const float supported=advanced[0][13];
+ assert(supported<start[0][13]&&supported>-5);
+ // Isolate the contact response: the same pose loses its support immediately
+ // when the only static body (the original staircase) is removed.
+ world.ClearStatics();
+ std::vector<fo3rigid::V> falling,angular;
+ assert(world.RagdollPose(id,advanced,nullptr,&falling,&angular)&&world.SetRagdollMotion(id,falling,angular));
+ for(unsigned tick=0;tick<120;++tick)world.Step(1.f/120);
+ assert(world.RagdollPose(id,advanced)&&advanced[0][13]<supported-1);
+ unlink(path.c_str());std::cout<<"Saved skate impulse drove the original human ragdoll, resumed in motion and contacted the Henderson stair mesh"<<std::endl;
+}
+int main(int argc,char** argv){
+ if(argc==4){HendersonRagdoll(argv[1],argv[2],argv[3]);return 0;}
  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);c.weapons.actors[200].health=100;c.pipboy.targets[100].base=c.references[100].base=200;c.pipboy.targets[100].cell=1;
  Item item;item.formId=10;item.kind=ItemKind::Misc;item.name="Fixture loot";c.items[10]=item;c.actorInventories[200].entries={{10,0,1,1,1,false}};
  Item gun;gun.formId=20;gun.kind=ItemKind::Weapon;gun.weapon.valid=true;gun.weapon.damage=1000;c.items[20]=gun;

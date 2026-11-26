@@ -34,6 +34,38 @@ inline std::string Trim(const std::string& s) {
 inline bool EventFilterMatches(const std::string& filter,uint32_t activator,uint32_t playerReference){
   return filter.empty()||(filter=="player"&&activator==playerReference);
 }
+// GECK emits a zero-length EndIf even for some redundant terminal
+// delimiters. Accept that no-op only when the corresponding compiled block
+// ends with the same unmatched instruction, after all branches have closed.
+inline bool CompiledTrailingEndIf(const std::vector<uint8_t>& bytes,size_t blockIndex){
+  auto word=[&](size_t at){return uint32_t(bytes[at])|(uint32_t(bytes[at+1])<<8);};
+  if(bytes.size()<4||word(0)!=0x1d||word(2)!=0)return false;
+  size_t at=4;
+  for(size_t block=0;block<=blockIndex;++block){
+    if(bytes.size()-at<10||word(at)!=0x10)return false;
+    const size_t header=word(at+2),length=word(at+6)|(word(at+8)<<16);
+    if(header<6||header>bytes.size()-at-4)return false;
+    at+=4+header;
+    if(length<4||length>bytes.size()-at)return false;
+    const size_t end=at+length-4;
+    if(word(end)!=0x11||word(end+2)!=0)return false;
+    if(block!=blockIndex){at=end+4;continue;}
+    unsigned depth=0;
+    while(end-at>=4){
+      const auto op=word(at),size=word(at+2);at+=4;
+      if(op==0x1c)continue; // reference prefix carries a slot, not a byte count
+      if(size>end-at)return false;
+      at+=size;
+      if(op==0x16)++depth;
+      if(op==0x19){
+        if(size)return false;
+        if(!depth)return at==end;
+        --depth;
+      }
+    }
+  }
+  return false;
+}
 inline EventProgram ParseEvents(const fo3pipdata::Script& script) {
   EventProgram out;
   if(script.source.empty()){
@@ -42,25 +74,37 @@ inline EventProgram ParseEvents(const fo3pipdata::Script& script) {
     return out;
   }
   std::istringstream input(script.source);
-  std::string line;bool inside=false;unsigned number=0;
+  std::string line;bool inside=false;unsigned number=0,depth=0;
+  size_t redundantEnd=std::string::npos;
   while(std::getline(input,line)){
     ++number;
     const auto comment=line.find(';');
     const auto clean=Trim(line.substr(0,comment));
     if(clean.empty())continue;
+    // Some shipped sources carry colon-prefixed editor annotations between
+    // the script name and variable declarations, outside executable blocks.
+    if(!inside&&clean.front()==':')continue;
     std::istringstream words(Lower(clean));std::string op;words>>op;
     if(op=="begin"){
       std::string name;words>>name;
       if(inside||name.empty()){out.error="malformed/nested Begin at line "+std::to_string(number);return out;}
       std::string filter;std::getline(words,filter);
       out.blocks.push_back({name,Trim(filter),{},number});
-      inside=true;
+      inside=true;depth=0;redundantEnd=std::string::npos;
     }else if(op=="end"){
       std::string trailing;if(!inside||(words>>trailing)){
         out.error="unexpected/malformed End at line "+std::to_string(number);return out;
       }
+      if(redundantEnd!=std::string::npos&&CompiledTrailingEndIf(script.compiled,out.blocks.size()-1))
+        out.blocks.back().body.resize(redundantEnd);
       inside=false;
     }else if(inside){
+      redundantEnd=std::string::npos;
+      if(op=="if")++depth;
+      if(op=="endif"){
+        if(depth)--depth;
+        else if(Lower(clean)=="endif")redundantEnd=out.blocks.back().body.size();
+      }
       out.blocks.back().body+=line+"\n";
     }else if(op!="scn"&&op!="scriptname"&&op!="short"&&op!="int"&&
              op!="long"&&op!="float"&&op!="ref"){

@@ -44,7 +44,39 @@ static void Q230StartRagdoll(Q230ActorVisual& actor){
 void Q230PrepareRagdolls(){
  auto& world=fo3rigid::Live();
  for(auto id:world.RagdollActors())if(std::none_of(gQ230NpcActors.begin(),gQ230NpcActors.end(),[&](const auto& a){return a.source.refFormId==id;}))world.RemoveRagdoll(id);
- for(auto& actor:gQ230NpcActors)Q230StartRagdoll(actor);
+ for(auto& actor:gQ230NpcActors){
+  Q230StartRagdoll(actor);
+  if(!gPlayerSession||!actor.ragdollStarted||!actor.corpsePose||actor.rigs.empty())continue;
+  auto& player=gPlayerSession->player;const auto id=actor.source.refFormId;
+  const auto push=player.Snapshot().ragdollPushes.find(id);
+  if(push==player.Snapshot().ragdollPushes.end())continue;
+  fo3anim::Matrix inverse;
+  const auto scene=fo3anim::Multiply(actor.dialogueRoot,actor.rigs[0].scenePlacement);
+  if(!fo3anim::Inverse(scene,inverse))continue;
+  std::vector<fo3rigid::M> bones;std::vector<fo3rigid::V> linear,angular;
+  if(!world.RagdollPose(id,bones,nullptr,&linear,&angular))continue;
+  auto pose=*actor.corpsePose;pose.sleeping=false;
+  if(pose.bones.size()!=linear.size())continue;
+  for(size_t i=0;i<linear.size();++i){
+   // The original actor applies radial velocity separately to each Havok
+   // body, weighted by the body-part field of its collision filter.
+   static constexpr std::array<float,32> weights{1,1,1,1,1,1,.75f,.5f,.75f,.5f,.25f,1,.75f,.5f,.75f,.5f,.25f,.75f,.75f,.75f,.75f,.75f,.75f};
+   const auto& body=actor.ragdollDefinition->bodies[i];
+   auto local=body.center;for(auto& v:local)v*=actor.ragdollScales[i];
+   const auto center=fo3anim::Point(bones[i],local);
+   for(const auto& effect:push->second){
+    fo3rigid::V direction{};
+    for(unsigned k=0;k<3;++k)direction[k]=center[k]-actor.runtime.position[k]-effect.originOffset[k];
+    const float distance=std::hypot(direction[0],direction[1],direction[2]);
+    if(distance>0)for(unsigned k=0;k<3;++k)linear[i][k]+=effect.speed*weights[body.bodyPart]*direction[k]/distance;
+   }
+   pose.bones[i].linear=fo3anim::Point(inverse,linear[i],true);
+  }
+  if(!fo3player::ValidCorpsePose(pose)||!world.SetRagdollMotion(id,linear,angular))continue;
+  if(player.AcceptRagdollPush(id,pose)){
+   actor.corpsePose=player.Snapshot().actors.at(id).corpse;actor.lastFrame=UINT64_MAX;
+  }
+ }
 }
 void Q230CaptureRagdolls(){
  if(!gPlayerSession)return;

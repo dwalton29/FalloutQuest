@@ -763,8 +763,11 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   }
   const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
   const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
-  const double sampleTime=actor.runtime.activity==fo3npc::Activity::Dead?
-      std::max(0.f,clip.stop-clip.start):locomotion?actor.runtime.locomotionTime:clipTime;
+  double sampleTime=locomotion?actor.runtime.locomotionTime:clipTime;
+  const double duration=std::max(0.f,clip.stop-clip.start);
+  if(actor.runtime.activity==fo3npc::Activity::Dead)sampleTime=duration;
+  if(actor.runtime.activity==fo3npc::Activity::Unconscious&&actor.runtime.animation==fo3npc::Animation::Death)
+    sampleTime=std::min(sampleTime,duration);
   const auto& furniture=actor.runtime.furniture;
   const auto* slot=furniture.Selected();
   if(actor.runtime.speed>.01f&&!actor.runtime.packagePoseIdle)actor.responseIdle=0;

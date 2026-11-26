@@ -238,7 +238,7 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
   if(!gPlayerSession)return false;
   auto&p=gPlayerSession->player;uint32_t target=0;uint8_t region=0;float nearest=limit;
   for(auto&actor:gQ230NpcActors){
-    if(actor.source.refFormId==attacker||p.ActorHealth(actor.source.refFormId)<=0)continue;
+    if(actor.source.refFormId==attacker||p.ActorGhost(actor.source.refFormId)||p.ActorHealth(actor.source.refFormId)<=0)continue;
     // Visibility envelopes are broad phase only; actual skinned authored
     // surfaces determine whether a bullet hits the actor.
     std::array<float,3> liveLo{},liveHi{};float entry=0;

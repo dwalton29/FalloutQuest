@@ -164,6 +164,18 @@ struct Ingestible {
   uint32_t flags = 0, withdrawal = 0, sound = 0;
   float addictionChance = 0;
 };
+struct EffectShader {
+  std::string fillTexture,particleTexture,holesTexture;
+  uint32_t addon=0;
+  uint8_t flags=0;
+  float addonFadeIn=0,addonStartScale=1,addonScaleIn=0;
+};
+struct DebrisModel {std::string path;uint8_t percentage=0,flags=0;};
+struct Enchantment {
+  uint32_t type=0,charge=0,cost=0;
+  uint8_t flags=0;
+  std::vector<Effect> effects;
+};
 struct EffectSpell {
   std::string name;
   std::vector<Effect> effects;
@@ -180,6 +192,7 @@ struct Topic {
   std::vector<uint32_t> quests;
 };
 struct ActorDefinition {
+  std::array<int16_t,6> objectBounds{};
   uint32_t bodyParts=0; // CREA PNAM, resolved with the original traits template.
   std::string editor, name;
   uint32_t race=0, actorClass=0, voice=0, script=0, templateActor=0,combatStyle=0;
@@ -305,6 +318,9 @@ struct Definitions {
   std::unordered_map<uint32_t, MessageDefinition> messages;
   std::unordered_map<uint32_t, Ingestible> aid;
   std::unordered_map<uint32_t, Magic> magic;
+  std::unordered_map<uint32_t, Enchantment> enchantments;
+  std::unordered_map<uint32_t, EffectShader> effectShaders;
+  std::unordered_map<uint32_t, std::vector<DebrisModel>> debrisModels;
   std::unordered_map<uint32_t, EffectSpell> effectSpells;
   std::unordered_map<uint32_t, Station> stations;
   std::unordered_map<uint32_t, Transmitter> transmitters;

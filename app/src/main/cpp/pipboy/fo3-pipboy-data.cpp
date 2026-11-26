@@ -95,7 +95,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
 }
 bool Relevant(const std::string &t) {
   return t == "EXPL" || t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
-         t == "MGEF" || t == "SPEL" || t == "TACT" || t == "INFO" || t == "DIAL" ||
+         t == "MGEF" || t == "ENCH" || t == "EFSH" || t == "DEBR" || t == "SPEL" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "HAIR" || t == "EYES" || t == "HDPT" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "CREA" || t == "PACK";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
@@ -468,6 +468,27 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     }
     a.effects=Effects(s);
     d.aid[id]=std::move(a);
+  } else if(t=="EFSH"){
+    const auto* params=Find(s,"DATA");
+    if(params&&params->n>=224){
+      auto& shader=d.effectShaders[id];
+      shader={Text(s,"ICON"),Text(s,"ICO2"),Text(s,"NAM7"),U(params,244),params->p[0]};
+      if(params->n>=304){
+        shader.addonFadeIn=fo3esm::ReadF32(params->p+284);
+        shader.addonStartScale=fo3esm::ReadF32(params->p+292);
+        shader.addonScaleIn=fo3esm::ReadF32(params->p+300);
+      }
+    }
+  } else if(t=="DEBR"){
+    auto& models=d.debrisModels[id];
+    for(const auto& part:s)if(part.type=="DATA"&&part.n>=3&&part.p[part.n-2]==0){
+      const std::string path(reinterpret_cast<const char*>(part.p+1),part.n-3);
+      if(path.find(char(0))==std::string::npos)models.push_back({path,part.p[0],part.p[part.n-1]});
+    }
+  } else if(t=="ENCH"){
+    const auto* header=Find(s,"ENIT");
+    if(header && header->n==16)
+      d.enchantments[id]={U(header),U(header,4),U(header,8),header->p[12],Effects(s)};
   } else if(t=="SPEL"){
     d.effectSpells[id]={Text(s,"FULL"),Effects(s)};
   } else if (t == "MGEF") {
@@ -489,6 +510,8 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   else if (t == "NPC_" || t == "CREA" || t == "TACT") {
     d.npcVoices[id] = U(Find(s, t=="TACT"?"VNAM":"VTCK"));
     ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");actor.talkingActivator=t=="TACT";
+    if(auto bounds=Find(s,"OBND");bounds&&bounds->n==12&&t!="TACT")
+      for(size_t i=0;i<6;++i)actor.objectBounds[i]=int16_t(fo3esm::ReadU16(bounds->p+2*i));
     if(t=="CREA")actor.bodyParts=U(Find(s,"PNAM"));
     actor.race=U(Find(s,"RNAM"));actor.actorClass=U(Find(s,"CNAM"));actor.voice=d.npcVoices[id];
     actor.script=U(Find(s,"SCRI"));actor.templateActor=U(Find(s,"TPLT"));
@@ -748,9 +771,11 @@ void Finalize(Definitions &d) {
   for(auto& actor:d.referenceScripts)retain.insert(actor.first);
   for(const auto& object:d.objectReferenceScripts){
     const auto placed=d.targets.find(object.first);
-    if(placed!=d.targets.end()&&placed->second.linkedReference){
-      retain.insert(object.first);retain.insert(placed->second.linkedReference);
-    }
+    if(placed==d.targets.end())continue;
+    // An unnamed activator still has a position and cell when its own
+    // OnActivate or GameMode script refers to the calling object.
+    retain.insert(object.first);
+    if(placed->second.linkedReference)retain.insert(placed->second.linkedReference);
   }
   for(const auto& route:d.actorPatrols)for(const auto& point:route.second)retain.insert(point.reference);
   for(const auto& entry:d.packages) {

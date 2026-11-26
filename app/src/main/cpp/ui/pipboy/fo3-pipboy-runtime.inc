@@ -231,7 +231,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
                                std::atan2(-headPose[8], headPose[10])};
       if(world){
         gPipMenu.map.exterior=gPipMenu.map.location;
-        if(gSceneReady&&!IsFo3LoadingVisible()&&!session->saveBlocked)session->player.TrackExteriorLocation(gPipMenu.map.location);
+        if(gSceneReady&&!IsFo3LoadingVisible()&&!session->saveBlocked&&!session->player.Snapshot().playerMove.pending)session->player.TrackExteriorLocation(gPipMenu.map.location);
       }else{
         const auto entrance=fo3pipdata::ExteriorEntrance(defs,gCurrentCellFormId,gameX,gameY);
         const auto saved=session->player.Snapshot().pipboy.lastExterior;

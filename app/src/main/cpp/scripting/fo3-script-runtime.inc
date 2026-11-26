@@ -42,6 +42,7 @@ class Expression {
       value=0;return true;
     }
     const auto& d=p.Definitions().pipboy;
+    if(query=="isgoredisabled"){value=p.Definitions().goreDisabled;return true;}
     if(t=="getrandompercent"){value=forms?0:p.DrawScriptRandomPercent();return true;} // Binding preflight never draws.
     auto form=[&](const std::string& n){
       if(n=="player")return fo3player::PlayerRef;
@@ -114,12 +115,18 @@ class Expression {
       value=actor!=p.Snapshot().actors.end()&&(query=="getiscurrentpackage"?actor->second.package:actor->second.hostile)==argument;
       return true;
     }
+    if(query=="getisghost"||query=="getknockedstate"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(id!=fo3player::PlayerRef&&!p.Definitions().actorPlacements.count(id))return Fail("actor flag receiver unavailable");
+      value=query=="getisghost"?p.ActorGhost(id):p.ActorKnockedOut(id);return true;
+    }
     if(query=="getcombattarget"||query=="getunconscious"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       const auto actor=p.Snapshot().actors.find(id);
       if(p.ActorHealth(id)<0)return Fail("actor query reference unavailable");
-      // The resident life model currently has alive and dead states.
-      value=query=="getcombattarget"&&actor!=p.Snapshot().actors.end()?float(actor->second.hostile):0.f;return true;
+      if(query=="getunconscious")value=p.ActorUnconscious(id);
+      else value=actor!=p.Snapshot().actors.end()?float(actor->second.hostile):0.f;
+      return true;
     }
     if(query=="getequipped"){
       const auto actor=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -152,9 +159,10 @@ class Expression {
       const int rank=p.ActorFactionRank(id,faction);value=query=="getinfaction"?float(rank>=0):float(rank);return true;
     }
     if(query=="getinsamecell") {
-      if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported GetInSameCell target");
+      if(at==tokens.size())return Fail("missing GetInSameCell target");
+      const auto target=form(tokens[at++]);
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool same=false;
-      if(!p.ScriptInSameCell(id,same,error))return false;
+      if(!p.ScriptInSameCell(id,same,error,target))return false;
       value=same;return true;
     }
     if(query=="getignorecrime"){
@@ -198,6 +206,15 @@ class Expression {
       if(!d.cellWorlds.count(cell)||!p.ScriptReferenceLocation(id,location))return Fail("cell query location unavailable");
       value=fo3pipdata::InCell(d,location.cell,cell);return true;
     }
+    if(query=="iskiller"){
+      if(at==tokens.size())return Fail("missing killer reference");
+      const auto victim=dot==std::string::npos?owner:form(t.substr(0,dot));
+      return p.IsActorKiller(victim,form(tokens[at++]),value)||Fail("invalid death attribution actor");
+    }
+    if(query=="getcurrentaiprocedure"){
+      const auto actor=dot==std::string::npos?owner:form(t.substr(0,dot));
+      return p.ScriptActorProcedure(actor,value)||Fail("actor AI procedure unavailable");
+    }
     if(query=="getopenstate"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(!p.Definitions().references.count(id))return Fail("open-state reference unavailable");
@@ -213,12 +230,10 @@ class Expression {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing distance target");
       const auto target=form(tokens[at++]);
-      fo3pipdata::Location a,b;if(!p.ScriptReferenceLocation(id,a)||!p.ScriptReferenceLocation(target,b))return Fail("distance location unavailable");
+      fo3pipdata::Location a,b;float az=0,bz=0;
+      if(!p.ScriptReferenceLocation(id,a,&az)||!p.ScriptReferenceLocation(target,b,&bz))return Fail("distance location unavailable");
       if(a.cell!=b.cell&&(!a.world||a.world!=b.world)){value=1e9f;return true;}
-      const float dx=a.x-b.x,dy=a.y-b.y;
-      // Location carries planar map coordinates; fetch canonical actor height too.
-      const auto height=[&](uint32_t ref){if(ref==fo3player::PlayerRef)return p.ScriptPlayerHeight();const auto actor=p.Snapshot().actors.find(ref);if(actor!=p.Snapshot().actors.end())return actor->second.position[2];const auto placed=d.targets.find(ref);return placed==d.targets.end()?0.f:placed->second.z;};
-      const float dz=height(id)-height(target);value=std::sqrt(dx*dx+dy*dy+dz*dz);return true;
+      value=std::hypot(a.x-b.x,a.y-b.y,az-bz);return true;
     }
     if(query=="getdead"||query=="isincombat"||query=="istalking"||query=="issneaking"||query=="getsitting"||query=="getfurnituremarkerid"||query=="getcurrentfurnitureref"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -590,6 +605,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     scriptTraceBytes_=nextBytes;
     scriptTraceParent_=uint32_t(scriptTrace_->size()-1);
   }
+  // Kill changes the actor immediately. Its event observes the caller's
+  // completed instruction stream, including local writes following Kill.
+  std::vector<std::pair<uint32_t,uint32_t>> deathEvents;
+  std::vector<std::pair<uint32_t,RagdollPush>> pushes;
   for(const auto& c:commands) {
     if(!budget){error="script instruction budget exceeded";return false;}--budget;
     const bool active=gates.empty()||gates.back().active;
@@ -606,9 +625,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::Else){auto& g=gates.back();g.active=g.parent&&!g.taken;g.taken=true;continue;}
     if(c.type==C::EndIf){gates.pop_back();continue;}
     if(!active)continue;
+    if(c.type==C::Return)break;
     bool ok=true;
     switch(c.type) {
-    case C::Return:return true;
     case C::PlayerSex:ok=SetPlayerSex(c.index==2?!PlayerFemale():c.index==1);break;
     case C::PlayerScale:ok=SetPlayerScale(c.value);break;
     case C::PlayerAge:ok=AgePlayerRace(int(c.value));break;
@@ -645,23 +664,49 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::PlayerNameMenu:ok=OpenPlayerNameMenu(owner);break;
     case C::CharacterGeneration:ok=SetCharacterGeneration(c.value!=0);break;
     case C::LocationLoadScreens:ok=SetLocationSpecificLoadScreens(c.value!=0);break;
+    case C::PushActorAway:{
+      fo3pipdata::Location from,to;
+      ok=catalog_->actorPlacements.count(c.index)&&ScriptReferenceLocation(c.form,from)&&
+         ScriptReferenceLocation(c.index,to)&&from.world==to.world&&(from.world||from.cell==to.cell);
+      if(!ok)break;
+      auto height=[&](uint32_t ref){
+        if(ref==PlayerRef)return ScriptPlayerHeight();
+        const auto actor=state_.actors.find(ref);
+        return actor!=state_.actors.end()?actor->second.position[2]:catalog_->pipboy.targets.at(ref).z;
+      };
+      const auto* stats=ActorStatistics(c.index);
+      if(!stats){ok=false;break;}
+      const auto& rules=catalog_->rules;
+      const float power=(rules.knockbackDamageBase+c.value*rules.knockbackDamageMult)*
+                        (rules.knockbackAgilBase+10.f*stats->agility*rules.knockbackAgilMult);
+      RagdollPush push;push.speed=power*.1f; // 7 NIF units per Havok unit, 70 per metre.
+      push.originOffset={(from.x-to.x)/70.f,(height(c.form)-height(c.index))/70.f,(to.y-from.y)/70.f};
+      if(!std::isfinite(push.speed)){ok=false;break;}
+      pushes.emplace_back(c.index,push);break;
+    }
     case C::Kill:{
       const bool alive=ActorHealth(c.form)>0;
-      ok=KillActor(c.form);
-      if(ok&&alive&&HasReferenceEvent(c.form,"OnDeath")){
-        if(scriptActivationDepth_>=8){error="nested death event depth exceeded";return false;}
-        ++scriptActivationDepth_;
-        ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(c.form).base),
-                                "OnDeath",c.form,scriptActivator_,error);
-        --scriptActivationDepth_;
-      }
+      ok=KillActor(c.form,c.index);
+      if(ok&&alive&&!ActorKnockedOut(c.form)&&HasReferenceEvent(c.form,"OnDeath"))
+        deathEvents.emplace_back(c.form,c.index);
       break;
     }
     case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
+    case C::Resurrect:
+      if(c.value!=0){error="animated resurrection requires an authored get-up clip";return false;}
+      ok=ResurrectActor(c.form);break;
+    case C::SetGhost:ok=SetActorGhost(c.form,c.value!=0);break;
+    case C::SetUnconscious:ok=SetActorUnconscious(c.form,c.value!=0);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
     case C::Dispel:ok=c.form==PlayerRef&&DispelIngestible(c.index);break;
     case C::ChangeSpell:ok=c.form==PlayerRef&&SetAddiction(c.index,c.value!=0);break;
-    case C::ActorValueDamage:ok=ChangeActorValueDamage(c.form,c.index,c.value,c.variable!=0);break;
+    case C::ActorValueDamage:{
+      const bool canDie=c.form!=PlayerRef && c.index==16 && !c.variable && ActorHealth(c.form)>0;
+      ok=ChangeActorValueDamage(c.form,c.index,c.value,c.variable!=0);
+      if(ok&&canDie&&ActorHealth(c.form)==0&&!ActorKnockedOut(c.form)&&HasReferenceEvent(c.form,"OnDeath"))
+        deathEvents.emplace_back(c.form,0);
+      break;
+    }
     case C::ModifyActorValue:ok=ModifyActorValue(c.form,c.index,int(c.value));break;
     case C::ModifyMiscStat: {
       auto& count=state_.pipboy.bobbleheadsFound;
@@ -780,6 +825,13 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AutoSave:{fo3script::Action action;action.kind=fo3script::ActionKind::AutoSave;ok=QueueScriptAction(std::move(action));break;}
     case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;
     case C::TerminalBack:ok=QueueTerminalBack(c.form);break;
+    case C::LastExteriorDoor:{
+      const auto placement=catalog_->pipboy.targets.find(c.form);
+      fo3pipdata::Location location;
+      ok=placement!=catalog_->pipboy.targets.end()&&catalog_->pipboy.doorBases.count(placement->second.base)&&
+        ScriptReferenceLocation(c.form,location)&&TrackExteriorLocation(location);
+      break;
+    }
     case C::ShowMap:ok=RevealMapMarker(c.form,c.value!=0);break;
     case C::FastTravel:ok=SetFastTravelEnabled(c.value!=0);break;
     case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
@@ -858,6 +910,18 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       fo3script::Action action;action.kind=fo3script::ActionKind::PlayIdle;action.reference=c.form;action.form=c.index;
       ok=catalog_->actorPlacements.count(c.form)&&QueueScriptAction(std::move(action));break;
     }
+    case C::PlayMagicShader:case C::StopMagicShader:{
+      if((c.index!=PlayerRef&&!catalog_->references.count(c.index))||!catalog_->pipboy.effectShaders.count(c.form)){
+        error="unknown magic shader target or effect";return false;
+      }
+      const auto key=std::make_pair(c.index,c.form);
+      if(c.type==C::StopMagicShader){if(state_.magicShaders.erase(key))++revision_;}
+      else{
+        if(state_.magicShaders.size()>=1024&&!state_.magicShaders.count(key)){error="too many active magic shaders";return false;}
+        state_.magicShaders[key]={0,c.value,uint32_t(revision_)^c.index^(c.form*2654435761u)};++revision_;
+      }
+      break;
+    }
     case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
     case C::NoActivationSound:ok=SetNoActivationSound(c.form);break;
     case C::ScreenBlood:{fo3script::Action action;action.kind=fo3script::ActionKind::ScreenBlood;action.flags=uint32_t(c.value);ok=QueueScriptAction(std::move(action));break;}
@@ -865,8 +929,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::ImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::ImageModifier;action.reference=owner;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
     case C::PlaceExplosion:{
-      for(unsigned i=0;ok&&i<unsigned(c.value);++i)ok=QueueExplosion(c.index,c.form);
-      if(!ok)error="PlaceAtMe requires a placed explosion with supported payload";
+      for(unsigned i=0;ok&&i<unsigned(c.value);++i)ok=QueueExplosion(c.index,c.form,&error);
+      if(!ok&&error.empty())error="PlaceAtMe requires a placed explosion with supported payload";
       break;
     }
     case C::DamageObject:ok=DamageDestructible(c.form,c.value);break;
@@ -883,6 +947,23 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     default:ok=false;break;
     }
     if(!ok){if(error.empty())error="script command rejected by canonical Player API (type="+std::to_string(int(c.type))+", form="+std::to_string(c.form)+", value="+std::to_string(c.value)+")";return false;}
+  }
+  for(const auto& [ref,push]:pushes){
+    const auto actor=state_.actors.find(ref);
+    if(actor==state_.actors.end()||!actor->second.dead){
+      error="live PushActorAway needs knockdown and get-up";return false;
+    }
+    auto& pending=state_.ragdollPushes[ref];
+    if(pending.size()>=64){error="too many pending ragdoll pushes";return false;}
+    pending.push_back(push);++revision_;
+  }
+  for(const auto& [victim,killer]:deathEvents){
+    if(scriptActivationDepth_>=8){error="nested death event depth exceeded";return false;}
+    ++scriptActivationDepth_;
+    const auto script=catalog_->eventBaseScripts.at(catalog_->references.at(victim).base);
+    const bool handled=RunSourceEventDirect(script,"OnDeath",victim,killer,error);
+    --scriptActivationDepth_;
+    if(!handled)return false;
   }
   return true;
 }
@@ -1368,12 +1449,17 @@ bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
              (state==2||state==4||ScriptDoorState(reference,state==3))&&parents();
     }
   }
-  if(catalog_->activatorBases.count(base)&&catalog_->activationChildren.count(reference))return parents();
-  if(catalog_->pipboy.furniture.count(base)&&activator==PlayerRef){
+  if(catalog_->activatorBases.count(base)){
+    if(catalog_->activationChildren.count(reference))return parents();
+    // A script can delegate Activate on its own plain ACTI. With no
+    // native action to run, the script resumes after that instruction.
+    if(reference==scriptReference_)return true;
+  }
+  if((catalog_->pipboy.furniture.count(base)||catalog_->pipboy.terminals.count(base))&&activator==PlayerRef){
     bool disabled=true;std::string error;
     if(!ReferenceDisabled(reference,disabled,error)||disabled)return false;
-    fo3script::Action seat;seat.kind=fo3script::ActionKind::DefaultActivate;seat.reference=reference;seat.flags=activator;
-    return QueueScriptAction(std::move(seat))&&parents();
+    fo3script::Action action;action.kind=fo3script::ActionKind::DefaultActivate;action.reference=reference;action.flags=activator;
+    return QueueScriptAction(std::move(action));
   }
   // A control panel may delegate a linked door's native action. Door
   // access and the original activator are checked here and again at delivery.
@@ -1449,23 +1535,217 @@ bool Player::DamageDestructible(uint32_t ref,float amount) {
   }
   return true;
 }
-bool Player::QueueExplosion(uint32_t reference,uint32_t form){
+bool Player::ApplyPlacedExplosionHealthHit(uint32_t source,uint32_t explosion,uint32_t target,
+                                         bool lineOfSight,float& applied){
+  applied=0;
+  const auto definition=catalog_->explosions.find(explosion);
+  if(definition==catalog_->explosions.end())return false;
+  const auto& blast=definition->second;
+  fo3pipdata::Location from,to;
+  float fromZ=0,toZ=0;
+  if(!ScriptReferenceLocation(source,from,&fromZ)||!ScriptReferenceLocation(target,to,&toZ))return false;
+  if(from.world!=to.world||(!from.world&&from.cell!=to.cell))return true;
+  if(!lineOfSight&&!(blast.flags&0x10))return true;
+  if(target!=PlayerRef){
+    bool disabled=false;std::string error;
+    if(!catalog_->actorPlacements.count(target)||!ReferenceDisabled(target,disabled,error))return false;
+    if(disabled||ActorGhost(target))return true;
+  }
+  return ApplyPlacedHealthAtDistance({explosion,target,std::hypot(from.x-to.x,from.y-to.y,fromZ-toZ)},applied);
+}
+bool Player::ApplyPlacedHealthAtDistance(const PlacedBlastHit& hit,float& applied){
+  applied=0;
+  const auto target=hit.target;
+  const auto& blast=catalog_->explosions.at(hit.explosion);
+  const float health=ActorHealth(target);
+  if(health<0)return false;
+  const float damage=blast.PlacedHitDamage(hit.distance,catalog_->weapons)*(1-DamageResistance(target)/100.f);
+  if(!std::isfinite(damage)||damage<0)return false;
+  if(!health||!damage)return true;
+  if(!ChangeActorValueDamage(target,16,damage,false))return false;
+  applied=std::min(health,damage);
+  return true;
+}
+bool Player::StartPlacedEffectsDirect(uint32_t enchantment,uint32_t target,std::string& reason){
+  const auto& data=catalog_->pipboy;
+  const auto found=data.enchantments.find(enchantment);
+  if(found==data.enchantments.end()||found->second.effects.empty()||ActorHealth(target)<0){
+    reason="missing enchantment or actor";return false;
+  }
+  for(size_t i=0;i<found->second.effects.size();++i){
+    const auto& effect=found->second.effects[i];
+    const auto m=data.magic.find(effect.id);
+    if(m==data.magic.end()||effect.range!=1||effect.area||!effect.duration||effect.duration>1000000||
+       !effect.conditions.empty()||state_.placedEffects.size()>=1024){
+      reason="unsupported placed enchantment effect";return false;
+    }
+    const auto& magic=m->second;
+    float magnitude=float(effect.magnitude);
+    if(magic.archetype==fo3pipdata::MagicScript){
+      const auto program=catalog_->eventPrograms.find(magic.script);
+      if(program==catalog_->eventPrograms.end()){reason="missing enchantment script";return false;}
+      for(const auto& block:program->second.blocks)if(block.event=="scripteffectupdate"){
+        reason="continuous magic effect script unsupported";return false;
+      }
+      if(!RunSourceEventDirect(magic.script,"ScriptEffectStart",target,0,reason))return false;
+    }else if(magic.archetype==fo3pipdata::MagicValue&&magic.av==16&&!(magic.flags&fo3pipdata::MagicRecover)){
+      if((magic.flags&fo3pipdata::MagicDetrimental)&&magic.resistance!=UINT32_MAX&&ActorHealth(target)>0){
+        float resistance=0;
+        if(!ActorValue(target,magic.resistance,resistance)){reason="actor magic resistance unavailable";return false;}
+        magnitude*=1-std::clamp(resistance,0.f,100.f)/100;
+      }
+    }else{reason="unsupported placed magic archetype";return false;}
+    state_.placedEffects.push_back({target,enchantment,uint32_t(i),float(effect.duration),magnitude});
+    ++revision_;
+  }
+  return true;
+}
+
+bool Player::BeginPlacedEnchantment(uint32_t enchantment,uint32_t target,std::string& error){
+  auto plan=PrepareScriptTransaction([&](Player& p,std::string& reason){
+    return p.StartPlacedEffectsDirect(enchantment,target,reason);
+  },error);
+  if(!plan)return false;
+  if(plan->HasReferenceChanges()){error="enchantment needs a resident world transaction";return false;}
+  return CommitScriptTransaction(*plan);
+}
+bool Player::ResolvePlacedBlastHit(const PlacedBlastHit& hit,std::string& error,bool deliverDeath){
+  const auto& blast=catalog_->explosions.at(hit.explosion);
+  const auto target=hit.target;
+  const float health=ActorHealth(target);
+  float applied=0;
+  if(!ApplyPlacedHealthAtDistance(hit,applied)){error="blast health transition unavailable";return false;}
+  if(blast.enchantment&&!StartPlacedEffectsDirect(blast.enchantment,target,error))return false;
+  if(deliverDeath&&health>0&&ActorHealth(target)==0&&!ActorKnockedOut(target)&&HasReferenceEvent(target,"OnDeath")){
+    const auto script=catalog_->eventBaseScripts.at(catalog_->references.at(target).base);
+    if(!RunSourceEventDirect(script,"OnDeath",target,0,error))return false;
+  }
+  return true;
+}
+
+bool Player::AdvancePlacedEffects(double seconds,std::string& error){
+  if(state_.placedBlastHits.empty()&&state_.placedEffects.empty()&&state_.magicShaders.empty())return true;
+  if(!std::isfinite(seconds)||seconds<0){error="invalid effect clock";return false;}
+  if(!seconds)return true;
+  const auto advanceShaders=[&](auto& shaders){
+    for(auto it=shaders.begin();it!=shaders.end();){
+      auto& playback=it->second;
+      playback.elapsed=float(std::min(double(std::numeric_limits<float>::max()),double(playback.elapsed)+seconds));
+      if(playback.duration>=0&&playback.elapsed>=playback.duration)it=shaders.erase(it);
+      else ++it;
+    }
+  };
+  // Most frames on a dead actor only move clocks. Copy the script state
+  // when a callback, health mutation or impact actually needs a transaction.
+  const auto needsDelivery=[&](const PlacedEffect& entry){
+    if(entry.remaining<=seconds)return true;
+    const auto& effect=catalog_->pipboy.enchantments.at(entry.enchantment).effects.at(entry.index);
+    return catalog_->pipboy.magic.at(effect.id).archetype==fo3pipdata::MagicValue&&ActorHealth(entry.target)>0;
+  };
+  if(state_.placedBlastHits.empty()&&std::none_of(state_.placedEffects.begin(),state_.placedEffects.end(),needsDelivery)){
+    advanceShaders(state_.magicShaders);
+    for(auto& entry:state_.placedEffects)entry.remaining=float(double(entry.remaining)-seconds);
+    ++revision_;return true;
+  }
+  auto plan=PrepareScriptTransaction([&](Player& p,std::string& reason){
+    advanceShaders(p.state_.magicShaders);
+    auto& active=p.state_.placedEffects;
+    for(auto it=active.begin();it!=active.end();){
+      const auto& effect=catalog_->pipboy.enchantments.at(it->enchantment).effects.at(it->index);
+      const auto& magic=catalog_->pipboy.magic.at(effect.id);
+      const float dt=float(std::min(seconds,double(it->remaining)));
+      const auto target=it->target;
+      if(magic.archetype==fo3pipdata::MagicValue){
+        const float before=p.ActorHealth(target);
+        if(before>0&&it->magnitude>0&&!p.ChangeActorValueDamage(target,magic.av,it->magnitude*dt,!(magic.flags&fo3pipdata::MagicDetrimental))){
+          reason="active enchantment health transition unavailable";return false;
+        }
+        if(before>0&&p.ActorHealth(target)==0&&!p.ActorKnockedOut(target)&&p.HasReferenceEvent(target,"OnDeath")){
+          const auto script=catalog_->eventBaseScripts.at(catalog_->references.at(target).base);
+          if(!p.RunSourceEventDirect(script,"OnDeath",target,0,reason))return false;
+        }
+      }
+      it->remaining-=dt;
+      if(it->remaining>0){++it;continue;}
+      if(magic.archetype==fo3pipdata::MagicScript&&!p.RunSourceEventDirect(magic.script,"ScriptEffectFinish",target,0,reason))return false;
+      it=active.erase(it);
+    }
+    // Resolve new hits after advancing existing effects. A newly started
+    // enchantment gets its whole duration from this impact.
+    auto hits=std::move(p.state_.placedBlastHits);
+    p.state_.placedBlastHits.clear();
+    for(const auto& hit:hits)if(!p.ResolvePlacedBlastHit(hit,reason,true))return false;
+    ++p.revision_;return true;
+  },error);
+  if(!plan)return false;
+  if(plan->HasReferenceChanges()){error="effect completion needs a resident world transaction";return false;}
+  return CommitScriptTransaction(*plan);
+}
+bool Player::QueueExplosion(uint32_t reference,uint32_t form,std::string* error){
   const auto definition=catalog_->explosions.find(form);
   if(definition==catalog_->explosions.end())return false;
   const auto& e=definition->second;
-  // Damaging explosions require weapon ownership and radial hit delivery.
-  // The world-only path handles actor-independent, non-damaging blasts.
-  if(e.damage!=0||e.placedObject||e.enchantment)return false;
-  fo3pipdata::Location where;
-  if(!ScriptReferenceLocation(reference,where)||!where.cell)return false;
+  if(e.placedObject)return false;
+  fo3pipdata::Location where;float z=0;
+  if(!ScriptReferenceLocation(reference,where,&z)||!where.cell)return false;
   fo3script::Action action;action.kind=fo3script::ActionKind::Explosion;
   action.reference=reference;action.form=form;action.cell=where.cell;action.world=where.world;
-  action.position={where.x,where.y,0};
-  if(reference==PlayerRef)action.position[2]=ScriptPlayerHeight();
-  else if(const auto actor=state_.actors.find(reference);actor!=state_.actors.end())action.position[2]=actor->second.position[2];
-  else if(const auto p=catalog_->pipboy.targets.find(reference);p!=catalog_->pipboy.targets.end())action.position[2]=p->second.z;
-  else return false;
-  return QueueScriptAction(std::move(action));
+  action.position={where.x,where.y,z};
+  std::vector<PlacedBlastHit> hits;
+  if(e.damage||e.enchantment){
+    // Without an observed visibility query only the authored Ignore LOS
+    // path is determinate. A placed EXPL has a non-actor magic caster.
+    if(!(e.flags&0x10)||!scriptPlayerPositionKnown_||e.radius<=0){
+      if(error)*error="damaging explosion requires resident positions and line of sight";
+      return false;
+    }
+    const auto collect=[&](uint32_t id){
+      fo3pipdata::Location loc;float height=0;
+      if(!ScriptReferenceLocation(id,loc,&height)){
+        const auto actor=catalog_->actorPlacements.find(id);
+        if(actor==catalog_->actorPlacements.end())return false;
+        const auto& placed=actor->second;
+        loc={placed.cell,placed.world,placed.x,placed.y,-placed.rz};height=placed.z;
+      }
+      if(loc.world!=where.world||(!loc.world&&loc.cell!=where.cell))return true;
+      const float distance=std::hypot(loc.x-where.x,loc.y-where.y,height-z);
+      if(!std::isfinite(distance))return false;
+      if(distance>=e.radius)return true;
+      if(id!=PlayerRef){
+        bool disabled=false;std::string why;
+        if(!ReferenceDisabled(id,disabled,why))return false;
+        if(disabled||ActorGhost(id))return true;
+      }
+      const float health=ActorHealth(id);
+      if(health<0)return false;
+      if(!health)return true;
+      if(HasReferenceEvent(id,"OnHit")||HasReferenceEvent(id,"OnHitWith")){
+        if(error)*error="unsupported explosion hit callback on "+std::to_string(id);
+        return false;
+      }
+      const float damage=e.PlacedHitDamage(distance,catalog_->weapons)*(1-DamageResistance(id)/100.f);
+      if((e.flags&12)&&(damage<health||Essential(id))){
+        if(error)*error="unsupported living blast knockdown on "+std::to_string(id);
+        return false;
+      }
+      hits.push_back({form,id,distance});
+      return true;
+    };
+    if(!collect(PlayerRef))return false;
+    for(const auto& entry:catalog_->actorPlacements)if(entry.first!=PlayerRef&&!collect(entry.first))return false;
+    if(state_.placedBlastHits.size()+hits.size()>1024)return false;
+    std::sort(hits.begin(),hits.end(),[](const auto& a,const auto& b){return a.target<b.target;});
+    // Probe on an isolated candidate so an unsupported enchantment cannot
+    // publish the placement and then leave an undeliverable impact in a save.
+    Player probe(*this,ScriptCandidateTag{});std::string reason;
+    for(const auto& hit:hits)if(!probe.ResolvePlacedBlastHit(hit,reason,false)){
+      if(error)*error=reason;
+      return false;
+    }
+  }
+  if(!QueueScriptAction(std::move(action)))return false;
+  state_.placedBlastHits.insert(state_.placedBlastHits.end(),hits.begin(),hits.end());
+  return true;
 }
 bool Player::QueueScriptAction(fo3script::Action action){
   if(pendingScriptActions_.size()>=64)return false;
@@ -1503,7 +1783,10 @@ std::vector<uint32_t> Player::ScriptOccupiedTriggers() const {
   std::sort(active.begin(),active.end());return active;
 }
 std::vector<std::pair<uint32_t,bool>> Player::ScriptActorTriggerChanges(
-    uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position)const {
+    uint32_t actor,uint32_t cell,uint32_t world,const std::array<float,3>& position,float yaw)const {
+  const auto& data=catalog_->pipboy;
+  const auto placement=data.targets.find(actor);
+  const auto base=placement==data.targets.end()?data.dialogueActors.end():data.dialogueActors.find(placement->second.base);
   std::vector<std::pair<uint32_t,bool>> changes;
   const auto previous=scriptActorInsideTriggers_.find(actor);
   auto check=[&](uint32_t reference){
@@ -1514,7 +1797,8 @@ std::vector<std::pair<uint32_t,bool>> Player::ScriptActorTriggerChanges(
     const bool wasInside=previous!=scriptActorInsideTriggers_.end()&&previous->second.count(reference);
     bool disabled=true;std::string error;
     const bool inside=(world?p.world==world:(!p.world&&p.cell==cell))&&
-        fo3script::Contains(p,shape->second,position)&&ReferenceDisabled(reference,disabled,error)&&!disabled;
+        (base==data.dialogueActors.end()?fo3script::Contains(p,shape->second,position):
+         fo3script::OverlapsActor(p,shape->second,position,yaw,placement->second.scale,base->second.objectBounds))&&ReferenceDisabled(reference,disabled,error)&&!disabled;
     if(inside!=wasInside)changes.emplace_back(reference,inside);
   };
   const auto named=catalog_->actorTriggerVolumes.find(actor);
@@ -1709,12 +1993,12 @@ void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t
 } // namespace fo3player
 
 namespace fo3player {
-bool Player::ScriptReferenceLocation(uint32_t id,fo3pipdata::Location& out)const{
-  if(id==PlayerRef){if(!scriptPlayerPositionKnown_)return false;out={scriptPlayerCell_,scriptPlayerWorld_,scriptPlayerActorOrigin_[0],scriptPlayerActorOrigin_[1],0};return true;}
+bool Player::ScriptReferenceLocation(uint32_t id,fo3pipdata::Location& out,float* height)const{
+  if(id==PlayerRef){if(!scriptPlayerPositionKnown_)return false;if(height)*height=scriptPlayerActorOrigin_[2];out={scriptPlayerCell_,scriptPlayerWorld_,scriptPlayerActorOrigin_[0],scriptPlayerActorOrigin_[1],0};return true;}
   const auto actor=state_.actors.find(id);
-  if(actor!=state_.actors.end()){const auto& a=actor->second;out={a.cell,a.world,a.position[0],a.position[1],a.yaw};return true;}
+  if(actor!=state_.actors.end()){const auto& a=actor->second;if(height)*height=a.position[2];out={a.cell,a.world,a.position[0],a.position[1],a.yaw};return true;}
   const auto placed=catalog_->pipboy.targets.find(id);if(placed==catalog_->pipboy.targets.end())return false;
-  const auto& p=placed->second;out={p.cell,p.world,p.x,p.y,-p.rz};return true;
+  const auto& p=placed->second;if(height)*height=p.z;out={p.cell,p.world,p.x,p.y,-p.rz};return true;
 }
 bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
   const auto placed=catalog_->actorPlacements.find(reference);

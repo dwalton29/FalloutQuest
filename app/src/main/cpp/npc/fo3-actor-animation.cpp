@@ -5,6 +5,24 @@
 #include <functional>
 
 namespace fo3anim {
+void DiffuseRowsForBone(const Pose& pose,int bone,float (&rows)[2][4]){
+    DiffuseTransform diffuse;bool hasDiffuse=false;
+    for(const auto& property:pose.properties)if(property.bone==bone){
+        using K=fo3anim::PropertyKind;
+        if(property.kind>=K::DiffuseOffsetU&&property.kind<=K::DiffuseRotation){
+            if(!hasDiffuse){diffuse=property.diffuse;hasDiffuse=true;}
+            switch(property.kind){
+            case K::DiffuseOffsetU: diffuse.offset[0]=property.value[0];break;
+            case K::DiffuseOffsetV: diffuse.offset[1]=property.value[0];break;
+            case K::DiffuseScaleU: diffuse.scale[0]=property.value[0];break;
+            case K::DiffuseScaleV: diffuse.scale[1]=property.value[0];break;
+            case K::DiffuseRotation: diffuse.rotation=property.value[0];break;
+            default: break;
+            }
+        }
+    }
+    if(hasDiffuse)diffuse.ShaderRows(rows);
+}
 void DiffuseTransform::ShaderRows(float (&rows)[2][4]) const {
   const float c=std::cos(rotation),s=std::sin(rotation);
   const auto apply=[&](float u,float v){
@@ -312,6 +330,13 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
   }
   return v;
 }
+float ControllerClock::LoopTime(double elapsed) const {
+  const double period=double(stop)-start;
+  if(period<=0)return start;
+  double local=std::fmod(elapsed*frequency+phase-start,period);
+  if(local<0)local+=period;
+  return float(start+local);
+}
 bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings, RootPolicy rootPolicy, const Transform* retainedRoot, Playback playback) {
   const auto started=std::chrono::steady_clock::now();
   if (p.boundSkeleton!=&s || p.boundClip!=&c || p.trackBones.size() != c.tracks.size() || p.propertyBones.size()!=c.properties.size() ||
@@ -335,7 +360,9 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
       t = std::clamp(t, 0.0, d);
   } else
     t = 0;
-  float time = c.start + static_cast<float>(t);
+  const float sequenceTime = c.start + static_cast<float>(t);
+  if(c.DirectControllers()&&(c.transformClocks.size()!=c.tracks.size()||
+                             c.propertyClocks.size()!=c.properties.size()))return false;
   std::fill(p.priorities.begin(),p.priorities.end(),0);
   std::fill(p.channels.begin(),p.channels.end(),0);
   for (size_t i = 0; i < s.bones.size(); ++i)
@@ -352,6 +379,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
     // track would double root translation/rotation and lift/offset the skeleton.
     if (bone == accumulation && rootPolicy==RootPolicy::Locomotion)
       continue;
+    const float time=c.transformClocks.empty()?sequenceTime:c.transformClocks[i].LoopTime(elapsed);
     const Track &track = c.tracks[i];
     p.priorities[bone]=track.priority;
     p.channels[bone]=(track.hasTranslation?1:0)|(track.hasRotation?2:0)|(track.hasScale?4:0);
@@ -396,6 +424,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
   }
   p.properties.clear();
   for(size_t i=0;i<c.properties.size();++i){
+    const float time=c.propertyClocks.empty()?sequenceTime:c.propertyClocks[i].LoopTime(elapsed);
     const auto& property=c.properties[i];auto value=property.base;
     if(property.values.keys.empty()&&(!std::isfinite(value[0])||std::abs(value[0])>=1e30f))continue;
     if(property.kind==PropertyKind::Visibility||property.kind==PropertyKind::EmitterActive){

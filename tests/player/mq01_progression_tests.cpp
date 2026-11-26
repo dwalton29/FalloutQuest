@@ -1,4 +1,9 @@
 #include "mq01_test_conversation.h"
+#include "dialogue/fo3-dialogue-selection.h"
+#include "npc/fo3-npc-state.h"
+#include "npc/fo3-actor-animation.h"
+#include "physics/fo3-nif-collision.h"
+#include "rendering/mesh/fo3-burst-particles.h"
 #include "scripting/fo3-script-master-match.h"
 #include "ui/pause/fo3-debug-menu.h"
 #include "ui/terminal/fo3-terminal-state.h"
@@ -7,6 +12,652 @@ bool SitInQuestFurniture(const fo3pipdata::Definitions&,uint32_t,const std::stri
 #include <cassert>
 #include <iostream>
 #include <unistd.h>
+
+// Optional host checkpoint for the separate production NPC combat executor.
+static const char* robotSecuritySave=nullptr;
+
+// The original lamp has nine rigid bodies attached to nested chain bones.
+static void CheckChandelierCollision(const std::string& path) {
+  std::vector<uint8_t> bytes;
+  fo3anim::Skeleton skeleton;
+  std::vector<int> blockBones;
+  std::vector<fo3anim::Clip> clips;
+  assert(LoadFalloutMeshFile(path,bytes,nullptr));
+  assert(fo3anim::DecodeObjectAnimation(bytes,skeleton,blockBones,clips,true));
+  std::vector<Fo3NifCollisionShapeQ6F> shapes;
+  assert(LoadFo3NifCollisionShapesComplete(path,shapes));
+  unsigned links=0;
+  for(const auto& shape:shapes) {
+    if(shape.kind!=Fo3CollisionShapeKindQ6F::Capsule) continue;
+    const int bone=blockBones.at(shape.targetBlock);
+    assert(bone>=0 && !shape.bodyTransformApplied && !shape.nestedTransformApplied);
+    // Compare the three basis vectors and translation with the independently
+    // decoded visual rig. Both transforms must place the same capsule.
+    const auto& bind=skeleton.bindGlobal.at(bone);
+    for(int row=0;row<3;++row)
+      for(int col=0;col<4;++col)
+        assert(std::abs(shape.localToModel[row*4+col]-bind[col*4+row])<.002f);
+    ++links;
+  }
+  assert(links==9);
+}
+
+static void TranquilityExit(fo3player::Player& run,const std::string& master,const std::string& meshRoot,bool invasion){
+  const auto& data=run.Definitions().pipboy;std::string error;
+  const auto exit=data.formNames.at("mq04exitdooractref"),pod=data.formNames.at("mq04playerpod");
+  const auto& outside=data.targets.at(exit);
+  run.SetScriptPlayerLocation(outside.x,outside.y,outside.z,outside.cell,outside.world);
+  auto plan=run.PrepareActivationTransaction(exit,fo3player::PlayerRef,error);
+  if(!plan)std::cerr<<"Simulation exit: "<<error<<std::endl;
+  assert(plan);
+  if(plan->HasReferenceChanges()){
+    fo3script::ScriptMasterMatch match;std::atomic<bool> cancel{false};
+    assert(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),match,cancel,error));
+  }
+  assert(run.CommitScriptTransaction(*plan));
+  const auto move=run.Snapshot().playerMove;assert(move.pending&&move.marker==pod);
+  const auto& garage=data.targets.at(data.formNames.at("smithcaseygarageextdoor"));
+  const auto& map=run.Snapshot().pipboy.lastExterior;
+  assert(map.cell==garage.cell&&map.world==garage.world&&map.x==garage.x&&map.y==garage.y);
+  for(int i=1;i<=7;++i)assert(run.ActorKnockedOut(data.formNames.at("mq04soldierref"+std::to_string(i)))==invasion);
+  std::cout<<"Original exit moved to the pod and anchored the Pip-Boy map outside the garage"<<std::endl;
+  const auto& ids=data.formNames;const auto locker=ids.at("mq04playercontainerref");
+  const auto* stored=run.ContainerContents(locker);assert(stored&&!stored->empty());
+  auto clips=std::make_shared<fo3script::AnimationRegistry>();
+  for(const auto& [ref,file]:std::vector<std::pair<uint32_t,std::string>>{
+      {ids.at("mq04playerpodshellref"),"furniture/tlpodplayer01.nif"},
+      {ids.at("mq04dadpodshellref"),"furniture/tlpod01.nif"},
+      {ids.at("vgeardoorr112ref"),"dungeons/vaultruined/doors/vgeardoorr112.nif"},
+      {ids.at("vault112secrethatchref"),"dungeons/utility/rooms/utlrmstairshatch01.nif"}})
+    assert(LoadQuestObjectClips(meshRoot+"/"+file,(*clips)[ref]));
+  run.SetScriptAnimationRegistry(clips);run.SetScriptPlayerLocation(move.position[0],move.position[1],move.position[2],move.cell,move.world);
+  run.AcknowledgePlayerMove();
+  const auto key=fo3dialogue::VariableKey(data,"MQ04.DadGreet");
+  const auto quest=ids.at("mq04");
+  const auto original=data.objectReferenceScripts.at(locker).first;
+  run.SetScriptEventDiagnostic([&](const std::string& line){if(line.find("SCPT "+std::to_string(original)+" ")!=std::string::npos)std::cerr<<line<<std::endl;});
+  for(int i=0;i<40&&(!run.Snapshot().pipboy.dialogueVariables.count(key)||run.Snapshot().pipboy.quests.at(quest).stage<75);++i){
+    run.SetScriptRuntimeClock(80+i*.25,.25);
+    run.PumpWorldAwareGameMode(.25,{locker},[&](auto change){
+      if(change->HasReferenceChanges()){
+        fo3script::ScriptMasterMatch match;std::atomic<bool> cancel{false};
+        if(!fo3script::MatchScriptProgramsToMaster(master,change->ExecutedScripts(),match,cancel,error)){
+          std::cerr<<"Vault 112 return: "<<error<<std::endl;return false;
+        }
+      }
+      return run.CommitScriptTransaction(*change);
+    });
+  }
+  assert(run.Snapshot().pipboy.dialogueVariables.count(key)&&run.Snapshot().pipboy.dialogueVariables.at(key)==1);
+  assert(run.ContainerContents(locker)->empty()&&run.Snapshot().pipboy.quests.at(quest).stage==75);
+  for(const char* name:{"mq04playerpodshellref","mq04dadpodshellref"}){
+    bool opening=false;assert(run.ScriptAnimationPlaying(ids.at(name),opening,"Forward")&&opening);
+  }
+  bool suit=false;assert(run.ScriptEquippedItem(fo3player::PlayerRef,ids.at("vaultsuit112"),suit)&&suit);
+  std::cout<<"Vault 112 return restored equipment, reopened both pods and enabled James's greeting"<<std::endl;
+
+  // The two goodbye topics decide whether James will escort the player.
+  for(bool escort:{false,true}){
+    fo3player::Player end(run);
+    Conversation james(end,ids.at("mqdadref"));james.Start();
+    uint32_t finish=ids.at(escort?"mq04dadletsgo":"mq04dadnotgoing");
+    for(auto topic:{"mq04dadchoice1","mq04dadgoodthingiwasthere","mq04dadtakeabreak","mq04dadsoitsbacktorivetcity"})
+      james.Choose(ids.at(topic));
+    james.Choose(finish);
+    const auto& status=end.Snapshot().pipboy.quests;
+    assert(status.at(quest).stage==200&&status.at(ids.at("mq05")).stage==10);
+    const auto escortKey=fo3dialogue::VariableKey(data,"MQ05.DadEscort");
+    const auto flag=end.Snapshot().pipboy.dialogueVariables.find(escortKey);
+    assert((flag!=end.Snapshot().pipboy.dialogueVariables.end()&&flag->second==1)==escort);
+    assert(end.Snapshot().experience==run.Snapshot().experience+600&&end.Snapshot().achievements.count(7));
+  }
+  std::cout<<"James's two departure choices completed Tranquility Lane and opened The Waters of Life"<<std::endl;
+
+}
+
+// Host the production full-scene publication path. The native loader queue is
+// represented by its requested cell and world, while the original transaction
+// and published reference snapshot still come from the engine.
+#include "world/fo3-scene-publication.h"
+namespace simulationScene {
+static uint32_t gCurrentCellFormId,gExteriorWorldspaceQ1890;
+static float gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730;
+static std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
+static fo3scene::ReferencePublication gFo3ScenePublication;
+static bool refreshRequested;
+static bool CanDeferFo3DialogueResult(){return true;}
+static bool QueueFo3WorldModelRefresh(uint32_t cell,uint32_t world,float,float,float){
+  refreshRequested=cell==gCurrentCellFormId&&world==gExteriorWorldspaceQ1890;return refreshRequested;
+}
+#include "dialogue/fo3-dialogue-scene-refresh.inc"
+static void Configure(Conversation& talk){
+  const auto& origin=talk.context.speaker;
+  gCurrentCellFormId=origin.cell;gExteriorWorldspaceQ1890=origin.world;
+  gSceneCenterXQ1730=origin.x;gSceneCenterYQ1730=origin.y;gSceneFloorZQ1730=origin.z;
+  refreshRequested=false;
+  talk.session.previewReferences=[](const auto&,const auto&,auto&){return CanDeferFo3DialogueResult();};
+  talk.session.publishReferences=PublishFo3DialogueSceneRefresh;
+}
+}
+
+// Walk the placed puzzle and use the visible original terminal menu. Each
+// object executes its own attached OnActivate and GameMode blocks.
+static void TranquilityFailsafe(const fo3player::Player& arrival,const std::string& master,const std::string& meshRoot,const std::string& save){
+  fo3player::Player run(arrival);
+  const auto& data=run.Definitions().pipboy;
+  const auto term=data.formNames.at("mq04failsafeterminalref");
+  const auto effects=data.formNames.at("mq04failsafeeffectsref");
+  const auto seq=fo3dialogue::VariableKey(data,"MQ04.FailSeq");
+  const auto inv=fo3dialogue::VariableKey(data,"MQ04.Invasion");
+  std::string error;
+  auto disabled=[&](uint32_t ref){bool value=false;assert(run.ReferenceDisabled(ref,value,error));return value;};
+  auto value=[&](uint64_t key){const auto& vars=run.Snapshot().pipboy.dialogueVariables;
+    const auto found=vars.find(key);return found==vars.end()?0.f:found->second;};
+  auto publish=[&](auto& plan){
+    if(!plan){std::cerr<<"Tranquility Lane action: "<<error<<std::endl;return false;}
+    if(plan->HasReferenceChanges()){
+      fo3script::ScriptMasterMatch match;std::atomic<bool> cancel{false};
+      if(!fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),match,cancel,error)){
+        std::cerr<<"Tranquility Lane publication: "<<error<<std::endl;return false;
+      }
+    }
+    return run.CommitScriptTransaction(*plan);
+  };
+  auto press=[&](uint32_t ref){
+    const auto& at=data.targets.at(ref);
+    run.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+    auto plan=run.PrepareActivationTransaction(ref,fo3player::PlayerRef,error);assert(publish(plan));
+  };
+  // The five unnamed placements in the abandoned house, ordered by base record.
+  const std::array<uint32_t,5> objects{0x2b7fc,0x2b7fe,0x2b800,0x2b802,0x2b804};
+  assert(disabled(term)&&disabled(effects));
+  press(objects[4]);assert(value(seq)==1);
+  press(objects[4]);
+  for(int i=0;i<12;++i){run.SetScriptRuntimeClock(50+i*.1,.1);
+    run.PumpWorldAwareGameMode(.1,{objects[4]},[&](auto plan){return publish(plan);});}
+  assert(value(seq)==0&&disabled(term));
+  press(objects[4]);press(objects[2]);press(objects[3]);assert(value(seq)==3);
+  assert(run.Save(save,error)&&run.Restore(save,error));unlink(save.c_str());
+  for(int index:{2,1,3,0})press(objects[index]);
+  assert(value(seq)==8&&!disabled(term)&&!disabled(effects));
+  fo3terminal::Session terminal;terminal.Open(run,term,0);
+  const auto submenu=data.formNames.at("mq04failsafeterminalinvasionsubmenu");
+  assert(terminal.page==fo3terminal::Session::Page::Menu);
+  const auto& entries=data.terminals.at(terminal.menu).entries;
+  const auto link=std::find_if(terminal.entries.begin(),terminal.entries.end(),[&](size_t n){return entries[n].submenu==submenu;});
+  assert(link!=terminal.entries.end());
+  auto open=run.PrepareTerminalTransaction(term,terminal.menu,*link,error);assert(publish(open));
+  terminal.parents.push_back(terminal.menu);terminal.menu=submenu;terminal.Refresh(run);
+  auto chooseVisible=[&](size_t index){
+    assert(std::find(terminal.entries.begin(),terminal.entries.end(),index)!=terminal.entries.end());
+    auto chosen=run.PrepareTerminalTransaction(term,terminal.menu,index,error);assert(publish(chosen));
+    terminal.Refresh(run);
+  };
+  // Entry 1 explains the lock. Reading entry 2 makes the real start entry
+  // (0) visible via GetScriptVariable on the placed terminal.
+  chooseVisible(1);assert(value(inv)==0);
+  chooseVisible(2);
+  chooseVisible(0);assert(value(inv)==1);
+  std::cout<<"Tranquility Lane failsafe tones, failed sequence, saved solution and invasion terminal choice passed"<<std::endl;
+  const auto quest=data.formNames.at("mq04"),script=data.quests.at(quest).script;
+  const auto karma=run.Snapshot().karma;
+  run.SetScriptEventDiagnostic([&](const std::string& line){
+    if(line.find("SCPT "+std::to_string(script)+" ")!=std::string::npos)std::cerr<<line<<std::endl;
+  });
+  for(int frame=0;frame<30&&run.Snapshot().pipboy.quests.at(quest).stage<70;++frame){
+    run.SetScriptRuntimeClock(60+frame*.1,.1);
+    run.PumpWorldAwareGameMode(.1,{},[&](auto plan){return publish(plan);});
+  }
+  assert(run.Snapshot().pipboy.quests.at(quest).stage==70);
+  assert(!disabled(data.formNames.at("mq04exitdooractref"))&&run.Snapshot().karma==std::min(karma+300.f,1000.f));
+  for(int soldier=1;soldier<=7;++soldier)assert(!disabled(data.formNames.at("mq04soldierref"+std::to_string(soldier))));
+  assert(!disabled(data.formNames.at("mqdadref"))&&run.Snapshot().pipboy.quests.at(data.formNames.at("mq05")).stage==1);
+  const auto& marker=data.targets.at(data.formNames.at("mq04georgeinvasionmarker"));
+  const auto& resident=run.Snapshot().actors.at(data.formNames.at("georgeneusbaumref"));
+  assert(resident.cell==marker.cell&&resident.position[0]==marker.x&&resident.position[1]==marker.y&&resident.position[2]==marker.z);
+  TranquilityExit(run,master,meshRoot,true);
+  std::cout<<"Original simulation invasion relocated residents, enabled seven soldiers and the exit, and awarded Karma"<<std::endl;
+
+}
+
+// Select the original trap message buttons and let each attached script
+// consume GetButtonPressed. The host supplies Mabel's arrival at the trigger.
+static void HendersonTraps(const fo3player::Player& start,const std::string& meshRoot,const std::string& save){
+  const auto& data=start.Definitions().pipboy;
+  const auto& ids=data.formNames;
+  const auto mabel=ids.at("mabelhendersonref"),oven=ids.at("mq04mabelovenref");
+  const auto lamp=ids.at("mq04chandelierref"),volume=ids.at("mq04chandeliertriggerref");
+  std::string error;
+  const auto skate=ids.at("mq04rollerskateactivatorref");
+  const auto& blast=start.Definitions().explosions.at(ids.at("mq04ovenexplosion"));
+  std::string model=fo3script::Lower(blast.model);
+  std::replace(model.begin(),model.end(),'\\','/');
+  std::vector<uint8_t> bytes;
+  assert(LoadFalloutMeshFile(meshRoot+"/"+model,bytes,nullptr));
+  const auto layers=fo3burst::Decode(bytes);
+  assert(layers.size()==4);
+  std::map<std::string,float> expectedHeights{{"fxsmokesub.dds",1.486684f},{"sparkburst02.dds",.403545f},
+      {"shrap01.dds",0.f},{"grenadeflash01.dds",0.f}};
+  for(const auto& layer:layers){
+    const auto name=fo3script::Lower(layer.texture.substr(layer.texture.find_last_of("/\\")+1));
+    const auto& matrix=layer.emitterToModel;
+    assert(layer.count && std::abs(matrix.m[3])<.001f && std::abs(matrix.m[7])<.001f);
+    assert(std::abs(matrix.m[11]-expectedHeights.at(name))<.001f);
+    expectedHeights.erase(name);
+  }
+  assert(expectedHeights.empty());
+  for(auto ref:{oven,lamp,skate}){
+    fo3player::Player player(start);
+    auto clips=std::make_shared<fo3script::AnimationRegistry>();
+    const auto chandelierPath=meshRoot+"/clutter/questitems/mq04chandellier01.nif";
+    CheckChandelierCollision(chandelierPath);
+    assert(LoadQuestObjectClips(chandelierPath,(*clips)[lamp]));
+    assert(LoadQuestObjectClips(meshRoot+"/clutter/questitems/mq04rollerskatesanimated.nif",(*clips)[skate]));
+    player.SetScriptAnimationRegistry(clips);
+    const auto& point=data.targets.at(ref);
+    player.SetScriptPlayerLocation(point.x,point.y,point.z,point.cell,point.world);
+    auto apply=[&](auto plan){
+      if(!plan)std::cerr<<"Henderson trap "<<std::hex<<ref<<std::dec<<": "<<error<<std::endl;
+      assert(plan&&player.CommitScriptTransaction(*plan));
+    };
+    for(int button:{0,1}){
+      apply(player.PrepareActivationTransaction(ref,fo3player::PlayerRef,error));
+      fo3player::ScriptMessage message;
+      const auto prompt=ids.at(ref==oven?"mq04mabelovenmessage":ref==skate?"mq04mabelrollerskatemessage":"mq04mabelchandeliermessage");
+      while(player.PollScriptMessage(message)&&message.form!=prompt){}
+      assert(message.form==prompt&&player.SubmitScriptMessageButton(ref,button));
+      apply(player.PrepareReferenceEventTransaction(ref,"GameMode",0,error));
+      const auto key=fo3dialogue::VariableKey(data,ref==oven?"MQ04MabelOvenRef.OvenRigged":ref==skate?"MabelHendersonRef.SkatePlaced":"MabelHendersonRef.ChandelierRigged");
+      const auto& vars=player.Snapshot().pipboy.dialogueVariables;
+      assert((vars.count(key)?vars.at(key):0.f)==button);
+      if(ref==skate&&button==1){
+        bool moving=false;assert(player.ScriptAnimationPlaying(skate,moving,"Forward")&&moving);
+      }
+    }
+    assert(player.Save(save,error)&&player.Restore(save,error)&&unlink(save.c_str())==0);
+    player.SetScriptAnimationRegistry(clips);
+    if(ref==oven){
+      Conversation talk(player,mabel);talk.Start();talk.Choose(ids.at("mq04mabeluseoven"));
+      assert(player.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(data,"MQ04MabelOvenRef.OvenRigged"))==2);
+      const auto& cooking=data.packages.at(ids.at("mq04mabelblowupoven"));
+      assert(cooking.type==13&&cooking.location.value==ids.at("mq04mabelovenidle"));
+      assert(fo3dialogue::Conditions(cooking.conditions,talk.context,error));
+      if(robotSecuritySave)assert(player.Save(std::string(robotSecuritySave)+".oven",error));
+    }else if(ref==skate){
+      if(robotSecuritySave)assert(player.Save(std::string(robotSecuritySave)+".skate",error));
+    }else{
+      if(robotSecuritySave)assert(player.Save(std::string(robotSecuritySave)+".lamp",error));
+      const auto& trigger=data.targets.at(volume);
+      assert(player.MoveActorTo(mabel,volume,{0,0,0}));
+      auto crossings=player.ScriptActorTriggerChanges(mabel,trigger.cell,trigger.world,{trigger.x,trigger.y,trigger.z});
+      assert(std::find(crossings.begin(),crossings.end(),std::make_pair(volume,true))!=crossings.end());
+      apply(player.PrepareReferenceEventTransaction(volume,"OnTriggerEnter",mabel,error));
+      player.AcknowledgeScriptTrigger(volume,true,mabel);
+      bool falling=false;assert(player.ScriptAnimationPlaying(lamp,falling,"Unequip")&&falling);
+    }
+  }
+  std::cout<<"Henderson trap prompts, cooking dialogue, original skate animation and chandelier drop animation passed"<<std::endl;
+}
+
+// Exercise the robot terminal and the same hit delivery used by creature AI.
+// The host supplies contact. Autonomous target acquisition is a separate check.
+static void HendersonRobot(fo3player::Player& player,const std::string& save,const std::string& master,const std::string& meshRoot){
+  const auto& data=player.Definitions().pipboy;
+  const auto& ids=data.formNames;
+  const auto terminal=ids.at("tlhendersonrobotterminalref"),robot=ids.at("tlhendersonrobotref");
+  const auto door=ids.at("tlhendersonhousedoorref"),mabel=ids.at("mabelhendersonref"),quest=ids.at("mq04");
+  const auto& at=data.targets.at(terminal);
+  player.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+  std::string error;
+  auto commit=[&](auto plan){
+    if(!plan)std::cerr<<"Henderson robot: "<<error<<std::endl;
+    assert(plan);
+    if(plan->HasReferenceChanges()||plan->HasProgramProvenance()){
+      fo3script::ScriptMasterMatch matched;std::atomic<bool> cancel{false};
+      if(!fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),matched,cancel,error)){
+        std::cerr<<"Henderson provenance: "<<error<<std::endl;std::abort();
+      }
+    }
+    assert(player.CommitScriptTransaction(*plan));
+  };
+  commit(player.PrepareReferenceEventTransaction(robot,"OnLoad",0,error));
+  commit(player.PrepareActivationTransaction(terminal,fo3player::PlayerRef,error));
+  fo3script::Action action;
+  while(player.PollScriptAction(action)&&action.kind!=fo3script::ActionKind::DefaultActivate){}
+  assert(action.reference==terminal&&action.flags==fo3player::PlayerRef);
+  fo3terminal::Session menu;menu.Open(player,terminal,0);
+  assert(menu.page==fo3terminal::Session::Page::Menu);
+  auto choose=[&](size_t index){
+    assert(std::find(menu.entries.begin(),menu.entries.end(),index)!=menu.entries.end());
+    commit(player.PrepareTerminalTransaction(terminal,menu.menu,index,error));
+    menu.Refresh(player);
+  };
+  choose(1);
+  assert(player.GetLock(door).locked);
+  choose(2);
+  assert(!player.GetLock(door).locked);
+  choose(1);choose(4);
+  commit(player.PrepareReferenceEventTransaction(robot,"GameMode",0,error));
+  float aggression=0;assert(player.ActorAIValue(robot,0,aggression)&&aggression==3);
+  if(robotSecuritySave)assert(player.Save(robotSecuritySave,error));
+  const auto weapon=ids.at("fists");
+  const float damage=player.ActorUnarmedDamage(robot);
+  assert(damage>0);
+  const float karma=player.Snapshot().karma;
+  for(int hit=0;player.ActorHealth(mabel)>0;++hit){
+    assert(hit<200);
+    assert(player.ApplyAttack(robot,weapon,mabel,damage));
+  }
+  assert(player.Snapshot().pipboy.quests.at(quest).stage==40);
+  assert(player.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(data,"MQ04.Task3Complete"))==4);
+  assert(player.Snapshot().karma==std::max(-1000.f,karma-100));
+  assert(player.Save(save,error)&&player.Restore(save,error)&&unlink(save.c_str())==0);
+  float attributed=0;
+  assert(player.IsActorKiller(mabel,robot,attributed)&&attributed==1);
+  assert(player.IsActorKiller(mabel,fo3player::PlayerRef,attributed)&&attributed==0);
+  fo3player::Player revived(player);
+  assert(revived.ResurrectActor(mabel)&&revived.IsActorKiller(mabel,robot,attributed)&&attributed==0);
+  {
+    Conversation betty(player,ids.at("bettyref"));
+    simulationScene::Configure(betty);betty.Start();
+    betty.Choose(0x28694u);betty.Choose(0x28692u);
+    assert(player.Snapshot().pipboy.quests.at(quest).stage==45);
+  }
+  const auto bettyRef=ids.at("bettyref");
+  auto tickBetty=[&]{
+    fo3npc::RuntimeState idle;
+    player.SetScriptActorProcedures({{bettyRef,uint8_t(fo3npc::ObservedAIProcedure(idle,false))}});
+    commit(player.PrepareReferenceEventTransaction(bettyRef,"GameMode",0,error));
+  };
+  for(unsigned i=0;i<4;++i)tickBetty();
+  assert(player.ActorHealth(mabel)>0);
+  const auto doghouse=ids.at("mq04doghouseref");
+  const auto& target=data.targets.at(doghouse);
+  player.SetScriptPlayerLocation(target.x,target.y,target.z,target.cell,target.world);
+  commit(player.PrepareActivationTransaction(doghouse,fo3player::PlayerRef,error));
+  for(const auto item:{ids.at("mq04slashermask"),ids.at("mq04slasherknife")}){
+    bool equipped=false;
+    assert(player.ItemCount(item)==1&&player.ScriptEquippedItem(fo3player::PlayerRef,item,equipped)&&equipped);
+  }
+  assert(player.ActorFactionRank(fo3player::PlayerRef,ids.at("mq04slasherfaction"))==0);
+  commit(player.PrepareActivationTransaction(doghouse,fo3player::PlayerRef,error));
+  assert(player.ItemCount(ids.at("mq04slasherknife"))==1);
+  for(int tick=0;tick<30&&player.Snapshot().pipboy.quests.at(quest).stage==45;++tick){
+    player.SetScriptRuntimeClock(90+tick*.25,.25);
+    player.PumpWorldAwareGameMode(.25,{},[&](auto plan){return player.CommitScriptTransaction(*plan);});
+  }
+  assert(player.Snapshot().pipboy.quests.at(quest).stage==50);
+  const auto knife=player.EquippedWeapon();
+  assert(knife&&knife->formId==ids.at("mq04slasherknife"));
+  const auto instance=knife->id;
+  unsigned kills=0;
+  for(const auto name:{"georgeneusbaumref","patneusbaumref","janetrockwellref","rogerrockwellref",
+                       "marthasimpsonref","oldladydithersref","billfosterref","mabelhendersonref"}){
+    const auto resident=ids.at(name);const auto& position=player.Snapshot().actors.at(resident);
+    player.SetScriptPlayerLocation(position.position[0],position.position[1],position.position[2],position.cell,position.world);
+    assert(player.ActorHealth(resident)>0);
+    for(unsigned hit=0;player.ActorHealth(resident)>0;++hit){
+      assert(hit<200&&player.WeaponHit(instance,resident));
+    }
+    ++kills;
+    assert(player.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(data,"MQ04.SlasherKills"))==kills);
+    if(kills==4)assert(player.Save(save,error)&&player.Restore(save,error)&&unlink(save.c_str())==0);
+  }
+  tickBetty();
+  assert(player.Snapshot().pipboy.quests.at(quest).stage==60);
+  for(auto topic:{0x28928u,0x28929u}){
+    fo3player::Player departing(player);
+    Conversation finalBetty(departing,bettyRef);simulationScene::Configure(finalBetty);
+    finalBetty.Start();finalBetty.Choose(topic);
+    assert(departing.Snapshot().pipboy.quests.at(quest).stage==70);
+    TranquilityExit(departing,master,meshRoot,false);
+  }
+  std::cout<<"Betty's final choices, simulation exit and James handoff passed"<<std::endl;
+  std::cout<<"Original doghouse inventory events equipped the slasher items and opened stage 50"<<std::endl;
+  std::cout<<"Original Henderson terminal and robot-attributed death reached stage 40 across reload"<<std::endl;
+}
+
+static unsigned RockwellConfrontation(fo3player::Player& restored,uint32_t speaker,uint32_t listener,uint32_t package){
+  const auto& data=restored.Definitions().pipboy;
+  const auto quest=data.formNames.at("mq04"),janet=data.formNames.at("janetrockwellref");
+  const auto progress=fo3dialogue::VariableKey(data,"MQ04.RockwellConv");
+  const auto& definition=data.packages.at(package);
+  fo3dialogue::Context ctx;ctx.player=&restored;ctx.talking=true;
+  assert(fo3dialogue::ReferenceContext(restored,speaker,ctx.speaker));
+  assert(fo3dialogue::ReferenceContext(restored,listener,ctx.target));
+  std::string error;
+  assert(fo3dialogue::Conditions(definition.conditions,ctx,error)&&error.empty());
+  ctx.speaker.package=package;ctx.speaker.packageKnown=true;
+  assert(definition.type==15&&definition.target.value==listener);
+  auto begin=restored.PreparePackageEventTransaction(speaker,package,false,error);
+  assert(begin&&restored.CommitScriptTransaction(*begin));
+  assert(restored.QueueScriptSpeech(speaker,definition.dialogueTopic,listener,true,false,package));
+  fo3script::Action action;
+  while(restored.PollScriptAction(action)&&action.kind!=fo3script::ActionKind::Conversation){}
+  assert(action.package==package&&action.reference==speaker&&action.flags==listener);
+  fo3dialogue::Session conversation;
+  assert(conversation.StartTopic(action.form,ctx,restored,true));
+  unsigned responses=0;
+  while(conversation.phase==fo3dialogue::Phase::Speaking){
+    if(ctx.speaker.reference!=conversation.actor)std::swap(ctx.speaker,ctx.target);
+    assert(conversation.actor==(responses%2?listener:speaker)&&++responses<=32);
+    conversation.AudioDone(conversation.audioToken,true,ctx,restored);
+  }
+  assert(responses>0&&restored.Snapshot().pipboy.dialogueVariables.at(progress)==-1);
+  auto done=restored.PreparePackageEventTransaction(speaker,package,true,error);
+  assert(done&&restored.CommitScriptTransaction(*done));
+  fo3npc::RuntimeState actor;
+  actor.procedure=fo3npc::Procedure::Waiting;
+  for(bool linked:{true,false}){
+    const int procedure=fo3npc::ObservedAIProcedure(actor,linked);
+    assert(procedure==(linked?4:3));
+    restored.SetScriptActorProcedures({{janet,uint8_t(procedure)}});
+    auto tick=restored.PrepareReferenceEventTransaction(janet,"GameMode",0,error);
+    if(!tick)std::cerr<<"Rockwell GameMode: "<<error<<std::endl;
+    assert(tick&&restored.CommitScriptTransaction(*tick));
+    assert(restored.Snapshot().pipboy.quests.at(quest).stage==(linked?25:30));
+  }
+  return responses;
+}
+
+static void RockwellDesk(const fo3player::Player& start,const std::string& save,const std::string& master){
+  fo3player::Player player(start);
+  const auto& data=player.Definitions().pipboy;
+  const auto& ids=data.formNames;
+  const auto janet=ids.at("janetrockwellref"),roger=ids.at("rogerrockwellref");
+  const auto desk=ids.at("mq04rockwelldeskref"),item=ids.at("mq04undies");
+  const auto key=fo3dialogue::VariableKey(data,"MQ04.UndiesPlaced");
+  const auto& at=data.targets.at(desk);
+  std::string error;
+  auto apply=[&](auto plan){
+    if(!plan)std::cerr<<"Rockwell basement: "<<error<<std::endl;
+    assert(plan);
+    if(plan->HasReferenceChanges()){
+      fo3script::ScriptMasterMatch matched;std::atomic<bool> cancel{false};
+      assert(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),matched,cancel,error));
+    }
+    assert(player.CommitScriptTransaction(*plan));
+  };
+  auto press=[&]{
+    player.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+    apply(player.PrepareActivationTransaction(desk,fo3player::PlayerRef,error));
+  };
+  bool disabled=false;
+  press();assert(player.ReferenceDisabled(ids.at("mq04undiesstaticref"),disabled,error)&&disabled);
+  assert(player.Definitions().references.at(0x9ccba).base==item&&player.Pickup(0x9ccba));
+  press();
+  assert(player.ItemCount(item)==0&&player.Snapshot().pipboy.dialogueVariables.at(key)==1);
+  assert(player.ReferenceDisabled(ids.at("mq04undiesstaticref"),disabled,error)&&!disabled);
+  {
+    Conversation talk(player,janet);talk.Start();
+    talk.Choose(ids.at("mq04rockwellbasementcomewithme"));talk.Choose(ids.at("mq04rockwellbasementtrustme"));
+  }
+  assert(player.Save(save,error)&&player.Restore(save,error)&&unlink(save.c_str())==0);
+  player.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+  apply(player.PrepareReferenceEventTransaction(desk,"GameMode",0,error));
+  const auto& moved=player.Snapshot().actors.at(janet);
+  const auto& entry=data.targets.at(ids.at("mq04basementjanetentrymarker"));
+  assert(moved.cell==entry.cell&&moved.position[0]==entry.x&&moved.position[1]==entry.y);
+  // Supply the resident's arrival at the desk after the authored catch-up move.
+  assert(player.MoveActorTo(janet,desk,{0,25,0}));
+  apply(player.PrepareReferenceEventTransaction(janet,"GameMode",0,error));
+  fo3script::Action line;
+  while(player.PollScriptAction(line)&&line.kind!=fo3script::ActionKind::SayTo){}
+  assert(line.reference==janet&&line.form==ids.at("mq04janetbasementline")&&line.flags==fo3player::PlayerRef);
+  fo3dialogue::Context ctx;ctx.player=&player;
+  assert(fo3dialogue::ReferenceContext(player,janet,ctx.speaker));
+  ctx.target={fo3player::PlayerRef,7,at.cell,at.world,0,at.x,at.y,at.z,false,false};
+  fo3dialogue::Session say;assert(say.StartSelectedTopic(line.form,line.info,ctx,player));
+  say.AudioDone(say.audioToken,true,ctx,player);
+  assert(player.Snapshot().pipboy.dialogueVariables.at(key)==2);
+  for(bool wearing:{false,true}){
+    fo3player::Player choice(player);
+    {
+      Conversation talk(choice,janet);talk.context.speaker=ctx.speaker;talk.context.target=ctx.target;
+      choice.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);talk.Start();
+      talk.Choose(ids.at("mq04janetundieslookslikewomensclothing"));
+      talk.Choose(ids.at(wearing?"mq04janetundieswearingit":"mq04janetundiescheatingonyou"));
+    }
+    assert(choice.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(data,"MQ04.Task2Complete"))==(wearing?5:2));
+    RockwellConfrontation(choice,janet,roger,ids.at(wearing?"mq04janetconfrontrogerundiesw":"mq04janetconfrontrogerundies"));
+  }
+  std::cout<<"The desk, Janet's basement discovery, and both evidence interpretations reached stage 30"<<std::endl;
+}
+
+static void RockwellRollingPin(const fo3player::Player& start,const std::string& save){
+  fo3player::Player run(start);
+  const auto& data=run.Definitions().pipboy;
+  const auto& ids=data.formNames;
+  const auto pin=ids.at("mq04rollingpin"),martha=ids.at("marthasimpsonref"),roger=ids.at("rogerrockwellref");
+  const auto placed=uint32_t{0x9ccb9};
+  std::string error;
+  assert(run.Definitions().references.at(placed).base==pin&&run.Pickup(placed)&&!run.Pickup(placed));
+  const auto weapon=run.EquippedWeapon();assert(weapon&&weapon->formId==pin);
+  const auto stack=weapon->id;
+  const auto& resident=run.Snapshot().actors.at(martha);
+  run.SetScriptPlayerLocation(resident.position[0],resident.position[1],resident.position[2],resident.cell,resident.world);
+  const auto karma=run.Snapshot().karma;
+  for(unsigned hits=0;run.ActorHealth(martha)>0;++hits)assert(hits<200&&run.WeaponHit(stack,martha));
+  assert(run.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(data,"MQ04.Task2Complete"))==4);
+  assert(run.Snapshot().karma==std::max(-1000.f,karma-50));
+  assert(run.Save(save,error)&&run.Restore(save,error)&&unlink(save.c_str())==0);
+  for(auto response:{"mq04rogermarthadead","mq04rogerbloodyrollingpin","mq04rogerjanetsnapped"}){
+    fo3player::Player choice(run);
+    {
+      Conversation talk(choice,roger);talk.Start();talk.Choose(ids.at("mq04rogerbadnewsaboutjanet"));talk.Choose(ids.at(response));
+    }
+    assert(choice.ItemCount(pin)==0);
+    RockwellConfrontation(choice,roger,ids.at("janetrockwellref"),ids.at("mq04rogerconfrontjanetrollingpin"));
+  }
+  std::cout<<"The placed rolling pin, Martha's death and all three accusations reached the Rockwell turn-in"<<std::endl;
+}
+
+// Continue from Betty's actual stage-25 turn-in. The host signals voice
+// completion and supplies resident procedure observations at the frame boundary.
+static void RockwellSpeech(const fo3player::Player& start,const std::string& save,const std::string& master,const std::string& meshRoot){
+  const auto& catalog=start.Definitions();
+  const auto& data=catalog.pipboy;
+  const auto& ids=data.formNames;
+  const auto janet=ids.at("janetrockwellref"),roger=ids.at("rogerrockwellref"),quest=ids.at("mq04");
+  const auto decision=fo3dialogue::VariableKey(data,"MQ04.Task2Complete");
+  const auto package=ids.at("mq04janetconfrontrogerspeech");
+  const auto& definition=data.packages.at(package);
+  std::string error;
+  RockwellDesk(start,save+".desk",master);
+  RockwellRollingPin(start,save+".pin");
+  for(bool success:{false,true}){
+    fo3player::Player run(start);
+    {
+      Conversation talk(run,janet);talk.Start();
+      talk.session.random.seed(success?7:0);
+      talk.Choose(ids.at("mq04janetspeechchallenge"));
+    }
+    assert(run.Save(save,error));
+    fo3player::Player restored(catalog);
+    assert(restored.Restore(save,error)&&unlink(save.c_str())==0);
+    auto value=[&](uint64_t key){
+      const auto& vars=restored.Snapshot().pipboy.dialogueVariables;
+      return vars.count(key)?vars.at(key):0.f;
+    };
+    assert(value(decision)==(success?1:0));
+    fo3dialogue::Context ctx;ctx.player=&restored;ctx.talking=true;
+    assert(fo3dialogue::ReferenceContext(restored,janet,ctx.speaker));
+    assert(fo3dialogue::ReferenceContext(restored,roger,ctx.target));
+    assert(fo3dialogue::Conditions(definition.conditions,ctx,error)==success&&error.empty());
+    assert(restored.Snapshot().pipboy.quests.at(quest).stage==25);
+    if(!success)continue;
+    const auto karma=restored.Snapshot().karma;
+    assert(RockwellConfrontation(restored,janet,roger,package)==7);
+    assert(restored.Snapshot().karma==std::max(-1000.f,karma-50));
+    assert(!restored.ActorGhost(janet)&&!restored.ActorGhost(roger));
+    Conversation betty(restored,ids.at("bettyref"));betty.Start();
+    betty.Choose(0x28041u);
+    assert(restored.Snapshot().pipboy.quests.at(quest).stage==35);
+    HendersonTraps(restored,meshRoot,save+".traps");
+    HendersonRobot(restored,save+".robot",master,meshRoot);
+    std::cout<<"Rockwell speech outcomes, seven-line confrontation, Karma and Mabel assignment passed"<<std::endl;
+  }
+}
+
+// From the actual bench handoff, use the dialogue UI and its two speech-roll
+// outcomes. The host provides actor positions and signals audio completion.
+static void TranquilityOpening(const fo3player::Player& arrival, const std::string& save,const std::string& master,const std::string& meshRoot) {
+  fo3player::Player invited(arrival);
+  const auto& catalog = invited.Definitions();
+  const auto& ids = catalog.pipboy.formNames;
+  const uint32_t quest = ids.at("mq04");
+  assert(invited.Snapshot().pipboy.quests.at(quest).stage == 5);
+  {
+    Conversation betty(invited, ids.at("bettyref"));
+    betty.Start();
+    for (const auto topic : {0x2581au, 0x25812u, 0x35e5cu, 0x25970u}) betty.Choose(topic);
+    assert(invited.Snapshot().pipboy.quests.at(quest).stage == 15);
+  }
+  std::string error;
+  assert(invited.Save(save, error));
+  const auto priorXp = invited.Snapshot().experience;
+  for (const bool success : {false, true}) {
+    fo3player::Player run(catalog);
+    assert(run.Restore(save, error));
+    Conversation timmy(run, ids.at("timmyneusbaumref"));
+    timmy.Start();
+    // The RNG seed controls only the roll. Eligibility, reward and quest
+    // stages still come from the original dialogue and its result scripts.
+    timmy.session.random.seed(success ? 7 : 0);
+    timmy.Choose(ids.at("mq04timmyspeechchallenge"));
+    assert(run.Snapshot().pipboy.quests.at(quest).stage == 15);
+    assert(run.Snapshot().experience == priorXp + (success ? 20 : 0));
+    if (success) {
+      assert(timmy.session.choices.size() == 3);
+      timmy.Choose(0x25a00u);
+      assert(run.Snapshot().pipboy.quests.at(quest).stage == 20);
+    } else {
+      assert(timmy.session.choices.empty());
+    }
+    const auto outcomeSave = save + ".speech";
+    assert(run.Save(outcomeSave, error));
+    fo3player::Player restored(catalog);
+    assert(restored.Restore(outcomeSave, error));
+    assert(restored.Snapshot().pipboy.quests.at(quest).stage == (success ? 20 : 15));
+    assert(restored.Snapshot().experience == run.Snapshot().experience);
+    if(success){
+      Conversation report(restored,ids.at("bettyref"));
+      simulationScene::Configure(report);report.Start();
+      report.Choose(ids.at("mq04betty1qhowdoigetout"));
+      report.Choose(ids.at("mq04betty1q1whatelse"));
+      assert(simulationScene::refreshRequested&&restored.Snapshot().pipboy.quests.at(quest).stage==25);
+      bool timmyDisabled=false,gnomeDisabled=true;
+      assert(restored.ReferenceDisabled(ids.at("timmyneusbaumref"),timmyDisabled,error)&&timmyDisabled);
+      assert(restored.ReferenceDisabled(ids.at("mq04gnomeref"),gnomeDisabled,error)&&!gnomeDisabled);
+      assert(restored.ActorGhost(ids.at("janetrockwellref"))&&restored.ActorGhost(ids.at("rogerrockwellref")));
+      RockwellSpeech(restored,save+".rockwells",master,meshRoot);
+      std::cout<<"Betty accepted the first task, replaced Timmy's scene reference and started the Rockwell objective"<<std::endl;
+    }
+    assert(unlink(outcomeSave.c_str()) == 0);
+  }
+  assert(unlink(save.c_str()) == 0);
+  std::cout << "Tranquility Lane greeting, first speech challenge and both saved outcomes passed\n";
+}
 
 // Original-data checkpoint. The explicit developer entry action executes the
 // original first stage. Locations substitute for world traversal, not quest
@@ -383,6 +1034,8 @@ static void Original(const char* path,const std::string& meshRoot){
     for(int tick=4;tick<48;++tick)runSimulation(tick);
     assert(listened.Snapshot().pipboy.quests.at(pursuits).stage==200&&listened.Snapshot().pipboy.quests.at(simulation).stage==5);
     std::cout<<"Original simulation entry equipped the outfit, completed Scientific Pursuits and started Tranquility Lane\n";
+    TranquilityFailsafe(listened,path,meshRoot,save+".failsafe");
+    TranquilityOpening(listened, save + ".mq04",path,meshRoot);
     // Returning belongings from the same original storage is independently exercised.
     fo3pipdata::ResultScript transfer;
     const auto locker=id("mq04playercontainerref");
@@ -405,4 +1058,4 @@ static void Original(const char* path,const std::string& meshRoot){
   }
 
 }
-int main(int argc,char** argv){if(argc>1)Original(argv[1],argc>2?argv[2]:"");else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}
+int main(int argc,char** argv){if(argc==4)robotSecuritySave=argv[3];if(argc>1)Original(argv[1],argc>2?argv[2]:"");else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}

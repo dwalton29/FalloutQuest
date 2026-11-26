@@ -1,10 +1,14 @@
 // Exercise the production combat and NAVM executor. Only GL/skin attachment,
 // audio, and the already separate projectile emitter are recording adapters.
+#define FO3_NPC_LOOSE_MESH_HOST_TEST
 #define main PackageFixtureMain
 #include "npc_package_runtime_tests.cpp"
 #undef main
 #include "npc/fo3-npc-combat.h"
 #include "player/fo3-vr-body.h"
+#include "rendering/mesh/fo3-static-nif.h"
+#include "data/fo3-bsa-reader.h"
+#include "scripting/fo3-script-master-match.h"
 #include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
 bool partialCover=false,captureCoverRays=false;std::vector<float> coverRayOrigins;
@@ -150,6 +154,272 @@ static void OriginalCombatPolicies(const char* path) {
   std::cout<<"Original ambush script faction changes feed production NPC combat target acquisition\n";
 
 }
+// Resume the original terminal's post-security save. Production combat
+// chooses the enemy and follows the original interior NAVM. The host supplies
+// visibility and bone observations, and loads the creature's shipped hit KF.
+bool LoadQuestObjectClips(const std::string&,std::vector<fo3script::AnimationSequence>&);
+static void HendersonSecurityCombat(const char* master,const char* save,const char* attackPath,const char* meshRoot){
+  fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(master,catalog,error));
+  gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  auto& player=gPlayerSession->player;assert(player.Restore(save,error));
+  const auto& defs=player.Definitions();const auto& ids=defs.pipboy.formNames;
+  const auto robot=ids.at("tlhendersonrobotref"),mabel=ids.at("mabelhendersonref"),quest=ids.at("mq04");
+  float aggression=0;assert(player.Snapshot().pipboy.quests.at(quest).stage==35&&player.ActorAIValue(robot,0,aggression)&&aggression==3);
+  const auto& home=defs.pipboy.targets.at(ids.at("tlhendersonrobotterminalref"));
+  gCurrentCellFormId=home.cell;gExteriorWorldspaceQ1890=home.world;
+  gSceneCenterXQ1730=home.x;gSceneCenterYQ1730=home.y;gSceneFloorZQ1730=home.z;
+  std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(home.cell,home.world,meshes,master));
+  auto graph=std::make_shared<Q240NavigationGraph>();
+  for(auto& mesh:meshes){
+    graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();
+    graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));
+  }
+  assert(graph->triangleCount);
+  gQ230NpcActors.clear();activePackageTargets=&gQ230NpcActors;
+  for(auto ref:{robot,mabel}){
+    const auto& location=player.Snapshot().actors.at(ref);
+    assert(location.cell==home.cell);
+    Q230ActorVisual actor;const auto& placed=defs.pipboy.targets.at(ref);
+    actor.stateRestored=true;actor.source.refFormId=ref;actor.source.baseFormId=placed.base;actor.source.scale=placed.scale;
+    actor.source.creature=ref==robot;actor.navigationGraph=graph;
+    actor.runtime.position=Q240ScenePosition(location.position);actor.runtime.yaw=location.yaw;
+    gQ230NpcActors.push_back(std::move(actor));
+  }
+  auto& attacker=gQ230NpcActors.front();
+  const auto* stats=player.ActorStatistics(robot);assert(stats&&stats->creature);
+  std::ifstream stream(attackPath,std::ios::binary);std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(stream),{}};
+  Q230CombatWeapon prepared;auto& clip=prepared.clips[1];assert(fo3anim::DecodeClip(bytes,clip)&&clip.frequency>0);
+  assert(std::any_of(clip.textKeys.begin(),clip.textKeys.end(),[&](const auto& key){return key.text=="Hit"&&key.time>=clip.start&&key.time<=clip.stop;}));
+  const auto fists=ids.at("fists");prepared.definition=defs.items.at(fists).weapon;
+  prepared.definition.maxRange=stats->creatureReach*attacker.source.scale;prepared.definition.attackMult=clip.frequency;
+  prepared.ready=true;attacker.combatWeapons.emplace(fists,std::move(prepared));
+  gQ210Head={1000,1000,1000};blocked=false;partialCover=false;blockSecondSightRay=false;loading=false;
+  const auto origin=attacker.runtime.position;
+  bool targeted=false,swung=false;
+  for(unsigned frame=0;frame<6000&&player.ActorHealth(mabel)>0;++frame){
+    Q230SimulateActor(attacker,5+frame*.05);
+    targeted|=attacker.runtime.combatTarget==mabel;swung|=attacker.runtime.pendingAttack;
+  }
+  if(player.ActorHealth(mabel)>0)std::cerr<<"Security combat: target="<<attacker.runtime.combatTarget
+    <<" hp="<<player.ActorHealth(mabel)<<" path="<<attacker.aiPathGame.size()<<" action="<<int(attacker.runtime.action)<<std::endl;
+  assert(targeted&&swung&&attacker.runtime.position!=origin);
+  assert(player.ActorHealth(mabel)==0&&player.Snapshot().pipboy.quests.at(quest).stage==40);
+  assert(player.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(defs.pipboy,"MQ04.Task3Complete"))==4);
+  std::cout<<"Henderson robot acquired Mabel and delivered the original attack hit over the house NAVM"<<std::endl;
+  // Resume each trap before Mabel moves. Stop at the physical trigger edge
+  // or at the distance required by the oven's GameMode block.
+  for(const auto& route:std::array<std::array<const char*,3>,3>{{
+        {".oven","mq04mabelblowupoven","mq04mabelovenref"},
+        {".lamp","mq04mabelchandelierpatrol","mq04chandeliertriggerref"},
+        {".skate","mq04mabelskatepatrol","mq04skatetriggerref"}}}){
+    assert(player.Restore(std::string(save)+route[0],error));
+    gQ230NpcActors.clear();
+    Q230ActorVisual walker;walker.source.refFormId=mabel;walker.source.baseFormId=defs.pipboy.targets.at(mabel).base;
+    const auto initial=player.Snapshot().actors.at(mabel);
+    walker.runtime.position=Q240ScenePosition(initial.position);walker.runtime.yaw=initial.yaw;
+    walker.navigationGraph=graph;walker.stateRestored=true;
+    const auto trigger=ids.at(route[2]),package=ids.at(route[1]);
+    const auto& at=defs.pipboy.targets.at(trigger);
+    bool entered=false;float nearest=INFINITY;std::array<float,3> closest{};
+    for(unsigned i=0;i<3000&&!entered;++i){
+      Q240UpdateNpcPackage(walker,10+i*.05);
+      if(walker.aiPackage!=package)continue;
+      const auto here=Q240GamePosition(walker);
+      const float distance=std::hypot(here[0]-at.x,here[1]-at.y,here[2]-at.z);
+      if(distance<nearest){nearest=distance;closest=here;}
+      if(trigger==ids.at("mq04mabelovenref"))
+        entered=std::hypot(here[0]-at.x,here[1]-at.y,here[2]-at.z)<100;
+      else{
+        const auto changes=player.ScriptActorTriggerChanges(mabel,at.cell,at.world,here,walker.runtime.yaw);
+        entered=std::find(changes.begin(),changes.end(),std::make_pair(trigger,true))!=changes.end();
+      }
+    }
+    if(!entered)std::cerr<<route[1]<<" approach: package="<<walker.aiPackage<<" expected="<<package
+      <<" procedure="<<int(walker.runtime.procedure)<<" nearest="<<nearest<<" point="<<closest[0]<<","<<closest[1]<<","<<closest[2]<<" trigger="<<at.x<<","<<at.y<<","<<at.z<<" leg="<<walker.aiSequence<<" index="<<walker.aiPathIndex<<" path="<<walker.aiPathGame.size()<<std::endl;
+    assert(entered&&walker.runtime.position!=Q240ScenePosition(initial.position));
+    if(trigger==ids.at("mq04mabelovenref")){
+      Q230PersistActor(walker);
+      const std::string ignitionSave=std::string(save)+".ignition";
+      assert(player.Save(ignitionSave,error)&&player.Restore(ignitionSave,error));
+      const auto& position=player.Snapshot().actors.at(mabel).position;
+      assert(std::hypot(position[0]-at.x,position[1]-at.y,position[2]-at.z)<100);
+      const auto armed=fo3dialogue::VariableKey(defs.pipboy,"MQ04MabelOvenRef.OvenRigged");
+      assert(player.Snapshot().pipboy.dialogueVariables.at(armed)==2);
+      const auto& blast=defs.explosions.at(ids.at("mq04ovenexplosion"));
+      const auto& enchant=defs.pipboy.enchantments.at(blast.enchantment);
+      assert(blast.damage==500 && blast.radius==200 && enchant.type==2 && enchant.effects.size()==2);
+      const auto& burn=enchant.effects[0];
+      const auto& visual=enchant.effects[1];
+      const auto& damage=defs.pipboy.magic.at(burn.id);
+      const auto& effect=defs.pipboy.magic.at(visual.id);
+      assert(damage.archetype==fo3pipdata::MagicValue && damage.av==16 && (damage.flags&fo3pipdata::MagicDetrimental));
+      assert(burn.magnitude==2 && burn.duration==5 && burn.range==1);
+      assert(effect.archetype==fo3pipdata::MagicScript && visual.duration==5 &&
+             effect.script==ids.at("flamereffectscript") && defs.pipboy.scripts.count(effect.script));
+      // Isolate the physical-hit phase. The actual ignition save remains the
+      // input to the complete PlaceAtMe transaction, including its enchantment.
+      fo3player::Player impact(player);
+      const float range=std::hypot(position[0]-at.x,position[1]-at.y,position[2]-at.z);
+      const float raw=blast.PlacedHitDamage(range,defs.weapons);
+      const float applied=raw*(1-impact.DamageResistance(mabel)/100.f);
+      const float health=impact.ActorHealth(mabel);
+      assert(range>0 && raw>375 && raw<500 && health>0 && applied>=health);
+      assert(blast.PlacedHitDamage(blast.radius,defs.weapons)==0 &&
+             blast.PlacedHitDamage(blast.radius+1,defs.weapons)==0);
+      float received=0;
+      assert(impact.ApplyPlacedExplosionHealthHit(trigger,ids.at("mq04ovenexplosion"),mabel,false,received));
+      assert(received==health); // The original EXPL ignores the LOS gate.
+      assert(impact.ApplyPlacedExplosionHealthHit(trigger,ids.at("mq04ovenexplosion"),mabel,false,received)&&received==0);
+      assert(impact.ActorHealth(mabel)==0 && impact.Snapshot().actors.at(mabel).dead);
+      float killer=1;
+      assert(impact.IsActorKiller(mabel,fo3player::PlayerRef,killer)&&!killer);
+      const std::string impactSave=std::string(save)+".impact";
+      assert(impact.Save(impactSave,error)&&impact.Restore(impactSave,error));
+      assert(impact.ActorHealth(mabel)==0 && player.ActorHealth(mabel)==health);
+      // Execute both original EFITs on the impacted target. The SCPT owns
+      // the different start branches and each stop instruction at expiry.
+      const auto flames=ids.at("flames01"),smoke=ids.at("smoke01");
+      const auto& fire=defs.pipboy.effectShaders.at(flames);
+      assert(fire.particleTexture=="Effects\\FXFlameSmallSub02.dds" &&
+             defs.pipboy.effectShaders.at(smoke).particleTexture=="Effects\\FXDustSmoke01.dds");
+      const auto& models=defs.pipboy.debrisModels.at(fire.addon);
+      assert(models.size()==4);
+      for(const auto& model:models){
+        assert(model.percentage==25&&!model.path.empty());
+        if(!meshRoot)continue;
+        auto path=fo3script::Lower(model.path);
+        std::replace(path.begin(),path.end(),'\\','/');
+        const std::string file=std::string(meshRoot)+"/"+path;
+        std::vector<Fo3StaticNifMesh> shapes;
+        assert(LoadFo3StaticNifMeshes(file,shapes,true)&&shapes.size()==1);
+        std::vector<uint8_t> bytes;assert(LoadFalloutMeshFile(file,bytes,nullptr));
+        fo3anim::Skeleton hierarchy;std::vector<int> mapping;
+        std::vector<fo3anim::Clip> clips;
+        assert(fo3anim::DecodeObjectAnimation(bytes,hierarchy,mapping,clips,true)&&clips.size()==1);
+        const auto& clip=clips.front();
+        assert(clip.DirectControllers()&&clip.tracks.size()==1&&clip.properties.size()==2);
+        const auto& shape=shapes.front();
+        const int bone=mapping.at(shape.shapeBlock);
+        assert(bone>=0&&!shape.indices.empty()&&shape.texcoords.size()*3==shape.positions.size()*2);
+        const int parent=hierarchy.bones.at(bone).parent;
+        assert(parent>=0&&hierarchy.bones.at(parent).billboardMode==5);
+        assert(hierarchy.bones.at(parent).parent>=0);
+        fo3anim::Pose start,scroll;assert(fo3anim::Sample(hierarchy,clip,0.,start));
+        assert(fo3anim::Sample(hierarchy,clip,2.,scroll)&&scroll.delta.at(bone)!=start.delta.at(bone));
+        for(const auto& uv:scroll.properties){
+          assert(uv.bone==bone);
+          if(uv.kind==fo3anim::PropertyKind::DiffuseOffsetU)assert(std::abs(uv.value[0]+2.f/6.7f)<.001f);
+          else {assert(uv.kind==fo3anim::PropertyKind::DiffuseOffsetV);
+            assert(std::abs(uv.value[0]-(2.f/(41.f/30.f)-1.f))<.001f);}
+        }
+        assert(scroll.properties.size()==2);
+        auto texture=fo3script::Lower(shape.diffuseTexturePath);
+        std::replace(texture.begin(),texture.end(),'\\','/');
+        assert(texture.find("effects/fxfirescroll.dds")!=std::string::npos);
+      }
+      if(meshRoot)std::cout<<"All four original flame addon meshes retained billboard parents, animated geometry and independent U/V scroll periods"<<std::endl;
+      if(!impact.BeginPlacedEnchantment(blast.enchantment,mabel,error)){
+        std::cerr<<"Could not start original enchantment: "<<error<<std::endl;std::abort();
+      }
+      auto has=[&](uint32_t shader){return impact.Snapshot().magicShaders.count({mabel,shader})!=0;};
+      assert(has(flames)&&has(smoke)&&impact.Snapshot().placedEffects.size()==2);
+      assert(impact.AdvancePlacedEffects(2,error)&&impact.Save(impactSave+".burn",error));
+      assert(impact.Restore(impactSave+".burn",error)&&has(flames)&&has(smoke));
+      assert(impact.Snapshot().magicShaders.at({mabel,smoke}).elapsed==2);
+      assert(impact.AdvancePlacedEffects(2.75,error)&&has(flames)&&has(smoke));
+      assert(impact.AdvancePlacedEffects(.25,error)&&!has(flames)&&!has(smoke)&&impact.Snapshot().placedEffects.empty());
+      std::cout<<"FlamerEffectScript started flame and smoke on dead Mabel; both stopped at five seconds across reload"<<std::endl;
+      std::cout<<"Isolated oven health impact at "<<range<<" units: "<<raw<<" raw damage, "
+               <<health<<" HP before impact; unowned death persisted across reload"<<std::endl;
+      // On a living target the same SCPT starts only smoke and the first
+      // EFIT actually drains health for its five-second duration.
+      fo3player::Player living(player);
+      const auto pc=fo3player::PlayerRef;
+      const float initialHealth=living.ActorHealth(pc);
+      float resistance=0;assert(living.ActorValue(pc,damage.resistance,resistance));
+      const float perSecond=burn.magnitude*(1-resistance/100.f);
+      assert(perSecond>0&&initialHealth>perSecond*5);
+      assert(living.BeginPlacedEnchantment(blast.enchantment,pc,error));
+      assert(living.Snapshot().magicShaders.count({pc,smoke})&&!living.Snapshot().magicShaders.count({pc,flames}));
+      assert(living.AdvancePlacedEffects(2,error)&&std::abs(living.ActorHealth(pc)-(initialHealth-2*perSecond))<.001f);
+      assert(living.Save(impactSave+".living",error)&&living.Restore(impactSave+".living",error));
+      assert(living.AdvancePlacedEffects(4,error)&&std::abs(living.ActorHealth(pc)-(initialHealth-5*perSecond))<.001f);
+      assert(living.Snapshot().magicShaders.empty()&&living.Snapshot().placedEffects.empty());
+      const auto& stairs=defs.pipboy.targets.at(ids.at("mq04skatetriggerref"));
+      assert(stairs.cell==at.cell&&std::hypot(stairs.x-at.x,stairs.y-at.y,stairs.z-at.z)>blast.radius);
+      player.SetScriptPlayerLocation(stairs.x,stairs.y,stairs.z,stairs.cell,stairs.world);
+      auto oven=player.PrepareReferenceEventTransaction(trigger,"GameMode",0,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+      if(!oven)std::cerr<<"Oven GameMode: "<<error<<std::endl;
+      assert(oven&&oven->HasReferenceChanges());
+      fo3script::ScriptMasterMatch ovenMatch;std::atomic<bool> cancel{false};
+      assert(fo3script::MatchScriptProgramsToMaster(master,oven->ExecutedScripts(),ovenMatch,cancel,error));
+      assert(player.CommitScriptTransaction(*oven));
+      const auto task=fo3dialogue::VariableKey(defs.pipboy,"MQ04.Task3Complete");
+      assert(player.Snapshot().pipboy.dialogueVariables.at(task)==1&&player.ActorHealth(mabel)==health);
+      for(const auto key:{"mq04ovenfireref","mq04ovensmokeref","tlhendhousesmokecheck"}){
+        bool disabled=true;assert(player.ReferenceDisabled(ids.at(key),disabled,error)&&!disabled);
+      }
+      const auto queued=ignitionSave+".queued";
+      assert(player.Save(queued,error)&&player.Restore(queued,error));
+      const auto& pending=player.Snapshot().placedBlastHits;
+      assert(std::count_if(pending.begin(),pending.end(),[&](const auto& h){return h.target==mabel;})==1);
+      const float karma=player.Snapshot().karma;
+      if(!player.AdvancePlacedEffects(.01,error)){std::cerr<<"Oven impact: "<<error<<std::endl;std::abort();}
+      assert(player.ActorHealth(mabel)==0&&player.IsActorKiller(mabel,fo3player::PlayerRef,killer)&&!killer);
+      assert(player.Snapshot().placedBlastHits.empty()&&player.Snapshot().pipboy.quests.at(quest).stage==40);
+      // The stage result and Mabel's OnDeath each issue RewardKarma -50.
+      const float afterDeath=std::max(-1000.f,karma-100);
+      assert(player.Snapshot().karma==afterDeath&&player.Snapshot().magicShaders.count({mabel,flames}));
+      assert(player.AdvancePlacedEffects(2,error)&&player.Save(queued+".burn",error)&&player.Restore(queued+".burn",error));
+      assert(player.Snapshot().magicShaders.count({mabel,smoke})&&player.AdvancePlacedEffects(3,error));
+      assert(player.Snapshot().magicShaders.empty()&&player.Snapshot().placedEffects.empty()&&player.Snapshot().karma==afterDeath);
+      std::cout<<"Oven GameMode placed original EXPL, delivered one unowned death after reload, and advanced MQ04 to 40; burn expired across reload"<<std::endl;
+    }
+    if(meshRoot&&trigger==ids.at("mq04chandeliertriggerref")){
+      Q230PersistActor(walker);
+      const auto lamp=ids.at("mq04chandelierref");
+      auto registry=std::make_shared<fo3script::AnimationRegistry>();
+      assert(LoadQuestObjectClips(std::string(meshRoot)+"/clutter/questitems/mq04chandellier01.nif",(*registry)[lamp]));
+      player.SetScriptAnimationRegistry(registry);
+      auto event=player.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",mabel,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+      assert(event);
+      fo3script::ScriptMasterMatch match;std::atomic<bool> cancel{false};
+      assert(fo3script::MatchScriptProgramsToMaster(master,event->ExecutedScripts(),match,cancel,error));
+      assert(player.CommitScriptTransaction(*event));
+      player.AcknowledgeScriptTrigger(trigger,true,mabel);
+      const auto* run=player.ScriptAnimation(lamp);
+      assert(run&&run->group=="unequip"&&run->duration>0&&!run->loop);
+      assert(player.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(defs.pipboy,"MQ04ChandelierTriggerRef.Step"))==1);
+      player.SetScriptRuntimeClock(run->started+run->duration*.5,0);
+      assert(player.Save(std::string(save)+".fall",error));
+      assert(player.ActorHealth(mabel)>0&&player.Snapshot().pipboy.quests.at(quest).stage==35);
+      std::cout<<"Original navigation crossing started the chandelier and saved the drop halfway through Unequip"<<std::endl;
+    }
+    if(trigger==ids.at("mq04skatetriggerref")){
+      Q230PersistActor(walker);
+      auto event=player.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",mabel,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+      if(!event)std::cerr<<"skate trigger: "<<error<<std::endl;
+      assert(event);fo3script::ScriptMasterMatch match;std::atomic<bool> cancel{false};
+      assert(fo3script::MatchScriptProgramsToMaster(master,event->ExecutedScripts(),match,cancel,error));
+      assert(player.CommitScriptTransaction(*event));
+      player.AcknowledgeScriptTrigger(trigger,true,mabel);
+      assert(player.ActorHealth(mabel)==0);
+      const auto pushes=player.Snapshot().ragdollPushes.at(mabel);
+      assert(pushes.size()==1&&pushes.front().speed>0);
+      const auto pushSave=std::string(save)+".push";
+      assert(player.Save(pushSave,error)&&player.Restore(pushSave,error));
+      assert(player.Snapshot().ragdollPushes.at(mabel)==pushes);
+      for(unsigned i=0;i<80&&player.Snapshot().pipboy.quests.at(quest).stage==35;++i)
+        player.PumpWorldAwareGameMode(.25,{},[&](auto plan){return player.CommitScriptTransaction(*plan);});
+      assert(player.Snapshot().pipboy.quests.at(quest).stage==40);
+      assert(player.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(defs.pipboy,"MQ04.Task3Complete"))==2);
+      std::cout<<"Original skate trigger pushed and killed Mabel; MQ04 advanced to 40 across reload"<<std::endl;
+    }
+    std::cout<<route[1]<<" selected and reached its authored trigger or interaction radius"<<std::endl;
+  }
+  activePackageTargets=&packageTargets;
+}
+
 static void CreatureInventoryWeapon(){
   Prepare();
   auto catalog=gPlayerSession->player.Definitions();
@@ -545,5 +815,6 @@ int main(int argc,char** argv){
   (void)Q230PerceptionPackage(policyActor,policyId,policyAnchor,1);
   assert(policyActor.runtime.xtelDoor==0xabc&&policyActor.runtime.xtelCell==0xdef);
   PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
+  if(argc==4||argc==5)HendersonSecurityCombat(argv[1],argv[2],argv[3],argc==5?argv[4]:nullptr);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

@@ -207,8 +207,11 @@ void Combat() {
   c.weapons.conditionBase=.66f;c.weapons.conditionMult=.34f;
   c.weapons.actors[100].health=100;c.pipboy.targets[200].base=100;
   c.weapons.actors[101].health=100;c.weapons.actors[101].flags=2;c.pipboy.targets[201].base=101;
+  c.pipboy.targets[201].cell=77;c.pipboy.cellWorlds[77]=0;
+  c.references[201].base=101;c.actorPlacements[201]=c.pipboy.targets.at(201);
   c.pipboy.formNames["testactor"]=200;
   Player p(c);assert(p.BootstrapDevelopmentWeapon());const auto id=p.EquippedWeapon()->id;
+  p.RegisterOriginalActors();
   assert(p.ActorHealth(200)==100&&p.ActorHealth(201)==100);
   const float amount=p.WeaponDamage(id);assert(amount>=4.5f&&amount<=9);
   assert(!p.ApplyWeaponHit(0,200,amount)&&!p.ApplyWeaponHit(0x434f,0,amount));
@@ -223,13 +226,13 @@ void Combat() {
   fo3weapon::WorldPose pose;pose.cell=123;assert(p.DropWeapon(id,pose));
   // A travelling shot retains the damage captured when fired after ownership changes.
   assert(p.ApplyWeaponHit(0x434f,200,amount));assert(!p.WeaponHit(id,200));
-  assert(p.ApplyWeaponHit(0x434f,201,1000)&&p.ActorHealth(201)==1);
+  assert(p.ApplyWeaponHit(0x434f,201,1000)&&p.ActorHealth(201)==0&&p.ActorKnockedOut(201));
   assert(p.ApplyWeaponHit(0x434f,200,1000)&&p.ActorHealth(200)==0);
   assert(!p.ApplyWeaponHit(0x434f,200,1));
   assert(p.ExecuteDialogueResult(heal,healError)&&p.ActorHealth(200)==0);
   std::string error;const auto path="/tmp/fq-weapon-combat-"+std::to_string(getpid())+".fqps";
   assert(p.Save(path,error));Player restored(c);assert(restored.Restore(path,error));
-  assert(restored.ActorHealth(200)==0&&restored.ActorHealth(201)==1);
+  assert(restored.ActorHealth(200)==0&&restored.ActorHealth(201)==0&&restored.ActorKnockedOut(201));
   auto bytes=Read(path);Put(bytes,bytes.size()-4,0x7fc00000);Seal(bytes);Write(path,bytes);
   const auto revision=restored.Revision();assert(!restored.Restore(path,error)&&restored.Revision()==revision);
   unlink(path.c_str());

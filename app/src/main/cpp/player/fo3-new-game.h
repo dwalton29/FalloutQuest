@@ -26,7 +26,7 @@ inline bool ReadQuest(std::istream& input,uint32_t& quest,std::string& error){
   }
   if(!seen||!quest){error="Missing General/SCharGenQuest";return false;}error.clear();return true;
 }
-inline bool FindQuest(const std::string& dataRoot,uint32_t& quest,std::string& source,std::string& error){
+inline std::string FindInstallationIni(const std::string& dataRoot){
   auto root=dataRoot;while(!root.empty()&&root.back()=='/')root.pop_back();
   const auto slash=root.find_last_of('/');
   const std::vector<std::string> roots={root,slash==std::string::npos?root:root.substr(0,slash)};
@@ -34,6 +34,28 @@ inline bool FindQuest(const std::string& dataRoot,uint32_t& quest,std::string& s
     DIR* dir=opendir(directory.c_str());if(!dir)continue;std::string path;
     while(auto* entry=readdir(dir))if(Lower(entry->d_name)==name){path=directory+'/'+entry->d_name;break;}
     closedir(dir);if(path.empty())continue;
+    return path;
+  }
+  return {};
+}
+inline bool ReadGoreDisabled(std::istream& input){
+  std::string line,section;
+  while(std::getline(input,line)){
+    if(line.compare(0,3,"\xEF\xBB\xBF")==0)line.erase(0,3);
+    line=Lower(Trim(line.substr(0,line.find(';'))));
+    if(!line.empty()&&line.front()=='['&&line.back()==']'){
+      section=Trim(line.substr(1,line.size()-2));continue;
+    }
+    const auto equal=line.find('=');
+    if(section=="general"&&equal!=std::string::npos&&Trim(line.substr(0,equal))=="bdisableallgore"){
+      const auto value=Trim(line.substr(equal+1));return value=="1"||value=="true";
+    }
+  }
+  return false;
+}
+inline bool FindQuest(const std::string& dataRoot,uint32_t& quest,std::string& source,std::string& error){
+  const auto path=FindInstallationIni(dataRoot);
+  if(!path.empty()){
     std::ifstream input(path);if(!input){error="Could not read "+path;return false;}
     source=path;return ReadQuest(input,quest,error);
   }

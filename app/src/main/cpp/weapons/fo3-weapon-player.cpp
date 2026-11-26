@@ -332,10 +332,83 @@ int32_t Player::ScriptItemCount(uint32_t reference,uint32_t form) const {
   for(const auto& entry:*contents)if(entry.formId==form)count+=entry.count;
   return count;
 }
-bool Player::KillActor(uint32_t reference){
-  if(Essential(reference)||ActorHealth(reference)<0)return false;
+bool Player::IsActorKiller(uint32_t victim,uint32_t killer,float& result)const{
+  bool dead=false;
+  if(!ActorDeathState(victim,dead)||(killer!=PlayerRef&&!catalog_->actorPlacements.count(killer)))return false;
+  const auto found=state_.actorKillers.find(victim);
+  result=dead&&found!=state_.actorKillers.end()&&found->second==killer;
+  return true;
+}
+bool Player::KillActor(uint32_t reference,uint32_t killer){
+  if(killer&&killer!=PlayerRef&&!catalog_->actorPlacements.count(killer))return false;
+  const auto health=ActorHealth(reference);
+  if(health<0)return false;
+  if(Essential(reference)){
+    if(ActorKnockedOut(reference))return true;
+    if(!state_.actors.count(reference))return false;
+    state_.actorKnockouts[reference]=catalog_->essentialDeathTime;
+    state_.actorDamage[reference]+=health;
+    auto* saved=state_.actors.Edit(reference);saved->hostile=0;saved->alert=false;
+    ++revision_;return true;
+  }
   auto it=state_.actors.find(reference);if(it==state_.actors.end())return false;
-  auto state=it->second;state.dead=true;state.hostile=0;return UpdateActor(reference,state);
+  if(it->second.dead)return true;
+  auto state=it->second;state.dead=true;state.hostile=0;
+  if(!UpdateActor(reference,state))return false;
+  if(killer)state_.actorKillers[reference]=killer;
+  return true;
+}
+bool Player::SetActorGhost(uint32_t reference,bool ghost){
+  if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
+  if(ActorGhost(reference)==ghost)return true;
+  if(ghost){
+    if(!StopActorCombat(reference,true))return false;
+    state_.ghostActors.insert(reference);
+  }else state_.ghostActors.erase(reference);
+  ++revision_;return true;
+}
+bool Player::SetActorUnconscious(uint32_t reference,bool value){
+  if(!catalog_->actorPlacements.count(reference))return false;
+  if(value==ActorUnconscious(reference))return true;
+  if(value)state_.unconsciousActors.insert(reference);else state_.unconsciousActors.erase(reference);
+  ++revision_;return true;
+}
+void Player::AdvanceActorRecovery(double seconds){
+  if(!std::isfinite(seconds)||seconds<=0)return;
+  for(auto it=state_.actorKnockouts.begin();it!=state_.actorKnockouts.end();){
+    if(it->second>seconds){it->second-=float(seconds);++it;continue;}
+    const auto ref=it->first;it=state_.actorKnockouts.erase(it);
+    auto damage=state_.actorDamage.find(ref);
+    if(damage!=state_.actorDamage.end()){
+      const float maximum=ActorHealth(ref)+damage->second;
+      damage->second=std::min(damage->second,maximum*(1-catalog_->essentialRecoverFraction));
+    }
+    ++revision_;
+  }
+}
+bool Player::ResurrectActor(uint32_t reference){
+  const auto placed=catalog_->actorPlacements.find(reference);
+  if(placed==catalog_->actorPlacements.end()||(placed->second.flags&0x20u))return false;
+  const auto saved=state_.actors.find(reference);
+  const bool authored=catalog_->AuthoredCorpse(reference);
+  bool dead=false;
+  if(!ActorDeathState(reference,dead))return false;
+  if(!dead&&!ActorKnockedOut(reference)&&!ActorUnconscious(reference)&&(saved!=state_.actors.end()||!authored))return true;
+  if(!RealizeActor(reference))return false;
+  ActorState standing;
+  if(saved!=state_.actors.end())standing=saved->second;
+  else{
+    const auto& p=placed->second;standing.cell=p.cell;standing.world=p.world;
+    standing.position={p.x,p.y,p.z};standing.yaw=-p.rz;
+  }
+  standing.dead=false;standing.corpse.reset();standing.hostile=0;standing.alert=false;
+  standing.packageWaitSeconds=0;standing.sequence=0;standing.revivedAuthoredCorpse=authored;
+  if(!UpdateActor(reference,standing))return false;
+  state_.actorDamage.erase(reference);state_.actorKnockouts.erase(reference);state_.unconsciousActors.erase(reference);
+  state_.actorKillers.erase(reference);state_.ragdollPushes.erase(reference);
+  for(uint32_t part=0;part<14;++part)state_.actorLimbDamage.erase((uint64_t(reference)<<32)|part);
+  ++revision_;
+  return ReevaluatePackage(reference);
 }
 const std::unordered_map<uint32_t,int8_t>* Player::ActorFactions(uint32_t reference) const {
   const auto edited=state_.actorFactions.find(reference);
@@ -411,7 +484,7 @@ bool Player::ResetActorHealth(uint32_t reference) {
 }
 bool Player::ActorDeathState(uint32_t reference,bool& dead) const {
   const float health=ActorHealth(reference);
-  if(health>=0){dead=health==0;return true;}
+  if(health>=0){dead=health==0&&!ActorKnockedOut(reference);return true;}
   // An unvisited actor can have an unresolved leveled statistics template.
   // Reading its life state must not roll that template or realize its inventory.
   const auto placed=catalog_->actorPlacements.find(reference);
@@ -488,9 +561,9 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   const auto weapon=catalog_->items.find(base);const float health=ActorHealth(target);
   if(attacker==target||weapon==catalog_->items.end()||!weapon->second.weapon.valid||health<=0||!std::isfinite(damage)||damage<=0)return false;
   if(attacker!=0x14&&ActorHealth(attacker)<0)return false;
+  if((target!=PlayerRef&&ActorGhost(target))||(Essential(target)&&!state_.actors.count(target)))return false;
   damage*=(1-DamageResistance(target)/100)*(part?part->damageMult:1.f);
-  // Essential actors retain health until unconscious behaviour is supported.
-  const float applied=std::min(damage,std::max(0.f,health-(Essential(target)?1.f:0.f)));
+  const float applied=std::min(damage,health);
   if(applied<=0)return false;
   if(target==0x14)return DamageHealth(applied);
   auto& total=state_.actorDamage[target];
@@ -505,7 +578,10 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   }
   total+=applied;
   if(provoke)SetActorHostile(target,attacker);
-  const bool died=applied>=health&&!Essential(target);
+  const bool knockout=applied>=health&&Essential(target);
+  if(knockout&&!KillActor(target))return false;
+  const bool died=applied>=health&&!knockout;
+  if(died&&catalog_->actorPlacements.count(target))state_.actorKillers[target]=attacker;
   if(died){if(auto* actor=state_.actors.Edit(target)){actor->dead=true;actor->packageWaitSeconds=0;}}
   ++revision_;
   // Source scripts receive gameplay events once, after the canonical damage
@@ -515,6 +591,10 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   DispatchReferenceEvent(target,"OnHitWith",attacker,scriptError,base);
   if(died)DispatchReferenceEvent(target,"OnDeath",attacker,scriptError);
   return true;
+}
+bool Player::AcceptRagdollPush(uint32_t reference,const CorpsePose& pose){
+  if(!state_.ragdollPushes.count(reference)||!SetCorpsePose(reference,pose))return false;
+  state_.ragdollPushes.erase(reference);++revision_;return true;
 }
 bool Player::SetCorpsePose(uint32_t reference,const CorpsePose& pose){
  const auto actor=state_.actors.find(reference);
@@ -526,6 +606,7 @@ bool Player::SetCorpsePose(uint32_t reference,const CorpsePose& pose){
 bool Player::UpdateActor(uint32_t reference,const ActorState& incoming) {
   ActorState a=incoming;
   const auto prior=state_.actors.find(reference);
+  if(prior!=state_.actors.end()&&prior->second.revivedAuthoredCorpse)a.revivedAuthoredCorpse=true;
   if(a.dead&&!a.corpse&&prior!=state_.actors.end())a.corpse=prior->second.corpse;
   const auto t=catalog_->pipboy.targets.find(reference);
   if(t==catalog_->pipboy.targets.end()||!catalog_->weapons.actors.count(t->second.base)||
@@ -536,8 +617,8 @@ bool Player::UpdateActor(uint32_t reference,const ActorState& incoming) {
   const auto old=state_.actors.find(reference);
   bool poseOnly=false;
   if(old!=state_.actors.end()){const auto& o=old->second;
-    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked&&o.packageWaitSeconds==a.packageWaitSeconds&&o.corpse==a.corpse)return true;
-    poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked;
+    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.revivedAuthoredCorpse==a.revivedAuthoredCorpse&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked&&o.packageWaitSeconds==a.packageWaitSeconds&&o.corpse==a.corpse)return true;
+    poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.revivedAuthoredCorpse==a.revivedAuthoredCorpse&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked;
   }else if(state_.actors.size()>=10000)return false;
   state_.actors[reference]=a;++revision_;if(poseOnly)++actorPoseRevisions_;return true;
 }
@@ -574,6 +655,7 @@ bool Player::MoveActorTo(uint32_t reference,uint32_t destination,const std::arra
   scriptActorMoves_[reference]=++revision_;return true;
 }
 bool Player::SetActorHostile(uint32_t reference,uint32_t target) {
+  if(target&&ActorGhost(target))return true;
   const auto t=catalog_->pipboy.targets.find(reference);if(t==catalog_->pipboy.targets.end())return false;
   ActorState a;const auto old=state_.actors.find(reference);
   if(old!=state_.actors.end())a=old->second;

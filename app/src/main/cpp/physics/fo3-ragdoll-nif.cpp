@@ -59,6 +59,7 @@ bool Read(const std::vector<uint8_t>& bytes,Definition& out,std::string& error){
   const auto name=U(blocks[target]);if(name>=strings.size()||strings[name].empty()||!names.insert(strings[name]).second||result.bodies.size()>=64)throw "invalid body bone";
   Body b;b.bone=strings[name];Capsule primary;
   // Fallout 3 biped Havok filter: the high flag enables self-collision.
+  b.bodyPart=d[5]&31u;
   if(d[4]==8)b.collideWithSelf=(d[5]&0x80u)!=0;
   if(types[tags[shape]]=="bhkListShape"){
    const auto* list=blocks[shape];if(sizes[shape]<4)throw "invalid ragdoll shape list";

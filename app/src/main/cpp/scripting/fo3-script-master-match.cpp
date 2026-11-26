@@ -1,4 +1,5 @@
 #include "fo3-script-master-match.h"
+#include "player/fo3-actor-values.h"
 #include "fo3-script-evidence-budget.h"
 #include "fo3-script-local-policy.h"
 #include "data/fo3-esm-reader.h"
@@ -14,8 +15,10 @@ namespace fo3script {
 namespace {
 using Execution=fo3player::ScriptExecution;
 using Kind=fo3player::ScriptProgramKind;
-bool ActivationChild(const Execution& parent,const Execution& child){
-  if(child.origin.event!="onactivate"||child.origin.filterForm||child.reference!=child.owner||!child.activator)return false;
+bool ReferenceEventChild(const Execution& parent,const Execution& child){
+  const bool death=child.origin.event=="ondeath";
+  if((!death&&child.origin.event!="onactivate")||child.origin.filterForm||child.reference!=child.owner||
+     (!death&&!child.activator))return false;
   const auto form=[&](const std::string& name){
     if(name=="player")return fo3player::PlayerRef;
     for(const auto& binding:parent.commandForms)if(binding.second==name)return binding.first;
@@ -26,9 +29,21 @@ bool ActivationChild(const Execution& parent,const Execution& child){
     const auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
     std::istringstream row(Lower(line));std::string op;if(!(row>>op))continue;
     if(op.back()=='.'){std::string verb;if(!(row>>verb))continue;op+=verb;}
-    const auto dot=op.find('.');if((dot==std::string::npos?op:op.substr(dot+1))!="activate")continue;
-    std::string actor,flag,extra;if(!(row>>actor>>flag)||flag!="1"||(row>>extra))continue;
-    if((dot==std::string::npos?parent.owner:form(op.substr(0,dot)))==child.owner&&form(actor)==child.activator)return true;
+    const auto dot=op.find('.');
+    if((dot==std::string::npos?parent.owner:form(op.substr(0,dot)))!=child.owner)continue;
+    const auto verb=dot==std::string::npos?op:op.substr(dot+1);
+    std::string actor,flag,extra;
+    if(death){
+      if(verb=="damageav"||verb=="damageactorvalue"){
+        std::string stat; float amount=0;
+        if(!child.activator&&(row>>stat>>amount)&&fo3av::ID(stat)==16&&std::isfinite(amount)&&amount>0&&!(row>>extra))return true;
+        continue;
+      }
+      if(verb!="kill"&&verb!="killactor")continue;
+      if(!(row>>actor)||actor=="0"){
+        if(!child.activator&&!(row>>extra))return true;
+      }else if(child.activator&&form(actor)==child.activator&&!(row>>extra))return true;
+    }else if(verb=="activate"&&(row>>actor>>flag)&&flag=="1"&&!(row>>extra)&&form(actor)==child.activator)return true;
   }
   return false;
 }
@@ -72,11 +87,13 @@ bool EquipmentChild(const Execution& parent,const Execution& child){
     std::istringstream row(Lower(line));std::string op,item;if(!(row>>op))continue;
     if(op=="player."){std::string verb;if(!(row>>verb))continue;op+=verb;}
     if(op=="player.removeallitems"&&child.origin.event=="onunequip")return true;
-    if(op!="player.equipitem"&&op!="player.unequipitem")continue;
+    if(op!="player.equipitem"&&op!="player.unequipitem"&&op!="player.additem")continue;
     if(!(row>>item))continue;
     for(const auto& binding:parent.commandForms){
       if(binding.second!=item||binding.first!=child.origin.inventoryBase)continue;
-      if((op=="player.equipitem")== (child.origin.event=="onequip"))return true;
+      if((op=="player.equipitem"&&child.origin.event=="onequip")||
+         (op=="player.unequipitem"&&child.origin.event=="onunequip")||
+         (op=="player.additem"&&child.origin.event=="onadd"))return true;
     }
   }
   return false;
@@ -97,7 +114,7 @@ bool Contexts(const std::vector<Execution>& programs){
       const auto& parent=programs[e.parent];
       if(e.origin.kind==Kind::QuestStageItem){if(e.reference!=parent.reference||e.activator!=parent.activator)return false;}
       else if(e.origin.kind==Kind::InventoryEvent){if(!EquipmentChild(parent,e))return false;}
-      else if(e.origin.kind!=Kind::ReferenceEvent||!ActivationChild(parent,e))return false;
+      else if(e.origin.kind!=Kind::ReferenceEvent||!ReferenceEventChild(parent,e))return false;
     }
     if(depth==active.size())return false;
     active[depth++]=n;
@@ -126,7 +143,7 @@ const char* Type(const Execution& e){
         !e.owningQuest&&e.questConditions.empty()&&e.activator==fo3player::PlayerRef?"TERM":nullptr;
     case Kind::InventoryEvent:
       if(!o.inventoryBase||!o.inventoryStack||e.owner<=0xff000000u||e.activator!=fo3player::PlayerRef||
-         (o.event!="onequip"&&o.event!="onunequip"))return nullptr;
+         (o.event!="onequip"&&o.event!="onunequip"&&o.event!="onadd"))return nullptr;
       [[fallthrough]];
     case Kind::ReferenceEvent:
       return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic&&

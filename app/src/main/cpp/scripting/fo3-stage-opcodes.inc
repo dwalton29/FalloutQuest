@@ -38,6 +38,7 @@
     case 0x105e: return {"evaluatepackage","",0,false};
     case 0x1060: return {"enableplayercontrols","nnnnnnn",0,false};
     case 0x1061: return {"disableplayercontrols","nnnnnnn",0,false};
+    case 0x106b: return {"getknockedstate","",0,true};
     case 0x1070: return {"isidleplaying","",0,true};
     case 0x1072: return {"lock","nn",0,false};
     case 0x1073: return {"unlock","n",0,false};
@@ -47,6 +48,7 @@
     case 0x108b: return {"kill","rnn",0,false};
     case 0x1097: return {"addscriptpackage","r",1,false};
     case 0x1098: return {"removescriptpackage","",0,false};
+    case 0x108c: return {"resurrectactor","n",0,false};
     case 0x109e: return {"movetomarker","rnnn",1,false};
     case 0x10ab: return {"ignorecrime","n",1,false};
     case 0x10ad: return {"removeallitems","rnn",0,false};
@@ -59,13 +61,17 @@
     case 0x10ec: return {"setghost","n",1,false};
     case 0x10ee: return {"equipitem","rnn",1,false};
     case 0x10ef: return {"unequipitem","rnn",1,false};
+    case 0x10ed: return {"getisghost","",0,true};
     case 0x10f1: return {"setunconscious","n",1,false};
+    case 0x10f2: return {"getunconscious","",0,true};
     case 0x10f3: return {"setrestrained","n",1,false};
     case 0x1101: return {"stopcombatalarmonactor","",0,false};
     case 0x110d: return {"setquestobject","rn",2,false};
     case 0x1114: return {"playbink","snnnn",1,false};
     case 0x1119: return {"setcellownership","rr",1,false};
     case 0x111c: return {"setactorfullname","r",1,false};
+    case 0x1123: return {"pms","rn",1,false};
+    case 0x1125: return {"sms","r",1,false};
     case 0x1128: return {"isanimplaying","g",0,true};
     case 0x1136: return {"getinworldspace","r",1,true};
     case 0x113c: return {"setscale","n",1,false};
@@ -82,6 +88,7 @@
     case 0x117f: return {"addtofaction","rn",2,false};
     case 0x1180: return {"removefromfaction","r",1,false};
     case 0x1182: return {"restoreactorvalue","an",2,false};
+    case 0x118a: return {"pushactoraway","rn",2,false};
     case 0x1190: return {"playidle","s",1,false};
     case 0x1191: return {"applyimagespacemodifier","rn",1,false};
     case 0x1192: return {"removeimagespacemodifier","rn",1,false};
@@ -119,6 +126,8 @@
     case 0x121b: return {"addtagskills","n",1,false};
     case 0x1224: return {"pipboyradiooff","",0,false};
     case 0x1225: return {"autodisplayobjectives","n",1,false};
+    case 0x1226: return {"isgoredisabled","",0,true};
     case 0x1229: return {"setpccanusepowerarmor","n",1,false};
     case 0x122c: return {"forceradiostationupdate","",0,false};
+    case 0x1230: return {"setlastextdooractivated","r",1,false};
     case 0x1231: return {"killquestupdates","",0,false};

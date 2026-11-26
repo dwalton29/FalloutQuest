@@ -329,8 +329,7 @@ inline bool ParseObjectNetPrefix(Cursor& c) {
            c.Skip(static_cast<size_t>(extraCount) * 4u) && c.U32(controller);
 }
 
-inline bool ParseTargetMatrix(const uint8_t* data, size_t size, const NifHeader& h, Mat4& out) {
-    Cursor c(data, size);
+inline bool ParseTargetMatrix(Cursor& c, const NifHeader& h, Mat4& out) {
     if (!ParseObjectNetPrefix(c)) return false;
     uint16_t flags = 0;
     if (!c.U16(flags)) return false;
@@ -339,8 +338,8 @@ inline bool ParseTargetMatrix(const uint8_t* data, size_t size, const NifHeader&
         if (!c.U16(unknown)) return false;
     }
     float t[3]{}, r[9]{}, s = 1.0f;
-    for (float& v : t) if (!c.F32(v)) return false;
-    for (float& v : r) if (!c.F32(v)) return false;
+    for (float& v : t) if (!c.F32(v) || !std::isfinite(v)) return false;
+    for (float& v : r) if (!c.F32(v) || !std::isfinite(v)) return false;
     if (!c.F32(s) || !std::isfinite(s) || std::fabs(s) > 10000.0f) return false;
     out = Identity();
     out.m[0] = r[0] * s; out.m[1] = r[1] * s; out.m[2] = r[2] * s; out.m[3] = t[0];
@@ -348,6 +347,64 @@ inline bool ParseTargetMatrix(const uint8_t* data, size_t size, const NifHeader&
     out.m[8] = r[6] * s; out.m[9] = r[7] * s; out.m[10] = r[8] * s; out.m[11] = t[2];
     return true;
 }
+
+// Collision geometry is expressed in its target's coordinates. A placed
+// reference replaces each footer root's transform, retaining all descendants.
+struct TargetHierarchy {
+    std::vector<uint32_t> parent;
+    std::vector<bool> root;
+
+    bool Read(const std::vector<uint8_t>& nif, const NifHeader& h) {
+        parent.assign(h.numBlocks, INVALID_REF);
+        root.assign(h.numBlocks, false);
+        const size_t footer = h.blockOffsets.back() + h.blockSizes.back();
+        Cursor roots(nif.data() + footer, nif.size() - footer);
+        uint32_t count;
+        if (!roots.U32(count) || count > h.numBlocks) return false;
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t block;
+            if (!roots.U32(block) || block >= h.numBlocks) return false;
+            root[block] = true;
+        }
+        for (uint32_t block = 0; block < h.numBlocks; ++block) {
+            const auto& type = BlockType(h, block);
+            if (type.size() < 4 || type.compare(type.size()-4, 4, "Node") != 0) continue;
+            Cursor cursor(BlockData(nif,h,block), h.blockSizes[block]);
+            Mat4 local;
+            if (!ParseTargetMatrix(cursor,h,local)) return false;
+            if (h.userVersion <= 11) {
+                uint32_t properties;
+                if (!cursor.U32(properties) || properties > MAX_BLOCKS ||
+                    !cursor.Skip(size_t(properties)*4)) return false;
+            }
+            uint32_t children;
+            if (!cursor.Skip(4) || !cursor.U32(children) || children > MAX_BLOCKS) return false;
+            for (uint32_t i = 0; i < children; ++i) {
+                uint32_t child;
+                if (!cursor.U32(child)) return false;
+                if (child == INVALID_REF) continue;
+                if (child >= h.numBlocks || parent[child] != INVALID_REF) return false;
+                parent[child] = block;
+            }
+        }
+        return true;
+    }
+
+    bool Matrix(const std::vector<uint8_t>& nif, const NifHeader& h,
+                uint32_t target, Mat4& out) const {
+        out = Identity();
+        for (uint32_t depth = 0; target < h.numBlocks && depth < h.numBlocks; ++depth) {
+            if (root[target]) return true;
+            Cursor cursor(BlockData(nif,h,target), h.blockSizes[target]);
+            Mat4 local;
+            if (!ParseTargetMatrix(cursor,h,local)) return false;
+            out = Mul(local,out);
+            target = parent[target];
+            if (target == INVALID_REF) return true;
+        }
+        return false;
+    }
+};
 
 inline bool ParseRigidBodyTMatrix(const uint8_t* body, size_t size, Mat4& out) {
     if (!body || size < 84u) return false;
@@ -767,6 +824,8 @@ inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
     NifHeader h;
     if(!ParseHeader(nif,h)){ Q6F_LOGW("Q6F COLLISION HEADER UNSUPPORTED: model=%s",resolved.c_str()); return false; }
 
+    TargetHierarchy hierarchy;
+    const bool hasHierarchy = hierarchy.Read(nif,h);
     size_t collisionObjects=0, totalTriangles=0;
     std::array<size_t,5> kinds{};
     for(uint32_t co=0;co<h.numBlocks;++co){
@@ -809,19 +868,16 @@ inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
         Mat4 bodyM=Identity(); bool bodyApplied=false;
         if(bodyType=="bhkRigidBodyT") bodyApplied=ParseRigidBodyTMatrix(body,bodySize,bodyM);
         Mat4 targetM=Identity(); bool targetApplied=false;
-        if(target<h.numBlocks) targetApplied=ParseTargetMatrix(BlockData(nif,h,target),h.blockSizes[target],h,targetM);
-        if(requireComplete&&((bodyType=="bhkRigidBodyT"&&!bodyApplied)||
-                (target!=INVALID_REF&&(target>=h.numBlocks||!targetApplied))))return false;
-        // NIF footer identifies the scene roots replaced by REFR placement.
-        bool targetIsRoot = false;
-        const size_t footer=h.blockOffsets.back()+h.blockSizes.back();
-        if(footer+4u<=nif.size()) {
-            const uint32_t count=ReadLe32(nif.data()+footer);
-            if(count<=(nif.size()-footer-4u)/4u)
-                for(uint32_t i=0;i<count;++i)
-                    targetIsRoot=targetIsRoot||ReadLe32(nif.data()+footer+4u+i*4u)==target;
+        if(target<h.numBlocks) {
+            if(hasHierarchy) targetApplied=hierarchy.Matrix(nif,h,target,targetM);
+            else if(!requireComplete && !hierarchy.root[target]) {
+                Cursor cursor(BlockData(nif,h,target),h.blockSizes[target]);
+                targetApplied=ParseTargetMatrix(cursor,h,targetM);
+            }
         }
-        const Mat4 outer=Mul(targetApplied&&!targetIsRoot?targetM:Identity(),bodyApplied?bodyM:Identity());
+        if(requireComplete&&((bodyType=="bhkRigidBodyT"&&!bodyApplied)||
+                (target!=INVALID_REF&&!targetApplied)))return false;
+        const Mat4 outer=Mul(targetApplied?targetM:Identity(),bodyApplied?bodyM:Identity());
 
         for(size_t i=before;i<outShapes.size();++i){
             Fo3NifCollisionShapeQ6F& s=outShapes[i];

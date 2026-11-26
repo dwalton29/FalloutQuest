@@ -1,3 +1,4 @@
+#include "rendering/mesh/fo3-actor-effect-addons.h"
 #include "player/fo3-player-presentation.h"
 #include "player/fo3-player-death.h"
 #include "scripting/fo3-script-cell-handoff.h"
@@ -13742,6 +13743,7 @@ void Q233BeginMainEyeWorld() {
 }
 
 #include "rendering/mesh/fo3-world-bursts.inc"
+#include "rendering/mesh/fo3-actor-effect-render.inc"
 void RenderScene(const float* mvp) {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
@@ -14065,6 +14067,7 @@ void RenderScene(const float* mvp) {
                     Q1150BlendFactor(object.alphaDestBlend, false));
         DrawSceneObject(object);
     }
+    fo3addonrenderer::DrawAddons();
     fo3worldfx::Draw(mvp);
     const uint64_t q2017AlphaUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(

@@ -4,7 +4,7 @@
 
 namespace fqspacewarp {
 // Weapon parts may share an uploaded shape across several placements in one frame.
-enum class PlacementKind : uint8_t { Scene, Weapon, SpareMagazine, EjectedMagazine };
+enum class PlacementKind : uint8_t { Scene, Weapon, SpareMagazine, EjectedMagazine, ShaderAddon };
 
 struct Placement {
     PlacementKind kind=PlacementKind::Scene;

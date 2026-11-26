@@ -8,7 +8,7 @@ uint32_t gTerminalCell=0;
 bool Fo3TerminalFocus(){return gTerminal.reference!=0;}
 bool Fo3TerminalInputBlocked(){return Fo3TerminalFocus()||gTerminalInputLatch;}
 void CancelFo3Terminal(){if(gTerminal.note&&fo3audio::PlayingNote()==gTerminal.note)fo3audio::Note(0,{});gTerminal.note=0;gTerminal.reference=0;gTerminalScreen.reset();fo3audio::MenuLoop("");}
-bool BeginFo3Terminal(uint32_t reference){
+bool OpenFo3TerminalInterface(uint32_t reference){
   if(!gPlayerSession||gPlayerSession->saveBlocked||Fo3ResidentFrameBlocked())return false;
   auto& p=gPlayerSession->player;const auto ref=p.Definitions().references.find(reference);
   if(ref==p.Definitions().references.end())return false;
@@ -18,15 +18,19 @@ bool BeginFo3Terminal(uint32_t reference){
   for(const auto& object:gObjects)if(object.refFormId==reference&&object.terminalScreen&&
       (!screen||object.terminalScreen->width*object.terminalScreen->height>screen->width*screen->height))screen=object.terminalScreen;
   if(!screen){fo3notify::Notifications().Enqueue("Terminal screen mesh is unavailable.");return false;}
-  // Honor authored OnActivate scripts before opening their default interface.
-  if(p.HasReferenceEvent(reference,"OnActivate")){
-    std::string error;auto event=DispatchFo3ScriptedActivation(reference,fo3player::PlayerRef,error);
-    if(event!=fo3player::ScriptEventResult::Executed){if(!error.empty())fo3notify::Notifications().Enqueue(error);return false;}
-  }
   fo3terminalui::Invalidate();
   gTerminalScreen=std::move(screen);gTerminalCell=gCurrentCellFormId;gTerminalInputLatch=true;
   p.EndContainerInteraction();ResetFo3Pipboy();gTerminal.Open(p,reference,0);
   fo3audio::MenuLoop("UIHackingFanHumLP");fo3audio::NamedSound("UIHackingCharEnter");FlushFo3PlayerState();return true;
+}
+bool BeginFo3Terminal(uint32_t reference){
+  if(!gPlayerSession||gPlayerSession->saveBlocked||Fo3ResidentFrameBlocked())return false;
+  if(!gPlayerSession->player.HasReferenceEvent(reference,"OnActivate"))return OpenFo3TerminalInterface(reference);
+  // The event may display a refusal. Only a delegated Activate opens the UI.
+  std::string error;
+  const auto event=DispatchFo3ScriptedActivation(reference,fo3player::PlayerRef,error);
+  if(!error.empty())fo3notify::Notifications().Enqueue(error);
+  return event==fo3player::ScriptEventResult::Executed||event==fo3player::ScriptEventResult::Pending;
 }
 void RenderFo3Terminal(const float* mvp){
   if(!gTerminalScreen||!gPlayerSession)return;

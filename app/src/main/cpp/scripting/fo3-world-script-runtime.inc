@@ -10,6 +10,8 @@ struct Animation {
     std::shared_ptr<const fo3dooranim::Asset> asset;
     int clip=-1,lightBone=-1;double started=0,lastCollision=-1,lastSound=-1,presentationTime=0;bool settled=false;
     fo3anim::Pose pose;
+    bool hasWorldUpBillboards=false;
+    std::vector<fo3anim::Matrix> billboardCorrections;
     int appliedOpenState=-1;
     std::vector<bool> visible;
     std::vector<size_t> shapes;
@@ -412,8 +414,19 @@ void Register(){
         player.ClearScriptActorDetection();
     }
     std::unordered_set<uint32_t> playingIdles;
+    std::unordered_map<uint32_t,uint8_t> procedures;
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     for(const auto& actor:gQ230NpcActors){
+        const auto reference=actor.source.refFormId;
+        const bool linked=std::any_of(speechLanes.begin(),speechLanes.end(),[&](const auto& lane){
+            return lane.dialogue.Active()&&lane.dialogue.linkedConversation&&
+                (lane.identity==reference||lane.listener==reference);
+        });
+        const auto& packages=player.Definitions().pipboy.packages;
+        const auto current=packages.find(actor.runtime.package);
+        const int procedure=fo3npc::ObservedAIProcedure(actor.runtime,linked,
+            current==packages.end()?0xff:current->second.type);
+        if(procedure>=0)procedures.emplace(reference,uint8_t(procedure));
         const auto clip=actor.responseClips.find(actor.responseIdle);
         if(!actor.runtime.offScene&&actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&
            actor.runtime.speed<.01f&&!actor.runtime.furniture.Active()&&clip!=actor.responseClips.end()&&
@@ -429,6 +442,7 @@ void Register(){
         player.SetScriptActorFurniture(actor.source.refFormId,ref,marker,sitting);
     }
     if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration())playingIdles.clear();
+    player.SetScriptActorProcedures(std::move(procedures));
     player.SetScriptPlayingIdles(std::move(playingIdles));
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
     if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();volleys.clear();parentActivations.clear();modifiers.entries.clear();radiationClouds.clear();pendingDamageModels.clear();damageModelRefreshAt=0;fo3worldfx::Clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.runtime.scriptLookRotateBody=false;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
@@ -441,11 +455,30 @@ void Register(){
         const auto& asset=object.q2401DoorAnimation;
         if(registry->count(object.refFormId))continue;
         auto& definitions=(*registry)[object.refFormId];
-        for(const auto& clip:asset->clips)definitions.push_back({clip.name,clip.frequency>0?std::max(0.,double(clip.stop-clip.start)/clip.frequency):0,clip.cycle==0||clip.cycle==1});
+        for(const auto& clip:asset->clips)if(!clip.DirectControllers())definitions.push_back({clip.name,clip.frequency>0?std::max(0.,double(clip.stop-clip.start)/clip.frequency):0,clip.cycle==0||clip.cycle==1});
         auto& state=animations[object.refFormId];
         if(state.asset!=asset){state={};state.asset=asset;state.visible.resize(asset->hierarchy.bones.size());
+            state.hasWorldUpBillboards=std::any_of(asset->hierarchy.bones.begin(),asset->hierarchy.bones.end(),[](const auto& b){return b.billboardMode==5;});
             if(object.baseRecordType=="LIGH")state.lightBone=fo3anim::FindBone(asset->hierarchy,"AttachLight");
-            for(size_t i=0;i<state.visible.size();++i)state.visible[i]=asset->hierarchy.bones[i].visible;}
+            for(size_t i=0;i<state.visible.size();++i)state.visible[i]=asset->hierarchy.bones[i].visible;
+            if(asset->clips.size()==1&&asset->clips.front().DirectControllers()){
+                state.clip=0;state.started=seconds;fo3anim::BindClip(asset->hierarchy,asset->clips.front(),state.pose);
+            }
+            // A streamed or restored mesh starts at its saved phase. Sound keys
+            // before that phase have already played.
+            if(const auto* run=player.ScriptAnimation(object.refFormId)){
+                for(size_t i=0;i<definitions.size();++i){
+                    const auto& clip=definitions[i];
+                    if(fo3script::Lower(clip.name)!=run->group||clip.duration!=run->duration||clip.loop!=run->loop)continue;
+                    state.clip=int(i);state.started=run->started;state.lastSound=std::max(0.,seconds-run->started);
+                    const auto door=player.Snapshot().doorStates.find(object.refFormId);
+                    if(door!=player.Snapshot().doorStates.end()&&
+                       (run->group==(door->second?"open":"close")||run->group==(door->second?"forward":"backward")))
+                        state.appliedOpenState=door->second;
+                    fo3anim::BindClip(asset->hierarchy,asset->clips[i],state.pose);break;
+                }
+            }
+        }
         state.settled=false; // Reapply retained pose to newly published shapes.
     }
     for(auto& entry:animations)entry.second.shapes.clear();
@@ -498,7 +531,7 @@ void Events(){
         if(actor.runtime.offScene||!actor.runtime.Alive())continue;
         const auto id=actor.source.refFormId;
         for(const auto& change:player.ScriptActorTriggerChanges(
-                id,gCurrentCellFormId,gExteriorWorldspaceQ1890,Q240GamePosition(actor)))
+                id,gCurrentCellFormId,gExteriorWorldspaceQ1890,Q240GamePosition(actor),actor.runtime.yaw))
             actorChanges.push_back({id,change.first,change.second});
     }
     for(const auto& change:actorChanges){
@@ -637,9 +670,10 @@ void Actions(){
             const float pan=h>0?(dx*std::cos(yaw)+dy*std::sin(yaw))/h:0;
             if(e.sound)fo3audio::SoundAt(e.sound,distance,pan);
             if(e.sound2)fo3audio::SoundAt(e.sound2,distance,pan);
-            if(e.imageModifier&&distance<=e.imageRadius){
+            if(e.imageModifier&&(e.imageRadius>0||distance<=e.radius)){
+                const float strength=e.imageRadius>0?e.RadialFraction(distance,e.imageRadius):1.f;
                 const auto im=player.Definitions().imageModifiers.find(e.imageModifier);
-                if(im!=player.Definitions().imageModifiers.end())modifiers.Apply(im->first,im->second,seconds);
+                if(im!=player.Definitions().imageModifiers.end())modifiers.Apply(im->first,im->second,seconds,strength);
             }
             if(e.radiation>0&&e.radiationTime>0&&e.radiationRadius>0)
                 radiationClouds.push_back({action,seconds,seconds});
@@ -696,6 +730,22 @@ void AdvanceMenuDisplay(uint32_t reference,double dt){
         }
     }else if(!state.settled)state.presentationTime+=dt;
 }
+static void PublishShapeTransforms(Animation& state){
+    if(state.shapes.empty())return;
+    const auto& asset=*state.asset;
+    if(state.hasWorldUpBillboards)
+        fo3dooranim::BillboardCorrections(asset,state.pose,gObjects[state.shapes.front()].q2016PlacementMatrix,
+                                         FO3_UNITS_PER_METRE,gQ210Head,state.billboardCorrections);
+    for(auto slot:state.shapes){
+        auto& object=gObjects[slot];
+        const int bone=object.q2401AnimationBone;
+        const auto* delta=fo3dooranim::ShapeDelta(asset,state.pose,bone);
+        fo3anim::Matrix scene;
+        if(!delta||!fo3dooranim::ModelDeltaToScene(object.q2016PlacementMatrix,FO3_UNITS_PER_METRE,*delta,scene))continue;
+        if(state.hasWorldUpBillboards)scene=fo3anim::Multiply(state.billboardCorrections[size_t(bone)],scene);
+        std::copy(scene.begin(),scene.end(),object.q2400DoorTransform);
+    }
+}
 void Animate(){
     // OnLoad/GameMode actions can publish a new visual inventory after the
     // frame's initial Register. Revalidate cached shape slots before use.
@@ -717,7 +767,11 @@ void Animate(){
                 fo3anim::BindClip(asset.hierarchy,*clip,state.pose);break;
             }
         }
-        if(state.clip<0||state.settled)continue;
+        if(state.clip<0)continue;
+        if(state.settled){
+            if(state.hasWorldUpBillboards)PublishShapeTransforms(state);
+            continue;
+        }
         const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started+state.presentationTime);
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
         const auto* first=state.shapes.empty()?nullptr:&gObjects[state.shapes.front()];
@@ -743,33 +797,20 @@ void Animate(){
             });
         }
         state.lastSound=elapsed;
+        PublishShapeTransforms(state);
         for(const auto& value:state.pose.properties)if(value.kind==fo3anim::PropertyKind::Visibility)state.visible[size_t(value.bone)]=value.value[0]!=0;
         for(size_t shape:state.shapes){auto& object=gObjects[shape];
             const int bone=object.q2401AnimationBone;
-            const auto* delta=fo3dooranim::ShapeDelta(asset,state.pose,bone);
-            fo3anim::Matrix scene{};
-            if(delta&&fo3dooranim::ModelDeltaToScene(object.q2016PlacementMatrix,FO3_UNITS_PER_METRE,*delta,scene))std::copy(scene.begin(),scene.end(),object.q2400DoorTransform);
             bool visible=true;for(int i=bone;i>=0;i=asset.hierarchy.bones[size_t(i)].parent)visible=visible&&state.visible[size_t(i)];object.scriptVisible=visible;
-            fo3anim::DiffuseTransform diffuse;bool hasDiffuse=false;
+            fo3anim::DiffuseRowsForBone(state.pose,bone,object.scriptDiffuseRows);
             for(const auto& property:state.pose.properties)if(property.bone==bone){
                 using K=fo3anim::PropertyKind;
-                if(property.kind>=K::DiffuseOffsetU&&property.kind<=K::DiffuseRotation){
-                    if(!hasDiffuse){diffuse=property.diffuse;hasDiffuse=true;}
-                    switch(property.kind){
-                    case K::DiffuseOffsetU: diffuse.offset[0]=property.value[0];break;
-                    case K::DiffuseOffsetV: diffuse.offset[1]=property.value[0];break;
-                    case K::DiffuseScaleU: diffuse.scale[0]=property.value[0];break;
-                    case K::DiffuseScaleV: diffuse.scale[1]=property.value[0];break;
-                    case K::DiffuseRotation: diffuse.rotation=property.value[0];break;
-                    default: break;
-                    }
-                }
                 if(property.kind==K::EmissiveMultiplier)object.emissiveMult=std::max(0.f,property.value[0]);
                 if(property.kind==K::Alpha)object.materialAlpha=std::clamp(property.value[0],0.f,1.f);
                 if(property.kind==K::Emissive)std::copy_n(property.value.begin(),3,object.emissiveColor);
                 if(property.kind==K::Specular)std::copy_n(property.value.begin(),3,object.specularColor);
             }
-            if(hasDiffuse)diffuse.ShaderRows(object.scriptDiffuseRows);
+
         }
         const double duration=clip.frequency>0?double(clip.stop-clip.start)/clip.frequency:0;
         const bool ended=clip.cycle==2&&elapsed>=duration;

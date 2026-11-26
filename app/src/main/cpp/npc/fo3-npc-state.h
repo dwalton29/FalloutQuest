@@ -136,5 +136,41 @@ struct RuntimeState {
     animation=bodyTracks&&turn?(error>0?Animation::TurnLeft:Animation::TurnRight):dialogue?(speaking?Animation::Speaking:Animation::Conversation):Animation::Idle;
   }
 };
+// Vanilla GetCurrentAIProcedure values for actions the resident runtime can
+// observe directly. An unknown action must not satisfy numeric conditions.
+inline int ObservedAIProcedure(const RuntimeState& actor,bool linkedDialogue,uint8_t packageType=0xff){
+  if(actor.offScene||!actor.Alive())return -1;
+  if(actor.activity==Activity::Dialogue||linkedDialogue)return 4;
+  if(actor.activity==Activity::Combat){
+    if(actor.moraleFlee)return 16;
+    if(actor.search.active)return 36;
+    return 13;
+  }
+  if(actor.furniture.phase==fo3furniture::Phase::Loop){
+    const auto* slot=actor.furniture.Selected();
+    if(slot)return slot->idleMarker?46:slot->sleep?8:48;
+  }
+  if(actor.procedure==Procedure::Waiting)return 3;
+  if(actor.procedure==Procedure::Completed)return 17;
+  if(actor.procedure==Procedure::Blocked)return 49;
+  if(actor.activity==Activity::Package&&actor.packageKnown){
+    if(actor.xtelDoor)return 0;
+    if(actor.procedure==Procedure::Executing){
+      switch(packageType){
+        case 1:return 11;  // Follow
+        case 2:return 12;  // Escort
+        case 5:return 7;   // Wander
+        case 6:return 0;   // Travel
+        case 10:return 34; // Flee outside combat
+        case 12:return 45; // Sandbox
+        case 13:return 41; // Patrol
+        case 14:return 44; // Guard
+        case 15:return 19; // Approach dialogue target
+      }
+    }
+  }
+  if(actor.activity==Activity::Idle&&actor.procedure==Procedure::None)return 24;
+  return -1;
+}
 inline bool Interrupted(bool loading,bool resident,bool alive,bool combat,float distance){return loading||!resident||!alive||combat||!std::isfinite(distance)||distance>DialoguePolicy::LeaveRange;}
 }

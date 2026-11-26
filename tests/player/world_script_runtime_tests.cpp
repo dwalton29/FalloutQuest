@@ -1,4 +1,6 @@
 #include "player/fo3-player-state.h"
+#include "physics/fo3-nif-collision.h"
+#include "rendering/mesh/fo3-static-nif.h"
 #include "ui/loading/fo3-loading-catalog.h"
 #include "world/interaction/fo3-door-nif-animation.h"
 #include "world/fo3-cell-traversal.h"
@@ -33,7 +35,8 @@ int worldResult=0;uint64_t worldResultTicket=0;
 std::unique_ptr<fo3player::ScriptTransactionPlan> worldResultPlan;
 bool PublishFo3DialogueReferences(fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string&){return !worldDefer&&p.CommitScriptTransaction(plan);}
 uint64_t BeginFo3ResidentPreparedWorkflow(int,std::unique_ptr<fo3player::ScriptTransactionPlan>){return 0;}
-std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t){return {0,1};}
+std::vector<uint32_t> collisionTargets{0,1};
+std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t){return collisionTargets;}
 Fo3DoorCollisionPose collision;int collisionUpdates=0;
 bool SetFo3ScriptCollisionPose(uint32_t,const Fo3DoorCollisionPose& pose){collision=pose;++collisionUpdates;return true;}
 float gQ210Head[4]{};
@@ -52,6 +55,8 @@ uint64_t gQ230NpcResidenceRevision=0;
 ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
 bool Q2400FindSwingDoorObject(uint32_t){return !defaultTeleport.valid;}
 namespace fo3audio {void Open(uint32_t){}void Close(uint32_t){}}
+static uint32_t openedTerminal=0;
+bool OpenFo3TerminalInterface(uint32_t ref){openedTerminal=ref;return true;}
 static uint32_t occupiedSeat=0;
 bool BeginFo3PlayerSit(uint32_t ref){occupiedSeat=ref;return true;}
 #include "world/interaction/fo3-script-default-activation.inc"
@@ -333,7 +338,104 @@ static void OriginalVault112Access(const char* master,const std::string& meshes)
  Check(player.ScriptOpenState(gear)==1,"Vault 112 control panel opened gear door");
  std::cout<<"Smith Casey's Garage exterior link, switch, delayed hatch, Vault 112 load door and gear control opened in original-data replay\n";
 }
+static void ActorTriggerBounds(){
+ fo3pipdata::Placement trigger;trigger.z=30;
+ fo3pipdata::TriggerPrimitive box{{1,1,1},1,true};
+ const std::array<int16_t,6> body{-10,-2,0,10,2,40};
+ auto touches=[&](float x,float yaw,float scale){
+   return fo3script::OverlapsActor(trigger,box,{x,0,0},yaw,scale,body);
+ };
+ Check(touches(9,0,1),"standing body crosses trigger above feet");
+ Check(!touches(9,1.5707963f,1),"rotated narrow side clears trigger");
+ Check(!touches(0,0,.5f),"scaled body below trigger");
+ box.kind=2;
+ Check(touches(10.5f,0,1)&&!touches(12,0,1),"sphere closest point on actor bounds");
+ box.kind=1;box.modelSpace=true;box.center={0,10,0};trigger.rz=1.5707963f;
+ Check(touches(-19,0,1)&&!touches(9,0,1),"rotated model-space box offset");
+}
+// Recording adapters capture the production animation bridge's visual matrix
+// and BHK publications. The input save is made by the original package replay.
+static void RestoreFallingFixture(const char* master,const std::string& mesh,const char* save){
+ fo3player::Catalog catalog;std::string error;
+ Check(fo3player::LoadCatalog(master,catalog,error),"load original animation catalogue");
+ gPlayerSession=std::make_unique<fo3player::Session>(std::move(catalog));
+ auto& player=gPlayerSession->player;
+ Check(player.Restore(save,error),"restore physical crossing");
+ const auto lamp=player.Definitions().pipboy.formNames.at("mq04chandelierref");
+ const auto* run=player.ScriptAnimation(lamp);
+ Check(run&&run->group=="unequip"&&std::abs(run->started+run->duration*.5)<1e-6,"saved half phase");
+ std::vector<uint8_t> bytes;Check(LoadFalloutMeshFile(mesh,bytes,nullptr),"load original fixture");
+ auto asset=std::make_shared<fo3dooranim::Asset>();
+ Check(fo3anim::DecodeObjectAnimation(bytes,asset->hierarchy,asset->blockBones,asset->clips,true),"fixture hierarchy");
+ std::vector<Fo3NifCollisionShapeQ6F> shapes;Check(LoadFo3NifCollisionShapesComplete(mesh,shapes),"fixture collision shapes");
+ collisionTargets.clear();
+ uint32_t body=0;GpuObject object;object.refFormId=lamp;object.q2401DoorAnimation=asset;
+ for(const auto& shape:shapes){
+   collisionTargets.push_back(shape.targetBlock);
+   if(shape.kind==Fo3CollisionShapeKindQ6F::ConvexHull){body=shape.targetBlock;object.q2401AnimationBone=asset->blockBones.at(body);}
+ }
+ Check(body&&collisionTargets.size()==11,"original fixture body and links");
+ gObjects={object};++gFo3VisualPublication.revision;
+ fo3worldscript::Register();fo3worldscript::Animate();
+ const auto middle=collision.nodeTransforms.at(body)[14];
+ Check(collision.nodeTransforms.size()==11&&middle<-20&&middle>-26&&
+       std::abs(gObjects[0].q2400DoorTransform[14]-middle)<.001f,"restored visual and collision half pose");
+ fo3worldscript::seconds=run->duration;player.SetScriptRuntimeClock(run->duration,run->duration);
+ fo3worldscript::Animate();const auto end=collision.nodeTransforms.at(body)[14];
+ Check(end<-45&&end>-47&&std::abs(gObjects[0].q2400DoorTransform[14]-end)<.001f,"fixture endpoint");
+ bool playing=true;Check(player.ScriptAnimationPlaying(lamp,playing)&&!playing,"completed restored sequence");
+ std::cout<<"Restored chandelier geometry and all 11 collision transforms; fixture delta Z "<<middle<<" to "<<end<<" NIF units"<<std::endl;
+}
+// Feed the original addon to the ordinary object bridge independently of
+// effect placement. Its two UV controllers have different cycle periods.
+static void DrawAddonControllers(const std::string& file){
+ std::vector<Fo3StaticNifMesh> shapes;Check(LoadFo3StaticNifMeshes(file,shapes,true)&&shapes.size()==1,"addon geometry");
+ auto asset=std::make_shared<fo3dooranim::Asset>();std::vector<uint8_t> bytes;
+ Check(LoadFalloutMeshFile(file,bytes,nullptr)&&
+       fo3anim::DecodeObjectAnimation(bytes,asset->hierarchy,asset->blockBones,asset->clips,true),"addon controllers");
+ gPlayerSession=std::make_unique<fo3player::Session>(fo3player::Catalog{});
+ GpuObject object;object.refFormId=1;object.q2401DoorAnimation=asset;
+ const int bone=asset->blockBones.at(shapes.front().shapeBlock);object.q2401AnimationBone=bone;
+ // A turned, scaled instance at a nonzero origin. The billboard replaces
+ // orientation in world space but retains scale, pivot and descendant motion.
+ fo3anim::Matrix placement={0,0,-2,0, -2,0,0,0, 0,2,0,0, 31,40,-19,1};
+ std::copy(placement.begin(),placement.end(),object.q2016PlacementMatrix);
+ gObjects={object};++gFo3VisualPublication.revision;
+ fo3worldscript::Animate();
+ const int parent=asset->hierarchy.bones.at(bone).parent;
+ for(double time:{.5,2.,7.}){
+   const auto& clip=asset->clips.front();
+   auto diffuse=clip.properties.front().diffuse;
+   diffuse.offset={float(-std::fmod(time,6.7)/6.7),float(std::fmod(time,41./30.)/(41./30.))};
+   fo3anim::Pose sampled;Check(fo3anim::Sample(asset->hierarchy,clip,time,sampled),"addon pose");
+   const auto authored=fo3anim::Multiply(placement,sampled.global.at(parent));
+   const float scale=std::hypot(authored[0],authored[1],authored[2]);
+   fo3anim::Matrix inv;Check(fo3anim::Inverse(sampled.global.at(parent),inv),"billboard inverse");
+   const auto child=fo3anim::Multiply(inv,sampled.global.at(bone));
+   const auto bind=fo3anim::Multiply(placement,asset->hierarchy.bindGlobal.at(bone));
+   for(int side=0;side<3;++side){
+     // Camera direction in game XY, with unrelated camera elevation.
+     const float x=side==0?3:side==1?-4:0,y=side==0?4:side==1?3:0;
+     gQ210Head[0]=authored[12]+x;gQ210Head[1]=authored[13]+11;gQ210Head[2]=authored[14]-y;
+     fo3worldscript::seconds=time;fo3worldscript::Animate();
+     float expected[2][4];diffuse.ShaderRows(expected);
+     for(int axis=0;axis<2;++axis)for(int i=0;i<4;++i)
+       Check(std::abs(expected[axis][i]-gObjects[0].scriptDiffuseRows[axis][i])<.0001f,"addon renderer UV");
+     const float xx=side==2?1:-y/5,xy=x/5,yy=side==2?1:y/5;
+     const fo3anim::Matrix facing={scale*xx,0,-scale*xy,0, scale*xy,0,-scale*yy,0,
+                                  0,scale,0,0, authored[12],authored[13],authored[14],1};
+     const auto world=fo3anim::Multiply(facing,child);
+     fo3anim::Matrix draw;std::copy_n(gObjects[0].q2400DoorTransform,16,draw.begin());
+     const auto observed=fo3anim::Multiply(draw,bind);
+     for(size_t i=0;i<16;++i)Check(std::abs(observed[i]-world[i])<.001f,"addon world billboard basis and pivot");
+   }
+ }
+ std::cout<<"Original addon billboard basis, pivot, scale and independent UV clocks reached renderer draw inputs"<<std::endl;
+}
 int main(int argc,char** argv){try{
+ if(argc==3&&std::string(argv[1])=="addon"){DrawAddonControllers(argv[2]);return 0;}
+ if(argc==5&&std::string(argv[1])=="fall"){RestoreFallingFixture(argv[2],argv[3],argv[4]);return 0;}
+ ActorTriggerBounds();
  if(argc==4&&std::string(argv[3])=="vault112"){OriginalVault112Access(argv[1],argv[2]);return 0;}
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
  c.references[10].base=100;c.references[10].cell=1;c.pipboy.targets[10].cell=1;
