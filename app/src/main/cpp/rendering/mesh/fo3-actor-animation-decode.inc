@@ -1,6 +1,6 @@
 // Shares the existing bounds-checked Fallout 3 NIF header and block reader.
 // Layouts: niftools/nifxml nif.xml (20.2.0.7, user 11, Bethesda 34).
-#include "fo3-actor-animation.h"
+#include "../../npc/fo3-actor-animation.h"
 #include <functional>
 #include <limits>
 namespace {
@@ -592,7 +592,7 @@ bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t>& bytes,Skeleton& out,
   return true;
 }
 
-#include "fo3-furniture.h"
+#include "../../npc/fo3-furniture.h"
 bool fo3furniture::DecodeMarkers(const std::vector<uint8_t>& bytes,std::vector<Marker>& out) {
   out.clear();NifHeader h;if(!ActorHeader(bytes,h)||h.userVersion!=11||h.bsVersion!=34)return false;
   std::vector<Marker> decoded;
