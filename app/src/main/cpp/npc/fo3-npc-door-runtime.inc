@@ -12,18 +12,23 @@ static bool Q230DoorMoving(const Q2400InteriorDoorState& state) {
   return state.collisionSceneSerial==gQ2400DoorSceneSerial&&
     (state.q2401NifAnimation?state.q2401Moving:(state.targetOpen?state.progress<.999f:state.progress>.001f));
 }
+static void Q230RefreshDoorBounds(){
+  static size_t objectCount=0;
+  if(gQ230DoorBoundsScene!=gQ2400DoorSceneSerial||objectCount!=gObjects.size()){
+    objectCount=gObjects.size();
+    gQ230DoorBounds.clear();
+    for(const auto& object:gObjects)if(object.q2400SwingDoor&&!object.teleport.valid)
+      gQ230DoorBounds.push_back({object.refFormId,{object.minX,object.minY,object.minZ},{object.maxX,object.maxY,object.maxZ}});
+    gQ230DoorBoundsScene=gQ2400DoorSceneSerial;
+  }
+}
 static uint32_t Q230BlockingMovingDoor(const std::array<float,3>& origin,const std::array<float,3>& direction,float step) {
   bool moving=false;for(const auto& entry:gQ2400InteriorDoors)if(Q230DoorMoving(entry.second)){moving=true;break;}
   if(!moving)return 0;
   // A door activated by someone else has temporarily absent world collision
   // during its animation. Retain original closed bounds as a conservative
   // navigation barrier until settlement, including after a route replan.
-  if(gQ230DoorBoundsScene!=gQ2400DoorSceneSerial){
-    gQ230DoorBounds.clear();
-    for(const auto& object:gObjects)if(object.q2400SwingDoor&&!object.teleport.valid)
-      gQ230DoorBounds.push_back({object.refFormId,{object.minX,object.minY,object.minZ},{object.maxX,object.maxY,object.maxZ}});
-    gQ230DoorBoundsScene=gQ2400DoorSceneSerial;
-  }
+  Q230RefreshDoorBounds();
   for(const auto& bounds:gQ230DoorBounds){const auto state=gQ2400InteriorDoors.find(bounds.reference);
     float hit=0;if(state!=gQ2400InteriorDoors.end()&&Q230DoorMoving(state->second)&&fo3interaction::Box(origin,direction,bounds.lo,bounds.hi,step,hit))return bounds.reference;
   }
@@ -60,7 +65,6 @@ static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,fl
   const bool obstructed=TraceFo3WorldSurface(origin[0],origin[1],origin[2],dx,dy,dz,
       distance,actor.source.refFormId,0,&hit);
   const bool blocked=obstructed&&hit.distance<stepTrace;
-  if(now<actor.runtime.nextDoorQuery)return blocked;
   // Most exterior ray hits are terrain or statics. Consult the ESM before
   // looking up a resident leaf in the visual scene.
   const auto isDoor=[](uint32_t reference){
@@ -70,18 +74,42 @@ static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,fl
     return found!=defs.references.end()&&defs.pipboy.doorBases.count(found->second.base)&&
            Q2400FindSwingDoorObject(reference);
   };
-  bool doorHit=isDoor(hit.reference);
+  bool doorHit=obstructed&&isDoor(hit.reference);
+  const float waist=(origin[1]+actor.runtime.position[1])*.5f;
+  float nearestObstruction=obstructed?hit.distance:distance;
   if(!doorHit&&reach){
     // Windowed leaves may have no collision surface at chest height.
-    const float waist=(origin[1]+actor.runtime.position[1])*.5f;
     Fo3WorldSurfaceHit lower;
     if(TraceFo3WorldSurface(origin[0],waist,origin[2],dx,dy,dz,distance,
-         actor.source.refFormId,0,&lower)&&(!obstructed||lower.distance<=hit.distance+.1f)){
-      hit=lower;doorHit=isDoor(hit.reference);
+         actor.source.refFormId,0,&lower)&&lower.distance<=nearestObstruction){
+      nearestObstruction=lower.distance;
+      if(isDoor(lower.reference)){hit=lower;doorHit=true;}
+    }
+  }
+  if(!doorHit){
+    // A double door can admit both centre rays through the seam while its
+    // leaves still block the actor. Only trace the body width near a local door.
+    const float radius=.5f*fo3npc::MovementPolicy::CrowdBodyClearance/FO3_UNITS_PER_METRE;
+    const float endX=origin[0]+dx*nearestObstruction,endZ=origin[2]+dz*nearestObstruction;
+    const float minX=std::min(origin[0],endX)-radius,maxX=std::max(origin[0],endX)+radius;
+    const float minZ=std::min(origin[2],endZ)-radius,maxZ=std::max(origin[2],endZ)+radius;
+    Q230RefreshDoorBounds();
+    for(const auto& bounds:gQ230DoorBounds){
+      if(maxX<bounds.lo[0]||minX>bounds.hi[0]||maxZ<bounds.lo[2]||minZ>bounds.hi[2]||
+         waist<bounds.lo[1]||waist>bounds.hi[1])continue;
+      for(float side:{-radius,radius}){
+        Fo3WorldSurfaceHit leaf;
+        if(TraceFo3WorldSurface(origin[0]-dz*side,waist,origin[2]+dx*side,dx,dy,dz,
+             nearestObstruction,actor.source.refFormId,0,&leaf)&&isDoor(leaf.reference)){
+          hit=leaf;nearestObstruction=leaf.distance;doorHit=true;
+        }
+      }
+      break;
     }
   }
   if(!doorHit||Q230DoorSettledOpen(hit.reference))return blocked;
   const bool doorInStep=hit.distance<stepTrace;
+  if(now<actor.runtime.nextDoorQuery)return blocked||doorInStep;
   const auto door=gQ2400InteriorDoors.find(hit.reference);
   if(door!=gQ2400InteriorDoors.end()&&Q230DoorMoving(door->second))return blocked;
   if(!gPlayerSession)return blocked;
