@@ -248,6 +248,7 @@ jobs:
 
       - name: Restore stable development signing key
         run: |
+          python3 tests/build/test_signing_key.py
           base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore
           keytool -list \
             -keystore app/falloutquest-dev.keystore \
