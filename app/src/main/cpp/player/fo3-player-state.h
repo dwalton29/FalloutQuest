@@ -978,6 +978,8 @@ public:
   bool PollBarter(BarterRequest& out);
   const std::vector<Stack> *ContainerContents(uint32_t reference) const;
   bool CanTakeContainerStack(uint32_t reference, uint64_t stack) const;
+  bool CanStoreContainerStack(uint32_t reference,const Stack& stack) const;
+  bool TransferContainerItems(uint32_t reference,bool depositing,const std::vector<uint64_t>& stacks,int32_t count);
   bool TakeContainerStack(uint32_t reference, uint64_t stack);
   bool IsCollected(uint32_t reference) const {
     return state_.collected.count(reference) != 0;

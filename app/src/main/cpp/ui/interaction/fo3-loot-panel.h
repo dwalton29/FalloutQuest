@@ -93,7 +93,7 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
     }
     const bool take = !panel.rows.empty() && panel.rows[panel.selected].allowed;
     const bool crime=!panel.rows.empty()&&panel.rows[panel.selected].crime;
-    text(take ? (crime?"Steal":"Take") : "", -.15f, -.209f,crime);
+    text(take ? (crime?"Steal    X Transfer":"Take    X Transfer") : "X Transfer", -.15f, -.209f,crime);
     r.textCount = static_cast<GLsizei>(vertices.size()) - r.textStart;
     glBindVertexArray(r.vao);
     glBindBuffer(GL_ARRAY_BUFFER, r.vbo);

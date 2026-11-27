@@ -2270,6 +2270,16 @@ private:
                         (void)Fo3GameplayXrTime(frameState.predictedDisplayTime);
                     }
                 }
+                const bool transferWasOpen=gTransfer.reference!=0;
+                const bool transferX=barterConfirmDown_&&!transferXDown_;
+                const bool transferA=activateDownQ1700_&&!transferADown_;
+                const bool transferB=pipBackDown_&&!transferBDown_;
+                transferXDown_=barterConfirmDown_;transferADown_=activateDownQ1700_;transferBDown_=pipBackDown_;
+                if(Fo3GameplayBlocked()||IsFo3LoadingVisible()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3ScriptMessageFocus()||
+                   Fo3LevelUpFocus()||Fo3LockpickFocus()||Fo3TerminalFocus()||!gPlayerSession)gTransfer.reference=0;
+                if(gTransfer.reference&&(gTransferCell_!=gCurrentCellFormId||gPlayerSession->player.PlayerControlDisabled(0)||
+                    std::hypot(gQ210Head[0]-gTransfer.panel.anchor[0],gQ210Head[1]-gTransfer.panel.anchor[1],
+                               gQ210Head[2]-gTransfer.panel.anchor[2])>fo3npc::DialoguePolicy::LeaveRange))gTransfer.reference=0;
                 bool dialogueControls=vatsOwned;
                 const bool movieControls=Fo3MovieFocus();
                 fqperf::Scope menuUpdate(fqperf::MenuUpdate);
@@ -2383,7 +2393,22 @@ private:
                 if(!Fo3GameplayBlocked()&&!vatsOwned) {
                     // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
                     UpdateFo3InteriorDoorsQ2400();
-                    UpdateDoorAimQ1700(gameplaySeconds);
+                    if(!gTransfer.reference)UpdateDoorAimQ1700(gameplaySeconds);
+                    if(!dialogueControls&&!Fo3PipboyFocus()&&!Fo3BarterFocus()&&!Fo3LevelUpFocus()&&
+                       !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&transferX&&
+                       q210LeftValid&&GetFo3LootPanel().reference&&gPlayerSession&&!gPlayerSession->player.PlayerControlDisabled(0)){
+                        const auto panelRevision=gTransfer.panel.revision;gTransfer={};gTransfer.panel.revision=panelRevision;gTransfer.reference=GetFo3LootPanel().reference;
+                        gTransferCell_=gCurrentCellFormId;gTransfer.panel.anchor=GetFo3LootPanel().anchor;
+                        gTransfer.name=GetFo3LootPanel().title;gTransfer.panel.visible=true;
+                        gTransfer.Refresh(gPlayerSession->player);
+                    }else if(gTransfer.reference&&sessionState_==XR_SESSION_STATE_FOCUSED){
+                        if(gTransfer.Input(gPlayerSession->player,gameplaySeconds,lootScrollY_,transferA,transferB,transferX))
+                            FlushFo3PlayerState();
+                    }
+                    if(transferWasOpen||gTransfer.reference){
+                        dialogueControls=true;
+                        if(activateDownQ1700_)activateLatched_=true;
+                    }
                     if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                         activateLatched_ = true;
                         if(gPlayerSession&&gPlayerSession->player.PlayerControlDisabled(0)){
@@ -2991,6 +3016,11 @@ private:
                 fo3levelui::Render(mvp.m,gLevelUp.panel);
             }
             const auto headMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
+            if(showHud&&gTransfer.reference&&!IsFo3LoadingVisible()){
+                Mat4 offset{};offset.m[0]=offset.m[5]=offset.m[10]=offset.m[15]=1;offset.m[14]=-1.1f;
+                const auto mvp=Multiply(headMvp,offset);
+                fo3dialogueui::Render(mvp.m,gTransfer.panel,fo3barterui::State());
+            }
             if(showHud&&gRepair.panel.visible&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()){
                 Mat4 offset{};offset.m[0]=offset.m[5]=offset.m[10]=offset.m[15]=1.f;
                 offset.m[14]=-1.1f;offset.m[13]=.10f;
@@ -3034,7 +3064,7 @@ private:
 
                     }
                     const auto& loot=GetFo3LootPanel();
-                    if (loot.reference&&!Fo3VatsFocus()) {
+                    if (loot.reference&&!gTransfer.reference&&!Fo3VatsFocus()) {
                         const float yaw=lootPanelYaw_;
                         Mat4 panelModel{};
                         panelModel.m[0]=std::cos(yaw);panelModel.m[2]=-std::sin(yaw);
@@ -3262,6 +3292,8 @@ private:
     XrAction pauseAction_=XR_NULL_HANDLE;
     XrAction pipBackAction_{XR_NULL_HANDLE};
     XrAction barterConfirmAction_{XR_NULL_HANDLE};
+    uint32_t gTransferCell_=0;
+    bool transferXDown_=false,transferADown_=false,transferBDown_=false;
     bool barterConfirmDown_=false;
     bool pipBackDown_=false,pipLeftAimTracked_=false;
     XrAction lootScrollAction_{XR_NULL_HANDLE};

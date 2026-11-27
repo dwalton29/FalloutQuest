@@ -218,6 +218,45 @@ bool Player::CanTakeContainerStack(uint32_t id, uint64_t stack) const {
     }
   return false;
 }
+bool Player::CanStoreContainerStack(uint32_t id,const Stack& s) const {
+  auto it=catalog_->items.find(s.formId);
+  return CanLootContainer(id)&&it!=catalog_->items.end()&&it->second.playable&&!it->second.script&&
+      !it->second.cannotDrop&&!s.equipmentLocked&&!IsQuestObject(s.formId)&&!s.scriptInstance;
+}
+bool Player::TransferContainerItems(uint32_t id,bool depositing,const std::vector<uint64_t>& stacks,int32_t count){
+  if(count<=0||!CanLootContainer(id)||!ContainerContents(id))return false;
+  Player candidate(*this,ScriptCandidateTag{});
+  auto& contents=candidate.state_.containers.at(id);
+  auto& from=depositing?candidate.state_.inventory:contents;
+  size_t total=0;for(const auto& c:candidate.state_.containers)total+=c.second.size();
+  for(uint64_t key:stacks){
+    auto it=std::find_if(from.begin(),from.end(),[&](const Stack& s){return s.id==key;});
+    if(it==from.end())return false;
+    int n=std::min(count,it->count);
+    if(depositing){
+      if(!candidate.CanStoreContainerStack(id,*it)||contents.size()>=10000||total>=30000)return false;
+      Stack moved=*it;moved.count=n;moved.equipped=false;
+      if(n<it->count){
+        if(candidate.state_.nextStackId==UINT64_MAX)return false;
+        moved.id=candidate.state_.nextStackId++;
+      }
+      if(!candidate.Remove(key,n))return false;
+      contents.push_back(std::move(moved));++total;
+    }else{
+      if(n<it->count){
+        if(it->scriptInstance||candidate.state_.nextStackId==UINT64_MAX)return false;
+        Stack remainder=*it;remainder.id=candidate.state_.nextStackId++;remainder.count-=n;
+        it->count=n;from.push_back(std::move(remainder));
+      }
+      if(!candidate.TakeContainerStack(id,key))return false;
+    }
+    count-=n;if(!count)break;
+  }
+  if(count)return false;
+  SwapScriptPayload(candidate);
+  containerInteraction_=candidate.containerInteraction_;containerKarmaCommitted_=candidate.containerKarmaCommitted_;
+  ++revision_;++scriptEffectRevision_;return true;
+}
 bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   if (!CanTakeContainerStack(id, stack))
     return false;

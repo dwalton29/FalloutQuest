@@ -1437,12 +1437,21 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
   const bool waitAtMarker=placed&&(!p.location2.valid||!listenerInArea);
   const auto& destination=waitAtMarker?anchor:listener;
   const float arrival=waitAtMarker?float(std::max(8,p.location.radius)):talkingDistance;
-  if(distance(here,destination)<=arrival){
+  // A wall-mounted talking activator is approached on the floor below its origin.
+  // Measure reach against the speaker's standing bounds, keeping vertical separation
+  // beyond the body (including other floors) in the distance test.
+  auto speakingPoint=here;
+  if(gPlayerSession->player.TalkingActivatorActor(p.target.value)){
+    const auto* body=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
+    const float height=body&&body->objectBounds[5]>0?float(body->objectBounds[5]):fo3npc::MovementPolicy::CrowdHeight;
+    speakingPoint[2]=std::clamp(listener[2],here[2],here[2]+height);
+  }
+  if((waitAtMarker?distance(here,destination):distance(speakingPoint,listener))<=arrival){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
     actor.runtime.navigationDoor=0;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Conversation;
     actor.runtime.procedure=fo3npc::Procedure::Waiting;
-    if(now<actor.aiRepathAt||!listenerInArea||distance(here,listener)>talkingDistance)return;
+    if(now<actor.aiRepathAt||!listenerInArea||distance(speakingPoint,listener)>talkingDistance)return;
 #ifdef FO3_NPC_CHAT_REQUEST
     if(FO3_NPC_CHAT_REQUEST(actor.source.refFormId,p.target.value,now)){
       actor.aiRepathAt=now+2.;

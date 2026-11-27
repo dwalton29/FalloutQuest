@@ -18,7 +18,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
 // Returns true only for a queued door transition (caller resets VR origin).
 bool ActivateFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                             float dz);
-struct Fo3LootRow {uint64_t stack=0;std::string name;int32_t count=0;bool allowed=false,crime=false;};
+struct Fo3LootRow {uint64_t stack=0;std::string name;int32_t count=0;bool allowed=false,crime=false;std::vector<uint64_t> instances{};};
 struct Fo3LootPanel {
   uint32_t reference=0;
   std::array<float,3> anchor{};

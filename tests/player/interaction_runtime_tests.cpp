@@ -1,3 +1,4 @@
+#include "world/interaction/fo3-transfer-menu.h"
 #include "world/interaction/fo3-shoulder-zone.h"
 #include "ui/interaction/fo3-item-notifications.h"
 #include "player/fo3-player-state.h"
@@ -376,6 +377,27 @@ int main() {
     Check(!GetFo3LootPanel().reference, "aim loss closes loot list");
     Check(!activate() && GetFo3LootPanel().rows.empty(),
           "activation without current selection cannot loot stale row");
+    {
+      auto fixture=c;fixture.items[101].kind=fo3player::ItemKind::Weapon;
+      fo3player::Player player(fixture);Check(player.PrepareContainer(40),"transfer fixture");
+      Check(player.Add(101,3,1)&&player.Add(101,1,.5f),"seed distinct weapon instances");
+      fo3transfer::Menu menu;menu.reference=40;menu.Refresh(player);
+      menu.Input(player,0,0,false,false,true);
+      Check(menu.rows.size()==2&&menu.rows[0].count==3,"stack identical copies and separate condition");
+      const auto ids=menu.rows[0].ids;
+      Check(!player.TransferContainerItems(40,true,ids,4)&&player.ItemCount(101)==4,"stale quantity rolls back");
+      menu.Input(player,1,0,true,false,false);
+      menu.Input(player,2,0,false,false,false);
+      menu.Input(player,3,-1,false,false,false);
+      Check(menu.Input(player,4,0,true,false,false)&&player.ItemCount(101)==2,"deposit selected quantity");
+      std::string error;
+      Check(player.Save("/tmp/fq-transfer.fqps",error),"save partial transfer");
+      fo3player::Player loaded(fixture);
+      Check(loaded.Restore("/tmp/fq-transfer.fqps",error)&&loaded.ItemCount(101)==2&&
+            loaded.TransferContainerItems(40,false,{ids[0],ids[1]},2),"saved container retains transferred instances");
+      Check(player.TransferContainerItems(40,false,{ids[0],ids[1]},2)&&player.ItemCount(101)==4,"withdraw the same instances");
+      Check(player.Snapshot().inventory.back().id==ids[1],"weapon identity preserved");
+    }
     fo3loot::Cursor cursor;
     cursor.Target(40, 10);
     cursor.Scroll(-1, 1, 10);

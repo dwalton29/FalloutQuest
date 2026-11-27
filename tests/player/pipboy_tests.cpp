@@ -69,6 +69,14 @@ int main() {
     assert(quests.SetObjective(10,1,false,fo3pipdata::Completion::Complete));
     journal.Refresh(quests);assert(journal.rows.size()==1&&journal.rows[0]==10);
   }
+  {
+    auto copies=Player();Menu items;items.tab=Tab::Items;
+    assert(copies.Add(1,3));items.Refresh(copies);
+    assert(items.rows.size()==1&&items.inventoryCounts.at(items.rows.front())==3);
+    const auto representative=items.rows.front();
+    assert(copies.Equip(representative));items.Refresh(copies);
+    assert(items.rows.size()==2&&items.inventoryCounts.at(representative)==1);
+  }
   auto p = Player();
   Menu m;
   assert(m.BeginFrame(1));

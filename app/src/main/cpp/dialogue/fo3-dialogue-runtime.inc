@@ -16,7 +16,9 @@ std::unordered_map<uint32_t,DialogueEligibility> gDialogueEligibility;
 std::unordered_set<std::string> gDialogueDiagnostics;
 #include "fo3-barter-runtime.inc"
 #include "fo3-repair-runtime.inc"
-bool Fo3BarterFocus(){return gBarter.active||gRepair.panel.visible;}
+#include "world/interaction/fo3-transfer-menu.h"
+fo3transfer::Menu gTransfer;
+bool Fo3BarterFocus(){return gBarter.active||gRepair.panel.visible||gTransfer.reference;}
 bool Fo3DialogueFocus(){return gDialogue.Active()||gRepair.panel.visible;}
 Q230ActorVisual* DialogueActor(uint32_t reference) {
   for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==reference)return &actor;
@@ -230,7 +232,7 @@ void EndFo3Dialogue(const char* reason){
 }
 bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0,
                       fo3dialogue::GreetingInitiator initiator=fo3dialogue::GreetingInitiator::Player) {
-  if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
+  if(Fo3PipboyFocus()||Fo3DialogueFocus()||gTransfer.reference||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
   auto* actor=DialogueActor(reference);if(!actor)return false;
 #ifdef FO3_NPC_CHAT_RUNTIME
   if(!actor->runtime.CanTalk()||!fo3worldscript::AllowsPlayerDialogue())return false;
@@ -344,7 +346,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
     if(!gPlayerSession||Fo3PipboyFocus()||IsFo3LoadingVisible())CloseFo3Repair();
     else UpdateFo3Repair(now,stick,pressA,pressB,x,focused);
   }
-  if(gPlayerSession&&!gBarter.active&&!gRepair.panel.visible&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible()&&
+  if(gPlayerSession&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible()&&
      gDialogue.phase!=fo3dialogue::Phase::Speaking&&gDialogue.phase!=fo3dialogue::Phase::Results){
     uint32_t repairer=0;
     if(gPlayerSession->player.PollRepair(repairer)&&RefreshFo3Repair(repairer))gRepair.xDown=x;

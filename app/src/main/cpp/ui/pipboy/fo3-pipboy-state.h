@@ -1,4 +1,5 @@
 #pragma once
+#include "player/fo3-stack-group.h"
 // Physical device policy and canonical player view. No XR, GL, or asset I/O.
 #include "pipboy/fo3-map-runtime.h"
 #include "player/fo3-player-state.h"
@@ -145,7 +146,9 @@ inline uint64_t PresentationRevision(const fo3player::Player &p) {
     add(item.formId);
     add(item.count);
     add(item.equipped);
-    add(item.loadedRounds);
+    add(item.loadedRounds);add(item.needsAction);add(item.equipmentLocked);
+    add(item.ownership.owner);add(item.ownership.global);add(item.ownership.rank);
+    add(item.ownership.explicitOwner);add(item.ownership.valid);add(bool(item.scriptInstance));
     real(item.condition);
   }
   for (const auto &perk : b.perks) {
@@ -200,6 +203,7 @@ struct Menu {
   unsigned rebuilds = 0;
   // IDs only: stacks, quantities, equipment and conditions remain in Player.
   std::vector<uint64_t> rows;
+  std::map<uint64_t,int64_t> inventoryCounts;
   void Refresh(const fo3player::Player &player) {
     const auto contentRevision=PresentationRevision(player);
     if (revision == contentRevision)
@@ -211,14 +215,18 @@ struct Menu {
   }
   void RebuildRows(const fo3player::Player &p) {
     uint64_t keep = selected < rows.size() ? rows[selected] : 0;
-    rows.clear();
+    rows.clear();inventoryCounts.clear();
+    std::map<fo3player::InventoryGroupKey,uint64_t> groups;
     if (tab == Tab::Items)
       for (const auto &s : p.Snapshot().inventory) {
         auto i = p.Definitions().items.find(s.formId);
         if (s.count > 0 && i != p.Definitions().items.end() &&
             i->second.playable && i->second.kind != fo3player::ItemKind::Note &&
-            (Consumable(i->second)?2:Category(i->second.kind)) == page)
-          rows.push_back(s.id);
+            (Consumable(i->second)?2:Category(i->second.kind)) == page){
+          auto group=groups.emplace(fo3player::InventoryGroup(s),s.id);
+          if(group.second)rows.push_back(s.id);
+          inventoryCounts[group.first->second]+=s.count;
+        }
       }
     if (tab == Tab::Stats && page == 3)
       for (auto &i : p.Snapshot().pipboy.perks)

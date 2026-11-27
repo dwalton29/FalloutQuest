@@ -307,16 +307,16 @@ inline void ItemCards(fo3menu::Layout &l, int parent,
   }
 }
 inline std::vector<Row> InventoryRows(const fo3player::Player &p,
-                                      const std::vector<uint64_t> &ids) {
+                                      const fo3pip::Menu& menu) {
   std::vector<Row> rows;
-  for (auto id : ids) {
+  for (auto id : menu.rows) {
     const auto *s = fo3pip::Menu::Stack(p, id);
     if (!s)
       continue;
     const auto &item = p.Definitions().items.at(s->formId);
     rows.push_back(
         {item.name +
-             (s->count > 1 ? " (" + std::to_string(s->count) + ")" : ""),
+             (menu.inventoryCounts.at(id) > 1 ? " (" + std::to_string(menu.inventoryCounts.at(id)) + ")" : ""),
          "", s->equipped, false});
   }
   return rows;
@@ -497,7 +497,7 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
           Number(p.DamageResistance(fo3player::PlayerRef)));
     l.Set("IM_Headline_PlayerCapsInfo", "_Value", Number(p.ItemCount(0xf)));
     l.Set(l.Root(), "_EquippableItem", 0.);
-    auto rows = InventoryRows(p, menu.rows);
+    auto rows = InventoryRows(p, menu);
     auto ids = List(l, "IM_InventoryList", "IM_InventoryListTemplate", rows,
                     menu.selected);
     for (size_t i = 0; i < ids.size(); ++i) {

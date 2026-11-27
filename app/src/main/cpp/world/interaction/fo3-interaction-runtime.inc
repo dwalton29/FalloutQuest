@@ -1,4 +1,5 @@
 #include "ui/interaction/fo3-item-notifications.h"
+#include "player/fo3-stack-group.h"
 #include "ui/chargen/fo3-name-entry.h"
 #include "ui/chargen/fo3-special-book.h"
 #include "ui/chargen/fo3-tag-skills.h"
@@ -457,10 +458,15 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         gLootPanel.rows.clear();
         const auto base=catalog.references.at(target.reference).base;
         gLootPanel.title=catalog.actorInventories.count(base)?catalog.actorInventories.at(base).name:catalog.containers.at(base).name;
+        std::map<fo3player::InventoryGroupKey,size_t> groups;
         for (const auto& stack:*player.ContainerContents(target.reference)) {
             const auto& item=catalog.items.at(stack.formId);
-            if (item.playable && !item.name.empty()) gLootPanel.rows.push_back({stack.id,item.name,stack.count,
+            if(!item.playable||item.name.empty())continue;
+            const auto group=groups.emplace(fo3player::InventoryGroup(stack),gLootPanel.rows.size());
+            if(group.second)gLootPanel.rows.push_back({stack.id,item.name,0,
                 player.CanTakeContainerStack(target.reference,stack.id),player.ContainerStackOwnership(target.reference,stack.id).Theft()});
+            auto& row=gLootPanel.rows[group.first->second];
+            row.instances.push_back(stack.id);row.count+=std::min(INT32_MAX-row.count,stack.count);
         }
         gLootPanelRevision=player.Revision();
     }
@@ -535,8 +541,8 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         uint32_t base=0;
         int32_t count=0;
         for (const auto& stack:*gPlayerSession->player.ContainerContents(target.reference))
-            if (stack.id==row.stack) {base=stack.formId;count=stack.count;}
-        if (row.allowed && gPlayerSession->player.TakeContainerStack(target.reference,row.stack)) {
+            if (stack.id==row.stack) {base=stack.formId;count=row.count;}
+        if (row.allowed && gPlayerSession->player.TransferContainerItems(target.reference,false,row.instances,count)) {
             if(gPlayerSession->player.ActorHealth(target.reference)==0)Q6H_LOGI("NPC LOOT actor=%08X item=%08X count=%d",target.reference,base,count);
             NotifyFo3ItemTransfer(base,count);
             UpdateFo3LootSelection(target,NAN,0);
