@@ -57,7 +57,7 @@ struct RuntimeState {
   Animation animation=Animation::Idle;
   std::array<float,3> position{},destination{};
   float crouchHeadHeight=0;
-  bool packageSneak=false,packageWeaponDrawn=false;
+  bool packageSneak=false,packageWeaponDrawn=false,teammateSneak=false;
   bool PackageWeaponReady() const {
     return activity==Activity::Package&&packageWeaponDrawn&&!dialogue&&!furniture.Active();
   }

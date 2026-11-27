@@ -61,14 +61,14 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;const auto& state=p.Snapshot();
   ActorContext who=ctx.speaker;
   if(c.run==1)who=ctx.target;
-  else if(c.run==2){if(c.reference==0x14)who=ctx.target;else if(c.reference!=ctx.speaker.reference){
+  else if(c.run==2){if(c.reference==0x14){who=ctx.target;who.reference=fo3player::PlayerRef;}else if(c.reference!=ctx.speaker.reference){
     if(c.function==35){
       auto ref=p.Definitions().references.find(c.reference);
       if(ref==p.Definitions().references.end()){error="GetDisabled reference unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
-      if(ref==d.targets.end()||(c.function!=46&&c.function!=47&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=409&&c.function!=143&&c.function!=157&&c.function!=159&&c.function!=160)){error="reference context unavailable";return false;}
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=47&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73&&c.function!=409&&c.function!=143&&c.function!=157&&c.function!=159&&c.function!=160&&c.function!=454&&c.function!=455)){error="reference context unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}
@@ -99,6 +99,10 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(!pc&&!p.Definitions().actorPlacements.count(who.reference)){error="actor state unavailable";return false;}
     value=c.function==107?p.ActorKnockedOut(who.reference):c.function==237?p.ActorGhost(who.reference):p.ActorUnconscious(who.reference);
     return true;
+  case 454:
+    if(!pc&&!p.Definitions().actorPlacements.count(who.reference)){error="teammate actor unavailable";return false;}
+    value=p.IsPlayerTeammate(who.reference);return true;
+  case 455:value=float(state.playerTeammates.size());return true;
   case 84:return DeadCount(p,c.a,value,error);
   case 550:value=p.Definitions().goreDisabled;return true;
   case 46:{bool dead=false;if(!p.ActorDeathState(pc?fo3player::PlayerRef:who.reference,dead)){error="actor death state unavailable";return false;}value=dead;return true;}

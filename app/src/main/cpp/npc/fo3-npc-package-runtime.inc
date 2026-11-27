@@ -1118,10 +1118,10 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now,bool catc
   const float walk=catalog.npcBaseSpeed>0?catalog.npcBaseSpeed/FO3_UNITS_PER_METRE:1.05f;
   const auto pack=catalog.pipboy.packages.find(actor.aiPackage);
   const bool packageMove=actor.runtime.activity==fo3npc::Activity::Package&&pack!=catalog.pipboy.packages.end();
-  const bool sneak=packageMove&&(pack->second.flags&0x20000u);
-  const bool fast=(packageMove&&!sneak&&(catchUp||(pack->second.flags&0x2000u)||pack->second.type==10))||
+  const bool sneak=(packageMove&&(pack->second.flags&0x20000u))||gPlayerSession->player.FollowsPlayerSneak(actor.source.refFormId);
+  const bool fast=!sneak&&((packageMove&&(catchUp||(pack->second.flags&0x2000u)||pack->second.type==10))||
     (actor.runtime.activity==fo3npc::Activity::Combat&&(actor.runtime.action==fo3npc::CombatAction::Flee||
-      actor.runtime.action==fo3npc::CombatAction::Pursue||actor.runtime.action==fo3npc::CombatAction::Cover));
+      actor.runtime.action==fo3npc::CombatAction::Pursue||actor.runtime.action==fo3npc::CombatAction::Cover)));
   const float maximum=walk*(fast?catalog.npcRunMultiplier:sneak?fo3sneak::Setting(catalog.sneakSettings,"fMoveSneakMult"):1.f);
   float desiredSpeed=maximum*std::max(.25f,std::cos(std::min(std::fabs(error),1.3f)));
   if(goal+1==actor.aiPathGame.size())

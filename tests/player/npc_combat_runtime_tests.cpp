@@ -121,8 +121,103 @@ static void PackageCombatPolicyTests() {
   c.pipboy.packages[50].combatStyle=0;gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));assert(Q230SelectWeapon(gQ230NpcActors[0])&&gPlayerSession->player.ActorWeapon(42)->formId==10); // Null CNAM falls back to NPC ZNAM.
   c.pipboy.packages[50].combatStyle=999;gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));assert(!Q230SelectWeapon(gQ230NpcActors[0])); // Unavailable override never becomes a default style.
 }
+static void ActorScriptOrders(){
+  Prepare();
+  auto c=gPlayerSession->player.Definitions();
+  for(const auto ref:{42u,45u}){
+    c.actorPlacements[ref]=c.pipboy.targets[42];
+    c.references[ref].base=43;
+    c.pipboy.targets[ref]=c.actorPlacements[ref];
+  }
+  c.pipboy.formNames["fists"]=15;
+  c.pipboy.formNames["partner"]=42;
+  c.pipboy.formNames["ranged"]=201;
+  c.pipboy.formNames["melee"]=202;
+  auto& ranged=c.weapons.styles[201];ranged.valid=true;ranged.rangeMax=1;ranged.restrictions=2;
+  auto& melee=c.weapons.styles[202];melee.valid=true;melee.restrictions=1;
+  c.pipboy.packages[50].combatStyle=201;c.pipboy.packages[50].combatStyleValid=true;
+  c.pipboy.dialogueActors[43].combatStyle=202;
+  auto blade=c.items.at(10);blade.formId=20;blade.weapon.animation=1;blade.weapon.ammo=0;blade.weapon.clip=0;
+  c.items[20]=blade;c.actorInventories[43].entries.push_back({20,0,1,1,1,false});
+  auto& actor=gQ230NpcActors.front();
+  auto prepared=actor.combatWeapons.at(10);prepared.definition=blade.weapon;actor.combatWeapons[20]=prepared;
+  actor.combatWeapons[15]=prepared;
+  gPlayerSession=std::make_unique<Session>(c);
+  auto& p=gPlayerSession->player;
+  const auto& styles=p.Definitions().weapons.styles;
+  assert(p.PrepareActorInventory(42)&&Q230SelectWeapon(actor)&&p.ActorWeapon(42)->formId==10);
+  std::string error;
+  const auto path="/tmp/fq-actor-orders-"+std::to_string(getpid());
+  assert(p.Save(path,error)); // Previous format, before either command ran.
+  fo3pipdata::ResultScript orders;
+  orders.source="SetPlayerTeammate 1\nif Partner.GetPlayerTeammate && GetPlayerTeammateCount == 1\nPartner.SetCS Melee\nendif";
+  assert(p.ExecuteDialogueResult(orders,error,42));
+  assert(p.IsPlayerTeammate(42)&&!p.IsPlayerTeammate(45));
+  p.SetSneaking(true);assert(p.FollowsPlayerSneak(42)&&!p.FollowsPlayerSneak(45));
+  p.SetSneaking(false);assert(!p.FollowsPlayerSneak(42));
+  assert(fo3npc::Relationship(p,42,fo3player::PlayerRef)==fo3npc::Reaction::Ally);
+  assert(Q230Style(actor)==&styles.at(202));
+  auto other=actor;other.source.refFormId=45;
+  assert(Q230Style(other)==&styles.at(201)); // Same base, independent reference.
+  actor.runtime.activity=fo3npc::Activity::Combat;actor.runtime.reloadUntil=1;
+  const auto rounds=p.ActorWeapon(42)->loadedRounds;
+  assert(!Q230AdvanceReload(actor,2)&&actor.runtime.reloadUntil==0&&p.ActorWeapon(42)->loadedRounds==rounds);
+  actor.runtime.pendingAttack=true;
+  assert(Q230SelectWeapon(actor)&&p.ActorWeapon(42)->formId==20&&!actor.runtime.pendingAttack);
+
+  fo3dialogue::Context ctx{};ctx.player=&p;ctx.speaker.reference=45;ctx.target.reference=42;
+  fo3pipdata::Condition cond{};cond.function=454;cond.value=1;cond.run=1;
+  assert(fo3dialogue::Conditions({cond},ctx,error));
+  cond.run=2;cond.reference=42;assert(fo3dialogue::Conditions({cond},ctx,error));
+  cond.reference=fo3player::PlayerRef;cond.value=0;assert(fo3dialogue::Conditions({cond},ctx,error));
+  cond.run=0;cond.function=455;cond.value=1;assert(fo3dialogue::Conditions({cond},ctx,error));
+
+  const auto revision=p.Revision();
+  assert(p.ExecuteDialogueResult(orders,error,42)&&p.Revision()==revision);
+  orders.source="SetPlayerTeammate 0\nSetCS Partner"; // Actor is not a CSTY.
+  assert(!p.ExecuteDialogueResult(orders,error,42)&&p.Revision()==revision&&p.IsPlayerTeammate(42));
+  assert(p.Save(path+"-new",error));
+  assert(p.Restore(path,error)&&p.Snapshot().playerTeammates.empty()&&p.Snapshot().combatStyleOverrides.empty());
+  assert(p.Restore(path+"-new",error)&&p.IsPlayerTeammate(42)&&Q230Style(actor)==&styles.at(202));
+  unlink(path.c_str());unlink((path+"-new").c_str());
+  // The no-argument native instruction removes the override and reveals the package style.
+  orders={};orders.compiled={0xb1,0x10,0,0};
+  assert(p.ExecuteDialogueResult(orders,error,42)&&Q230Style(actor)==&styles.at(201));
+  actor.aiPackage=actor.runtime.package=0;
+  assert(Q230Style(actor)==&styles.at(202)); // No current package: base traits.
+  actor.combatWeapons.erase(20);
+  assert(Q230SelectWeapon(actor)&&actor.runtime.combatWeaponForm==15&&!p.ActorWeapon(42));
+  assert(!p.Snapshot().actors.at(42).equippedWeapon);
+  assert(p.SetPlayerTeammate(fo3player::PlayerRef,true)&&!p.IsPlayerTeammate(fo3player::PlayerRef));
+  assert(p.ApplyAttack(fo3player::PlayerRef,10,42,200)&&!p.IsPlayerTeammate(42));
+}
+
+static void OriginalFollowerOrders(fo3player::Player& player,const char* master){
+  const auto& defs=player.Definitions().pipboy;
+  const auto li=defs.formNames.at("doctorliref");
+  const auto package=defs.formNames.at("mq05tafttunnellifollowplayer");
+  std::string error;
+  for(bool ending:{false,true}){
+    auto plan=player.PreparePackageEventTransaction(li,package,ending,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    assert(plan&&!plan->ExecutedScripts().empty());
+    fo3script::ScriptMasterMatch matched;std::atomic<bool> cancel{false};
+    assert(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),matched,cancel,error));
+    assert(player.CommitScriptTransaction(*plan)&&player.IsPlayerTeammate(li)==!ending);
+  }
+  const auto jericho=defs.formNames.at("jerichoref");
+  const auto style=defs.formNames.at("followerscombatstyleranged");
+  for(const auto& topic:defs.topics)for(const auto& info:topic.second)if(info.id==0x626fc){
+    auto native=info.begin;native.source.clear();
+    assert(!native.compiled.empty()&&player.ExecuteDialogueResult(native,error,jericho));
+    assert(player.Snapshot().combatStyleOverrides.at(jericho)==style);
+    return;
+  }
+  assert(false&&"Missing original Jericho order");
+}
+
 static void OriginalCombatPolicies(const char* path) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));gPlayerSession=std::make_unique<Session>(std::move(c));const auto& catalog=gPlayerSession->player.Definitions();
+  OriginalFollowerOrders(gPlayerSession->player,path);
   size_t defensive=0,overrides=0;Q230ActorVisual actor;actor.source.baseFormId=7;
   for(const auto& entry:catalog.pipboy.packages){const auto& p=entry.second;if(fo3npc::Defensive(&p))++defensive;if(!p.combatStyle)continue;
     ++overrides;actor.aiPackage=entry.first;assert(p.combatStyleValid);const auto style=catalog.weapons.styles.find(p.combatStyle);assert(style!=catalog.weapons.styles.end()&&style->second.valid);assert(Q230Style(actor)==&style->second);
@@ -664,6 +759,7 @@ int main(int argc,char** argv){
  std::cout<<"Silent occlusion, sound and hit origins, target selection, local search and reacquisition passed\n";
  return 0;
 #endif
+  ActorScriptOrders();
   EndIdleRetirement();
   ScriptOrderedFists();
   ScriptOrderedFists(true);

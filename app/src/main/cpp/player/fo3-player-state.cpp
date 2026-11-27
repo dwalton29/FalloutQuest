@@ -1779,8 +1779,9 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(const auto& container:state_.containers)for(const auto& stack:container.second)collectScript(stack);
   for(const auto& weapon:state_.worldWeapons)collectScript(weapon.instance);
   const bool hasRevivedCorpse=std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& entry){return entry.second.revivedAuthoredCorpse;});
+  const bool hasActorOrders=!state_.combatStyleOverrides.empty()||!state_.playerTeammates.empty();
   const bool seededShaders=!state_.magicShaders.empty();
-  const bool hasAnimations=seededShaders||!scriptAnimations_.empty();
+  const bool hasAnimations=hasActorOrders||seededShaders||!scriptAnimations_.empty();
   const bool hasEffects=hasAnimations||!state_.placedBlastHits.empty()||!state_.placedEffects.empty()||!state_.magicShaders.empty();
   const bool hasPushes=hasEffects||!state_.ragdollPushes.empty();
   const bool hasKillers=hasPushes||!state_.actorKillers.empty();
@@ -2178,7 +2179,14 @@ bool Player::Save(const std::string &path, std::string &error) const {
       payload.insert(payload.end(),run.group.begin(),run.group.end());
     }
   }
-  Put32(bytes, seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasActorOrders){
+    Put32(payload,0x31524f41); // AOR1
+    Put32(payload,uint32_t(state_.combatStyleOverrides.size()));
+    for(const auto& [actor,style]:state_.combatStyleOverrides){Put32(payload,actor);Put32(payload,style);}
+    Put32(payload,uint32_t(state_.playerTeammates.size()));
+    for(uint32_t actor:state_.playerTeammates)Put32(payload,actor);
+  }
+  Put32(bytes, hasActorOrders ? 50 : seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -2238,7 +2246,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 49))
+      (version < 1 || version > 50))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2254,6 +2262,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   next.referenceEnabled.clear();
   next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
+  next.combatStyleOverrides.clear();next.playerTeammates.clear();
   next.actorDamage.clear();next.actorKillers.clear();next.ragdollPushes.clear();next.magicShaders.clear();next.placedEffects.clear();next.placedBlastHits.clear();next.actorKnockouts.clear();next.unconsciousActors.clear();next.ghostActors.clear();
   next.actors.clear();
   next.developmentWeaponGranted = false;
@@ -3025,6 +3034,24 @@ bool Player::Restore(const std::string &path, std::string &error) {
           std::string group(reinterpret_cast<const char*>(p+at),length);at+=length;
           if(group.find(char(0))!=std::string::npos||!restoredAnimations.emplace(ref,
              fo3script::AnimationRun{std::move(group),-phase,duration,bool(loop)}).second)return fail("Invalid object animation binding");
+        }
+      }
+      if(version>=50){
+        if(payload.size()-at<12||fo3esm::ReadU32(p+at)!=0x31524f41)return fail("Missing actor orders");
+        const auto styles=fo3esm::ReadU32(p+at+4);at+=8;
+        if(styles>(payload.size()-at-4)/8)return fail("Truncated actor combat styles");
+        for(uint32_t i=0;i<styles;++i,at+=8){
+          const auto actor=fo3esm::ReadU32(p+at),style=fo3esm::ReadU32(p+at+4);
+          const auto def=catalog_->weapons.styles.find(style);
+          if((actor!=PlayerRef&&!catalog_->actorPlacements.count(actor))||def==catalog_->weapons.styles.end()||
+             !def->second.valid||!next.combatStyleOverrides.emplace(actor,style).second)return fail("Invalid actor combat style");
+        }
+        const auto teammates=fo3esm::ReadU32(p+at);at+=4;
+        if(teammates>(payload.size()-at)/4)return fail("Truncated player teammates");
+        for(uint32_t i=0;i<teammates;++i,at+=4){
+          const auto actor=fo3esm::ReadU32(p+at);
+          if(actor==PlayerRef||!catalog_->actorPlacements.count(actor)||
+             !next.playerTeammates.insert(actor).second)return fail("Invalid player teammate");
         }
       }
       if(at!=payload.size())return fail("Trailing player save data");

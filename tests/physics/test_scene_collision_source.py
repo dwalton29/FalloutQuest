@@ -578,7 +578,8 @@ assert script_runtime.index('fo3script::ChargeScriptForms(')<script_runtime.inde
 assert 'expressionForms.limit=forms.limit-forms.used' in script_runtime
 # Expression bindings are collected only inside the explicit capture branch;
 # runtime capabilities of skipped expressions are validated on entry instead.
-expression_capture=script_runtime.index('scriptId,&expressionForms).Evaluate(v)')
+assert 'Expression(player,owner,expression,error,scriptId,&forms).Evaluate(value)' in script_runtime
+expression_capture=script_runtime.index('BindNumericExpression(*this,owner,scriptId,c.expression,expressionForms,v,capabilityError)')
 expression_guard=script_runtime.rfind('if(scriptTrace_){',0,expression_capture)
 assert expression_guard>=0
 assert expression_capture<script_runtime.index('\n      }',expression_guard)

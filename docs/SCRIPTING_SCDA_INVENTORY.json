@@ -209,23 +209,21 @@
       "REFR": 1
     },
     "compilation": {
-      "accepted": 7494,
-      "rejected": 437,
-      "with_deferred_failure": 217,
-      "mixed_event_blocks": 145,
+      "accepted": 7598,
+      "rejected": 378,
+      "with_deferred_failure": 174,
+      "mixed_event_blocks": 143,
       "no_event_blocks": 39,
       "unprobed": 4
     },
     "preview": {
-      "entered": 6511,
-      "rejected": 1001,
+      "entered": 6601,
+      "rejected": 917,
       "unprobed": 564,
-      "mixed_event_blocks": 181,
+      "mixed_event_blocks": 175,
       "skipped": 79
     },
     "observed_gaps": {
-      "unsupported command form/SetPlayerTeammate": 82,
-      "unsupported command form/SetCombatStyle": 61,
       "missing Enable/Disable reference": 51,
       "unresolved assignment": 51,
       "unsupported command form/ShowRepairMenu": 47,
@@ -269,7 +267,6 @@
       "unsupported actor value": 8,
       "unsupported command form/RemoveMe": 8,
       "unsupported command form/ShowWarning": 8,
-      "unsupported expression operand/GetPlayerTeammate": 8,
       "invalid Kill receiver": 7,
       "invalid PushActorAway origin, target or integer force": 7,
       "AddItem/invalid inventory command": 6,
@@ -302,6 +299,7 @@
       "unsupported expression operand/GetCurrentAIPackage": 4,
       "unsupported expression operand/GetKillingBlowLimb": 4,
       "unsupported expression operand/HasMagicEffect": 4,
+      "EvaluatePackage/unresolved EVP reference": 3,
       "unsupported command arguments/StopCombatAlarmOnActor": 3,
       "unsupported command form/AddPerk": 3,
       "unsupported command form/AttachAshPile": 3,
@@ -317,7 +315,6 @@
       "  set marker2 to marker1.getlinkedref ": 2,
       "  set marker3 to marker2.getlinkedref ": 2,
       "  set marker4 to marker3.getlinkedref ": 2,
-      "EvaluatePackage/unresolved EVP reference": 2,
       "StopLook/invalid reference action receiver": 2,
       "invalid AI actor value": 2,
       "invalid PlaceAtMe count": 2,
@@ -805,11 +802,9 @@
     "preview_rejections": {
       "script command rejected by canonical Player API": 315,
       "terminal action unavailable": 147,
-      "unsupported command form/SetCombatStyle": 59,
       "missing Enable/Disable reference": 49,
       "unsupported command form/ShowRepairMenu": 47,
       "unsupported executed command/StartCombat/StartCombat requires a caller and target actor": 31,
-      "unsupported command form/SetPlayerTeammate": 28,
       "distance location unavailable": 25,
       "unsupported command form/ModActorValue": 22,
       "invalid actor value damage/restore": 21,
@@ -831,7 +826,6 @@
       "invalid inventory command": 9,
       "unresolved PlaceAtMe reference or base": 8,
       "unsupported command form/SetCellOwnership": 8,
-      "unsupported expression operand/GetPlayerTeammate": 8,
       "GetInSameCell reference location unavailable": 7,
       "unbalanced expression": 7,
       "unsupported command form/RemoveMe": 7,
@@ -913,6 +907,7 @@
       "unsupported command form/SetZoneRespawns": 1,
       "unsupported command form/ShowAllMapMarkers": 1,
       "unsupported command form/Wait": 1,
+      "unsupported executed command/EvaluatePackage/unresolved EVP reference": 1,
       "unsupported executed command/SetActorValue/invalid AI actor value": 1,
       "unsupported executed command/SetActorValue/unsupported actor value": 1,
       "unsupported expression operand/GetLevel": 1,
@@ -953,6 +948,7 @@
       "GetInWorldspace": 11,
       "GetIsID": 9,
       "GetLocked": 8,
+      "GetPlayerTeammate": 8,
       "GetPermanentActorValue": 7,
       "GetSelf": 7,
       "GetTalkedToPC": 7,
@@ -977,8 +973,6 @@
       "IsActor": 1
     },
     "handler_diagnostics": {
-      "unsupported command form/SetPlayerTeammate": 82,
-      "unsupported command form/SetCombatStyle": 61,
       "unsupported command form/ShowRepairMenu": 47,
       "unsupported command form/SetOwnership": 25,
       "unsupported condition/IsPlayerMovingIntoNewSpace": 25,
@@ -1002,7 +996,6 @@
       "unsupported expression operand/GetGameSetting": 9,
       "unsupported command form/RemoveMe": 8,
       "unsupported command form/ShowWarning": 8,
-      "unsupported expression operand/GetPlayerTeammate": 8,
       "unsupported command form/PlaceLeveledActorAtMe": 6,
       "unsupported command form/SetDestroyed": 6,
       "unsupported condition/GetInZone": 6,
@@ -1137,13 +1130,13 @@
     },
     "literal_event_dispatch_sites": {
       "gamemode": [
-        "scripting/fo3-script-runtime.inc:2000",
-        "scripting/fo3-script-runtime.inc:2015",
-        "scripting/fo3-script-runtime.inc:2033"
+        "scripting/fo3-script-runtime.inc:2017",
+        "scripting/fo3-script-runtime.inc:2032",
+        "scripting/fo3-script-runtime.inc:2050"
       ],
       "onactivate": [
         "npc/fo3-npc-door-runtime.inc:121",
-        "scripting/fo3-script-runtime.inc:929",
+        "scripting/fo3-script-runtime.inc:946",
         "scripting/fo3-script-transaction.inc:77",
         "scripting/fo3-script-transaction.inc:166"
       ],
@@ -1152,10 +1145,10 @@
         "scripting/fo3-world-script-runtime.inc:538"
       ],
       "ondeath": [
-        "scripting/fo3-script-runtime.inc:986",
-        "scripting/fo3-script-runtime.inc:1643",
-        "scripting/fo3-script-runtime.inc:1687",
-        "weapons/fo3-weapon-player.cpp:592"
+        "scripting/fo3-script-runtime.inc:1003",
+        "scripting/fo3-script-runtime.inc:1660",
+        "scripting/fo3-script-runtime.inc:1704",
+        "weapons/fo3-weapon-player.cpp:617"
       ],
       "onload": [
         "scripting/fo3-world-script-runtime.inc:547"
@@ -1165,11 +1158,11 @@
       ],
       "onhit": [
         "scripting/fo3-script-transaction.inc:180",
-        "weapons/fo3-weapon-player.cpp:590"
+        "weapons/fo3-weapon-player.cpp:615"
       ],
       "scripteffectstart": [
         "player/fo3-aid-player.inc:290",
-        "scripting/fo3-script-runtime.inc:1612"
+        "scripting/fo3-script-runtime.inc:1629"
       ],
       "onadd": [
         "player/fo3-player-state.cpp:1041",
@@ -1181,10 +1174,10 @@
         "scripting/fo3-world-script-runtime.inc:538"
       ],
       "onstartcombat": [
-        "npc/fo3-npc-combat-runtime.inc:679"
+        "npc/fo3-npc-combat-runtime.inc:699"
       ],
       "scripteffectfinish": [
-        "scripting/fo3-script-runtime.inc:1692"
+        "scripting/fo3-script-runtime.inc:1709"
       ],
       "onpackagedone": [
         "scripting/fo3-script-transaction.inc:228"
@@ -1195,7 +1188,7 @@
       ],
       "onhitwith": [
         "scripting/fo3-script-transaction.inc:181",
-        "weapons/fo3-weapon-player.cpp:591"
+        "weapons/fo3-weapon-player.cpp:616"
       ],
       "onpackagestart": [
         "scripting/fo3-script-transaction.inc:229"
@@ -1214,8 +1207,8 @@
       "onunequip": [
         "player/fo3-player-state.cpp:1107",
         "player/fo3-player-state.cpp:1117",
-        "scripting/fo3-script-runtime.inc:1255",
-        "scripting/fo3-script-runtime.inc:1365"
+        "scripting/fo3-script-runtime.inc:1272",
+        "scripting/fo3-script-runtime.inc:1382"
       ],
       "ondestructionstagechange": [],
       "ondrop": [],
@@ -1224,6 +1217,6 @@
       "onrelease": [],
       "onactorunequip": []
     },
-    "index_sha256": "697a42824e14ebe13e931518fb0e571e66dbf0f03724c0b666e81eb9fccb0994"
+    "index_sha256": "3c8e1467d6a6bc1f7eb477519c5f0cb54ac2eead7d765ee2e564da49ad294258"
   }
 }

@@ -250,6 +250,25 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       if(in>>a){
         if(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid resurrection animation flag";return false;}
       }else in.clear();
+    } else if(commandName=="setcombatstyle"||commandName=="setcs"||commandName=="setplayerteammate"){
+      if(receiverDot==std::string::npos)cmd.form=owner;
+      else{
+        const auto name=op.substr(0,receiverDot);
+        cmd.receiverLocal=referenceKey(name);
+        if(!cmd.receiverLocal)cmd.form=form(name);
+      }
+      if(!cmd.form&&!cmd.receiverLocal){error="unresolved actor for "+commandName;return false;}
+      if(commandName=="setplayerteammate"){
+        cmd.type=CommandType::SetPlayerTeammate;
+        if(!(in>>a)){error="missing teammate flag";return false;}
+        if(!number(a,cmd.value))cmd.expression=a;
+      }else{
+        cmd.type=CommandType::SetCombatStyle;
+        if(in>>a){
+          cmd.targetLocal=referenceKey(a);
+          if(!cmd.targetLocal&&!(cmd.index=form(a))){error="unresolved combat style";return false;}
+        }else in.clear();
+      }
     } else if(commandName=="setunconscious"||commandName=="setghost"){
       cmd.form=receiverDot==std::string::npos?owner:form(op.substr(0,receiverDot));
       cmd.type=commandName=="setghost"?CommandType::SetGhost:CommandType::SetUnconscious;

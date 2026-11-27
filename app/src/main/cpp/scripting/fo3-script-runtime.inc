@@ -115,6 +115,12 @@ class Expression {
       value=actor!=p.Snapshot().actors.end()&&(query=="getiscurrentpackage"?actor->second.package:actor->second.hostile)==argument;
       return true;
     }
+    if(query=="getplayerteammatecount"){value=float(p.Snapshot().playerTeammates.size());return true;}
+    if(query=="getplayerteammate"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(id!=fo3player::PlayerRef&&!p.Definitions().actorPlacements.count(id))return Fail("teammate actor unavailable");
+      value=p.IsPlayerTeammate(id);return true;
+    }
     if(query=="getisghost"||query=="getknockedstate"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(id!=fo3player::PlayerRef&&!p.Definitions().actorPlacements.count(id))return Fail("actor flag receiver unavailable");
@@ -360,7 +366,7 @@ namespace fo3dialogue {
 bool HasNumericExpression(const Command& c) {
   using C = CommandType;
   if (c.type == C::If || c.type == C::ElseIf || c.type == C::Variable || c.type == C::Global) return true;
-  return !c.expression.empty() && (c.type == C::SayTo || c.type == C::SetActorAIValue ||
+  return !c.expression.empty() && (c.type == C::SetPlayerTeammate || c.type == C::SayTo || c.type == C::SetActorAIValue ||
       c.type == C::RewardXP || c.type == C::RewardKarma || c.type == C::ShowMessage ||
       c.type == C::ShowBarterMenu || c.type == C::AddItem || c.type == C::RemoveItem);
 }
@@ -624,6 +630,11 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
   // completed instruction stream, including local writes following Kill.
   std::vector<std::pair<uint32_t,uint32_t>> deathEvents;
   std::vector<std::pair<uint32_t,RagdollPush>> pushes;
+  const auto resolve=[&](uint64_t slot,uint32_t fallback){
+    if(!slot)return fallback;
+    const auto found=state_.pipboy.referenceVariables.find(slot);
+    return found==state_.pipboy.referenceVariables.end()?0u:found->second;
+  };
   for(const auto& c:commands) {
     if(!budget){error="script instruction budget exceeded";return false;}--budget;
     const bool active=gates.empty()||gates.back().active;
@@ -710,6 +721,17 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Resurrect:
       if(c.value!=0){error="animated resurrection requires an authored get-up clip";return false;}
       ok=ResurrectActor(c.form);break;
+    case C::SetCombatStyle:{
+      const auto style=resolve(c.targetLocal,c.index);
+      ok=(!c.targetLocal||style)&&SetActorCombatStyle(resolve(c.receiverLocal,c.form),style);
+      break;
+    }
+    case C::SetPlayerTeammate:
+      value=c.value;
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok)ok=std::isfinite(value)&&double(value)>=INT32_MIN&&double(value)<=INT32_MAX&&
+          SetPlayerTeammate(resolve(c.receiverLocal,c.form),int32_t(value)!=0);
+      break;
     case C::SetGhost:ok=SetActorGhost(c.form,c.value!=0);break;
     case C::SetUnconscious:ok=SetActorUnconscious(c.form,c.value!=0);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
@@ -909,11 +931,6 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     case C::Unavailable:error="unsupported executed command: "+c.expression;return false;
     case C::DefaultActivate:{
-      auto resolve=[&](uint64_t slot,uint32_t fallback){
-        if(!slot)return fallback;
-        const auto found=state_.pipboy.referenceVariables.find(slot);
-        return found==state_.pipboy.referenceVariables.end()?0u:found->second;
-      };
       const auto receiver=resolve(c.receiverLocal,c.form);
       const auto activator=resolve(c.targetLocal,c.index?c.index:scriptActivator_);
       if(!receiver||(c.targetLocal&&!activator)){error="Activate reference is unset";return false;}

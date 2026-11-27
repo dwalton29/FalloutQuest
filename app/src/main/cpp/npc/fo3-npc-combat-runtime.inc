@@ -161,7 +161,10 @@ static const fo3pipdata::PackageDefinition* Q230PerceptionPackage(Q230ActorVisua
 }
 static const fo3weapon::Definitions::CombatStyle* Q230Style(const Q230ActorVisual& actor) {
   const auto& c=gPlayerSession->player.Definitions();const auto* package=Q230CurrentPackage(actor);
+  const auto& overrides=gPlayerSession->player.Snapshot().combatStyleOverrides;
+  const auto override=overrides.find(actor.source.refFormId);
   uint32_t id=package?package->combatStyle:0;
+  if(override!=overrides.end())id=override->second;
   if(!id){const auto* traits=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);if(!traits)return nullptr;id=traits->combatStyle;}
   if(!id)id=c.weapons.defaultCombatStyle;
   const auto style=c.weapons.styles.find(id);return style==c.weapons.styles.end()||!style->second.valid?nullptr:&style->second;
@@ -179,18 +182,26 @@ static bool Q230DefendsLeader(const Q230ActorVisual& actor,const fo3pipdata::Pac
       threat.runtime.activity==fo3npc::Activity::Combat&&threat.runtime.combatTarget==leader)return true;
   return false;
 }
+static bool Q230StyleAllowsWeapon(const fo3weapon::Definitions::CombatStyle* style,const fo3weapon::Definition& weapon){
+  return !style||style->restrictions!=(weapon.Firearm()?1u:2u);
+}
 static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
   FQ_PERF_SCOPE(WeaponChoice);
   auto& p=gPlayerSession->player;
   const auto* contents=p.ContainerContents(actor.source.refFormId);
   if(!contents&&!actor.source.creature)return false;
   const auto* style=Q230Style(actor);const auto* package=Q230CurrentPackage(actor);
-  if(package&&(!package->combatStyleValid||(package->combatStyle&&!style))){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported package CSTY "+std::to_string(package->combatStyle));return false;}
+  if(package&&!p.Snapshot().combatStyleOverrides.count(actor.source.refFormId)&&(!package->combatStyleValid||(package->combatStyle&&!style))){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported package CSTY "+std::to_string(package->combatStyle));return false;}
   const auto* current=p.ActorWeapon(actor.source.refFormId);
   if(current&&current->id==actor.runtime.equippedWeapon&&
      (actor.runtime.pendingAttack||actor.runtime.reloadUntil>0||(actor.runtime.actionUntil>0&&actor.runtime.actionUntil>actor.aiLastUpdate))){
     const auto prepared=actor.combatWeapons.find(current->formId);
-    if(prepared!=actor.combatWeapons.end()&&prepared->second.ready)return true;
+    if(prepared!=actor.combatWeapons.end()&&prepared->second.ready){
+      if(Q230StyleAllowsWeapon(style,prepared->second.definition))return true;
+      actor.runtime.pendingAttack=false;
+      actor.runtime.reloadUntil=actor.runtime.actionUntil=0;
+      actor.runtime.action=fo3npc::CombatAction::Acquire;
+    }
   }
   bool bestInRange=false;
   float best=-1;uint64_t selected=0;uint32_t form=0;
@@ -199,7 +210,7 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
     if(current&&saved!=p.Snapshot().actors.end()&&saved->second.weaponLocked&&s.id!=current->id)continue;
     const auto& d=prepared->second.definition;const bool ranged=d.Firearm();
-    if(style&&((style->restrictions==1&&ranged)||(style->restrictions==2&&!ranged)))continue;
+    if(!Q230StyleAllowsWeapon(style,d))continue;
     if(ranged&&!s.loadedRounds){bool reserve=false;for(const auto& ammo:*contents)if(ammo.formId==d.ammo&&ammo.count>=d.ammoUse)reserve=true;if(!reserve)continue;}
     const auto& clip=prepared->second.clips[1];
     const float duration=(clip.stop-clip.start)/std::max(.01f,d.attackMult);
@@ -217,8 +228,9 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
     if(prepared==actor.combatWeapons.end()||!prepared->second.ready)return false;
     form=fists->second;
   }
-  if(actor.runtime.equippedWeapon==selected&&actor.runtime.combatWeaponForm==form)return true;
-  if(selected&&!p.EquipActorWeapon(actor.source.refFormId,selected))return false;
+  const auto equipped=current?current->id:0;
+  if(equipped==selected&&actor.runtime.equippedWeapon==selected&&actor.runtime.combatWeaponForm==form)return true;
+  if(equipped!=selected&&!p.EquipActorWeapon(actor.source.refFormId,selected))return false;
   actor.runtime.combatWeaponForm=form;actor.runtime.equippedWeapon=selected;
   actor.runtime.reloadUntil=0;actor.runtime.pendingAttack=false;
   actor.runtime.nextMeleeDecision=actor.runtime.nextAttack=actor.runtime.burstUntil=actor.runtime.burstWaitUntil=actor.runtime.actionUntil=0;
@@ -249,6 +261,13 @@ static bool Q230AdvanceReload(Q230ActorVisual& actor,double now){
   if(s.activity!=fo3npc::Activity::Combat||s.reloadUntil<=0)return false;
   const auto* owned=gPlayerSession->player.ActorWeapon(actor.source.refFormId);
   if(!owned||owned->id!=s.equippedWeapon){s.reloadUntil=0;return true;}
+  const auto weapon=actor.combatWeapons.find(owned->formId);
+  if(weapon!=actor.combatWeapons.end()&&!Q230StyleAllowsWeapon(Q230Style(actor),weapon->second.definition)){
+    s.reloadUntil=0;
+    s.action=fo3npc::CombatAction::Acquire;
+    if(s.animation==fo3npc::Animation::Reload)s.animation=fo3npc::Animation::Aim;
+    return false;
+  }
   Q230ActionSounds(actor,now);
   if(now>=s.reloadUntil){
     const auto instance=owned->id;const auto form=owned->formId;
@@ -526,6 +545,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   FQ_PERF_SCOPE(Simulation);
   if(!gPlayerSession||gPlayerSession->saveBlocked||actor.runtime.offScene||actor.rigs.empty()||IsFo3LoadingVisible())return;
   auto& p=gPlayerSession->player;const auto& c=p.Definitions();auto& s=actor.runtime;
+  s.teammateSneak=p.FollowsPlayerSneak(actor.source.refFormId);
   if(!actor.stateRestored){
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
     const bool restored=saved!=p.Snapshot().actors.end();

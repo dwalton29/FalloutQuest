@@ -358,6 +358,28 @@ bool Player::KillActor(uint32_t reference,uint32_t killer){
   if(killer)state_.actorKillers[reference]=killer;
   return true;
 }
+bool Player::SetActorCombatStyle(uint32_t reference,uint32_t style){
+  if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
+  auto& overrides=state_.combatStyleOverrides;
+  if(style){
+    const auto definition=catalog_->weapons.styles.find(style);
+    if(definition==catalog_->weapons.styles.end()||!definition->second.valid)return false;
+    const auto old=overrides.find(reference);
+    if(old!=overrides.end()&&old->second==style)return true;
+    overrides[reference]=style;
+  }else if(!overrides.erase(reference))return true;
+  ++revision_;
+  return true;
+}
+bool Player::SetPlayerTeammate(uint32_t reference,bool enabled){
+  if(reference==PlayerRef)return true;
+  if(!catalog_->actorPlacements.count(reference))return false;
+  if(enabled){
+    if(!state_.playerTeammates.insert(reference).second)return true;
+  }else if(!state_.playerTeammates.erase(reference))return true;
+  ++revision_;
+  return true;
+}
 bool Player::SetActorGhost(uint32_t reference,bool ghost){
   if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
   if(ActorGhost(reference)==ghost)return true;
@@ -582,7 +604,10 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   if(knockout&&!KillActor(target))return false;
   const bool died=applied>=health&&!knockout;
   if(died&&catalog_->actorPlacements.count(target))state_.actorKillers[target]=attacker;
-  if(died){if(auto* actor=state_.actors.Edit(target)){actor->dead=true;actor->packageWaitSeconds=0;}}
+  if(died){
+    state_.playerTeammates.erase(target);
+    if(auto* actor=state_.actors.Edit(target)){actor->dead=true;actor->packageWaitSeconds=0;}
+  }
   ++revision_;
   // Source scripts receive gameplay events once, after the canonical damage
   // transition. Unsupported scripts never undo physical combat damage.
@@ -620,6 +645,7 @@ bool Player::UpdateActor(uint32_t reference,const ActorState& incoming) {
     if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.revivedAuthoredCorpse==a.revivedAuthoredCorpse&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked&&o.packageWaitSeconds==a.packageWaitSeconds&&o.corpse==a.corpse)return true;
     poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.revivedAuthoredCorpse==a.revivedAuthoredCorpse&&o.alert==a.alert&&o.weaponLocked==a.weaponLocked;
   }else if(state_.actors.size()>=10000)return false;
+  if(a.dead&&(old==state_.actors.end()||!old->second.dead))state_.playerTeammates.erase(reference);
   state_.actors[reference]=a;++revision_;if(poseOnly)++actorPoseRevisions_;return true;
 }
 bool Player::MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset) {
@@ -708,12 +734,16 @@ bool Player::EquipActorWeapon(uint32_t reference,uint64_t instance) {
   if(state!=state_.actors.end()&&state->second.weaponLocked&&state->second.equippedWeapon&&
      state->second.equippedWeapon!=instance)return false;
   auto c=state_.containers.find(reference);if(c==state_.containers.end())return false;
-  auto s=std::find_if(c->second.begin(),c->second.end(),[&](const Stack& v){return v.id==instance;});
-  if(s==c->second.end()||catalog_->items.at(s->formId).kind!=ItemKind::Weapon||s->condition<=0)return false;
-  for(auto& v:c->second)if(catalog_->items.at(v.formId).kind==ItemKind::Weapon)v.equipped=v.id==instance;
+  if(instance){
+    const auto s=std::find_if(c->second.begin(),c->second.end(),[&](const Stack& v){return v.id==instance;});
+    if(s==c->second.end()||catalog_->items.at(s->formId).kind!=ItemKind::Weapon||s->condition<=0)return false;
+  }
   ActorState a;const auto old=state_.actors.find(reference);
   if(old!=state_.actors.end())a=old->second;else{const auto& t=catalog_->pipboy.targets.at(reference);a.cell=t.cell;a.world=t.world;a.position={t.x,t.y,t.z};}
-  a.equippedWeapon=instance;UpdateActor(reference,a);++revision_;return true;
+  a.equippedWeapon=instance;
+  if(!UpdateActor(reference,a))return false;
+  for(auto& v:c->second)if(catalog_->items.at(v.formId).kind==ItemKind::Weapon)v.equipped=instance&&v.id==instance;
+  ++revision_;return true;
 }
 float Player::ActorWeaponDamage(uint32_t reference) const {
   const auto* s=ActorWeapon(reference);const auto t=catalog_->pipboy.targets.find(reference);

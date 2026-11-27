@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -301,6 +302,8 @@ struct State {
   // Scene-axis velocity changes waiting for the actor's articulated physics rig.
   std::map<uint32_t,std::vector<RagdollPush>> ragdollPushes;
   std::map<std::pair<uint32_t,uint32_t>,ShaderPlayback> magicShaders;
+  std::map<uint32_t,uint32_t> combatStyleOverrides;
+  std::set<uint32_t> playerTeammates;
   std::vector<PlacedEffect> placedEffects;
   std::vector<PlacedBlastHit> placedBlastHits;
   std::unordered_set<uint32_t> unconsciousActors,ghostActors;
@@ -631,6 +634,10 @@ public:
   bool KillActor(uint32_t reference,uint32_t killer=0);
   bool IsActorKiller(uint32_t victim,uint32_t killer,float& result)const;
   bool ResurrectActor(uint32_t reference);
+  bool SetActorCombatStyle(uint32_t reference,uint32_t style);
+  bool SetPlayerTeammate(uint32_t reference,bool enabled);
+  bool IsPlayerTeammate(uint32_t reference)const{return state_.playerTeammates.count(reference)!=0;}
+  bool FollowsPlayerSneak(uint32_t reference)const{return IsSneaking()&&IsPlayerTeammate(reference);}
   bool SetActorGhost(uint32_t reference,bool ghost);
   bool ActorGhost(uint32_t reference)const{return state_.ghostActors.count(reference)!=0;}
   bool SetActorUnconscious(uint32_t reference,bool value);

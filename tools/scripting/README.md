@@ -6,14 +6,16 @@ The index covers each nonempty SCDA fragment in the supplied base master. A row 
 
 ### Look up affected fragments
 
-From the repository root, this lists every fragment for which the host compiler diagnosed an unsupported form of SetCombatStyle.
+From the repository root, this lists every fragment for which the host compiler diagnosed an unsupported form of ShowRepairMenu.
 
 ```sh
 gzip -dc docs/SCRIPTING_FRAGMENT_REQUIREMENTS.jsonl.gz |
-  jq -r 'select(.observed_gaps | index("unsupported command form/SetCombatStyle")) | .id'
+  jq -r 'select(.observed_gaps | index("unsupported command form/ShowRepairMenu")) | .id'
 ```
 
 To find all uses, including ones for which the probe has no diagnostic, query the dependency fields. For example, use `select(.expression_calls | index("GetDead"))` to find nested calls to GetDead. The data can also be read with Python's standard `gzip.open(path, "rt")` and `json.loads(line)`.
+
+The host tests also exercise the original Taft Tunnel follower package and a compiled Jericho dialogue result. They check teammate membership, combat-style precedence and weapon selection. Cell transitions and in-combat companion activation require separate gameplay coverage.
 
 ### Rebuild the inventory
 

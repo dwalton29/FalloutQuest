@@ -745,8 +745,8 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       actor.runtime.equippedWeapon&&actor.runtime.animation!=fo3npc::Animation::Hit;
   if(combatLayer&&(selected==int(fo3npc::Animation::Attack)||selected==int(fo3npc::Animation::Reload)))
     selected=int(fo3npc::Animation::Aim);
-  const bool crouch=actor.runtime.activity==fo3npc::Activity::Package?actor.runtime.packageSneak:
-    combatLayer&&actor.runtime.combatMovement==fo3npc::CombatAction::Cover&&actor.runtime.speed<.01f;
+  const bool crouch=actor.runtime.teammateSneak||(actor.runtime.activity==fo3npc::Activity::Package?actor.runtime.packageSneak:
+    combatLayer&&actor.runtime.combatMovement==fo3npc::CombatAction::Cover&&actor.runtime.speed<.01f);
   if(crouch&&(selected==int(fo3npc::Animation::Idle)||selected==int(fo3npc::Animation::Aim)||selected==int(fo3npc::Animation::Walk))){
     const auto stance=selected==int(fo3npc::Animation::Walk)?fo3npc::Animation::CrouchWalk:fo3npc::Animation::CrouchIdle;
     if(!actor.animations[size_t(stance)].tracks.empty())selected=int(stance);

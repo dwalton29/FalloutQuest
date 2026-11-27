@@ -38,6 +38,9 @@ inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,c
 // Live references consume the same saved memberships as conditions and ownership.
 // No per-pair map copy or base-record mutation on the combat thread.
 inline Reaction Relationship(const fo3player::Player& player,uint32_t a,uint32_t b){
+  if(player.IsPlayerTeammate(a))a=fo3player::PlayerRef;
+  if(player.IsPlayerTeammate(b))b=fo3player::PlayerRef;
+  if(a==fo3player::PlayerRef&&a==b)return Reaction::Ally;
   return FactionRelationship(player.Definitions(),player.ActorFactions(a),player.ActorFactions(b),&player.Snapshot().factionRelations);
 }
 inline bool Acquires(const AiData& a,Reaction reaction){

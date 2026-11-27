@@ -52,6 +52,7 @@
     case 0x109e: return {"movetomarker","rnnn",1,false};
     case 0x10ab: return {"ignorecrime","n",1,false};
     case 0x10ad: return {"removeallitems","rnn",0,false};
+    case 0x10b1: return {"setcombatstyle","r",0,false};
     case 0x10b2: return {"playsound3d","r",1,false};
     case 0x10cc: return {"setdestroyed","n",1,false};
     case 0x10da: return {"showracemenu","",0,false};
@@ -100,6 +101,8 @@
     case 0x11ad: return {"completeallobjectives","r",1,false};
     case 0x11bc: return {"additemhealthpercent","rnnn",3,false};
     case 0x11c5: return {"setplayerteammate","n",1,false};
+    case 0x11c6: return {"getplayerteammate","",0,true};
+    case 0x11c7: return {"getplayerteammatecount","",0,true};
     case 0x11ca: return {"clearactorsfactionsplayerenemyflag","",0,false};
     case 0x11cd: return {"setplayertagskill","an",2,false};
     case 0x11d5: return {"setbroadcaststate","n",1,false};
