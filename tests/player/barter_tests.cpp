@@ -33,6 +33,53 @@ int uiFlushes=0;
 void FlushFo3PlayerState(){++uiFlushes;}
 namespace fo3audio {void NamedSound(const std::string&){} void Scroll(){}}
 #include "../../app/src/main/cpp/dialogue/fo3-barter-runtime.inc"
+#include "../../app/src/main/cpp/dialogue/fo3-repair-runtime.inc"
+void RepairServices() {
+ auto c=Fixture();
+ c.actorInventories[200]={};c.weapons.actors[200].skills[size_t(Skill::Repair)]=50;
+ c.barterSettings["fRepairSkillMax"]=10;c.barterSettings["fItemRepairCostMult"]=2;
+ Item armor=c.items.at(101);armor.kind=ItemKind::Armour;armor.formId=102;armor.name="Test armour";
+ c.items[102]=armor;c.weapons.armourDR[102]=4;
+ UiSession live{Player(std::move(c))};auto& p=live.player;gPlayerSession=&live;
+ Check(p.Add(0xf,100)&&p.Add(102,2,.5f)&&p.Add(101,1,.3f),"repair inventory");
+ fo3pipdata::ResultScript script;script.source="ShowRepairMenu 30";script.compiled={0x7a,0x11,0,0};
+ std::string error;uint32_t actor=0;
+ auto plan=p.PrepareDialogueTransaction(script,{},error,1);
+ Check(plan&&!p.PollRepair(actor),"preview does not open repairs");
+ Check(p.CommitScriptTransaction(*plan)&&p.RollbackScriptTransaction(*plan)&&!p.PollRepair(actor),"rollback removes repair request");
+ Check(p.ExecuteDialogueResult(script,error,1)&&p.PollRepair(actor)&&actor==1,"compiled operand-free service");
+ const auto before=uiFlushes;
+ Check(RefreshFo3Repair(actor)&&gRepair.session.offers.size()==2,"repair UI rows");
+ auto quote=gRepair.session;
+ Check(std::abs(quote.target-.7f)<.00001f&&quote.offers.front().price==40&&quote.total==160,"per-copy and all-item quotes");
+ UpdateFo3Repair(1,0,false,false,true,true);
+ Check(p.ItemCount(0xf)==100&&!p.ContainerContents(1)&&uiFlushes==before,"unaffordable repair-all is atomic");
+ UpdateFo3Repair(2,0,true,false,false,true);
+ Check(p.ItemCount(0xf)==60&&uiFlushes==before+1&&gRepair.session.offers[0].count==1,"purchase repairs one copy");
+ Check(p.ScriptItemCount(1,0xf)==40,"repairer receives caps personally");
+ Check(!p.ConfirmRepair(quote,quote.offers.front().stack,error)&&p.ItemCount(0xf)==60,"expired quote cannot charge twice");
+ Check(p.Add(0xf,60),"fund remaining repairs");
+ UpdateFo3Repair(3,0,false,false,true,true);
+ Check(gRepair.session.offers.empty()&&p.ItemCount(0xf)==0&&p.ScriptItemCount(1,0xf)==160,"repair all settles remaining copies");
+ UpdateFo3Repair(4,0,false,false,true,true);
+ Check(uiFlushes==before+2,"holding button does not repeat payment");
+ UpdateFo3Repair(5,0,false,true,false,true);Check(!gRepair.panel.visible,"repair UI closes");
+ Check(p.Save("/tmp/fq-repair-services.fqps",error),error.c_str());Player restored(p.Definitions());
+ Check(restored.Restore("/tmp/fq-repair-services.fqps",error)&&restored.ScriptItemCount(1,0xf)==160&&
+       restored.OpenRepair(1,quote)&&quote.offers.empty(),"paid repairs survive reload");
+ auto bad=script;bad.compiled.clear();
+ Check(!p.PreviewDialogueResult(bad,error,actor),"source-only repair rejects spurious argument");
+ fo3pipdata::ResultScript self;self.source="Player.srm";
+ Check(p.Add(101,1,.1f)&&p.ExecuteDialogueResult(self,error)&&p.PollRepair(actor)&&actor==PlayerRef&&
+       p.OpenRepair(actor,quote)&&!p.ConfirmRepair(quote,quote.offers.front().stack,error),"self repair needs funds");
+ Check(p.Add(0xf,500)&&p.ConfirmRepair(quote,quote.offers.front().stack,error)&&p.ItemCount(0xf)==500,"self repair retains caps");
+ auto unavailable=Fixture();unavailable.actorInventories[200].valid=false;Player failed(std::move(unavailable));
+ Check(failed.Add(101,1,.1f)&&failed.Add(0xf,200)&&failed.OpenRepair(1,quote),"unavailable repairer quote");
+ Check(!failed.ConfirmRepair(quote,quote.offers.front().stack,error)&&failed.ItemCount(0xf)==200&&
+       !failed.ContainerContents(1)&&failed.Snapshot().inventory.front().condition==.1f,"failed payment rolls back both inventories");
+ gPlayerSession=nullptr;
+}
+
 void UiAdapter(){
  UiSession live{Player(Fixture())};gPlayerSession=&live;auto &p=live.player;
  Check(p.Add(0xf,1500)&&p.Add(100,5),"UI seed");gBarter={};
@@ -185,11 +232,35 @@ void Original(const char* path){
   dialogue.diagnostic=[](const std::string&){};
   Check(dialogue.CanActivate(ctx)&&dialogue.Start(ctx,p),"original merchant greeting");
   for(int budget=0;dialogue.phase==fo3dialogue::Phase::Speaking;++budget){Check(budget<20,"voice response budget");dialogue.AudioDone(dialogue.audioToken,true,ctx,p);}
+  bool reachedRepair=false;
   for(int attempt=0;attempt<5;++attempt){
     size_t trade=SIZE_MAX;
     for(size_t index=0;index<dialogue.choices.size();++index){const auto* info=dialogue.Resolve(dialogue.choices[index].topic,ctx);
       if(info&&(info->begin.source.find("BarterMenu")!=std::string::npos||info->end.source.find("BarterMenu")!=std::string::npos||
                 info->begin.source.find("barterMenu")!=std::string::npos||info->end.source.find("barterMenu")!=std::string::npos))trade=index;
+    }
+    if(actor==0x2d2bc&&!reachedRepair){
+      for(size_t index=0;index<dialogue.choices.size();++index){
+        const auto* info=dialogue.Resolve(dialogue.choices[index].topic,ctx);
+        if(!info)continue;
+        const std::vector<uint8_t> repairCode{0x7a,0x11,0,0};
+        if(info->begin.compiled!=repairCode&&info->end.compiled!=repairCode)continue;
+        auto conversation=dialogue;
+        Check(conversation.Choose(index,ctx,p),"Moira repair topic selectable");
+        for(int budget=0;conversation.phase==fo3dialogue::Phase::Speaking;++budget){
+          Check(budget<20,"repair voice budget");conversation.AudioDone(conversation.audioToken,true,ctx,p);
+        }
+        uint32_t repairer=0;RepairSession repair;
+        Check(p.PollRepair(repairer)&&repairer==actor,"Moira's chosen INFO queues the service once");
+        const auto pistol=p.Definitions().pipboy.formNames.at("weap10mmpistol");
+        Check(p.Add(0xf,500)&&p.Add(pistol,1,.2f)&&p.OpenRepair(repairer,repair),"original repair quote");
+        auto item=std::find_if(repair.offers.begin(),repair.offers.end(),[&](const RepairOffer& r){return r.form==pistol;});
+        Check(item!=repair.offers.end(),"damaged original pistol listed");
+        const auto paid=item->price;const auto caps=p.ItemCount(0xf);
+        Check(p.ConfirmRepair(repair,item->stack,e)&&p.ItemCount(0xf)==caps-paid&&!p.PollRepair(repairer),"original service purchase");
+        std::cout<<"Moira dialogue INFO "<<std::hex<<info->id<<std::dec<<" repaired a 10mm pistol to "<<repair.target*100<<"% for "<<paid<<" caps\n";
+        reachedRepair=true;break;
+      }
     }
     if(trade!=SIZE_MAX){Check(dialogue.Choose(trade,ctx,p),"original trade choice");
       for(int budget=0;dialogue.phase==fo3dialogue::Phase::Speaking;++budget){Check(budget<20,"trade voice budget");dialogue.AudioDone(dialogue.audioToken,true,ctx,p);}
@@ -206,6 +277,7 @@ void Original(const char* path){
     for(int budget=0;dialogue.phase==fo3dialogue::Phase::Speaking;++budget){Check(budget<20,"reentry voice budget");dialogue.AudioDone(dialogue.audioToken,true,ctx,p);}
   }
 
+  if(actor==0x2d2bc)Check(reachedRepair,"Moira repair offer reached through normal dialogue");
   fo3pipdata::ResultScript result;result.source="ShowBarterMenu";Check(p.PreviewDialogueResult(result,e,actor),e.c_str());
   Check(p.Add(0xf,2000),"test player currency");
   const Stack* offer=nullptr;for(const auto& item:s.merchant)if(p.BarterItemAllowed(actor,item)){offer=&item;break;}
@@ -221,4 +293,4 @@ void Original(const char* path){
   BarterSession persisted;Check(restored.OpenBarter(actor,s.discount,persisted)&&persisted.merchant.size()==s.merchant.size(),"original merchant restore");
  }
 }
-int main(int argc,char** argv){try{UiAdapter();Synthetic();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{UiAdapter();RepairServices();Synthetic();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

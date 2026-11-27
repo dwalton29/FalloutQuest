@@ -290,7 +290,7 @@ def read_probe(lines):
         target = evidence[root]
         if block:
             target = target.setdefault('blocks', {}).setdefault(block, {})
-        if field in ('owner', 'event', 'compile', 'preview', 'filter'):
+        if field in ('owner', 'owner_basis', 'event', 'compile', 'preview', 'filter'):
             if field in target:
                 raise ValueError(f'duplicate probe row {path}/{field}')
             target[field] = int(value) if field == 'owner' else value

@@ -3087,7 +3087,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;ClearScriptActorFurniture();
   pendingScriptActions_.clear();scriptActorMoves_.clear();scriptActorProcedures_.clear();scriptTalking_.clear();scriptPlayingIdles_.clear();scriptDetection_.clear();scriptAnimations_=std::move(restoredAnimations);scriptRuntimeSeconds_=scriptElapsedSeconds_=0;scriptInsideTriggers_.clear();scriptActorInsideTriggers_.clear();++scriptRuntimeGeneration_;
   scriptPrompts_=restoredPrompts;pendingScriptMessages_=std::move(restoredPrompts);scriptButtons_=std::move(restoredButtons);
-  pendingScriptSounds_.clear();pendingBarters_.clear();EndContainerInteraction();
+  pendingScriptSounds_.clear();pendingBarters_.clear();pendingRepairs_.clear();EndContainerInteraction();
   ++revision_;
   return true;
 }

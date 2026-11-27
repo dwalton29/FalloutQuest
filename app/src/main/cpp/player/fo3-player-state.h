@@ -314,6 +314,22 @@ struct State {
 struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor,name;};
 // Sparse immutable XESP graph, independent of Pip-Boy target pruning.
 struct EnableParent {uint32_t reference=0;uint8_t flags=0;bool valid=true;};
+struct RepairOffer {
+  uint64_t stack=0;
+  uint32_t form=0;
+  float condition=0;
+  int32_t count=0,price=0;
+  bool operator==(const RepairOffer& b) const {
+    return stack==b.stack&&form==b.form&&condition==b.condition&&count==b.count&&price==b.price;
+  }
+};
+struct RepairSession {
+  const void* owner=nullptr;
+  uint32_t actor=0;
+  float target=0;
+  std::vector<RepairOffer> offers;
+  int64_t total=0;
+};
 struct BarterRequest {uint32_t actor=0;int discount=0;};
 struct BarterSelection {uint64_t stack=0;int32_t count=0;bool buying=false;};
 struct BarterSession {
@@ -952,6 +968,11 @@ public:
   bool BarterPrice(const Stack& item,bool buying,int discount,float& out) const;
   bool BarterBalance(const BarterSession&,int64_t& net,std::string& error) const;
   bool ConfirmBarter(BarterSession&,std::string& error);
+  bool QueueRepair(uint32_t actor);
+  bool PollRepair(uint32_t& actor);
+  bool OpenRepair(uint32_t actor,RepairSession& out) const;
+  // A zero stack selects the displayed Repair All quote.
+  bool ConfirmRepair(const RepairSession& quote,uint64_t stack,std::string& error);
   bool QueueBarter(uint32_t actor,int discount);
   bool ModActorDisposition(uint32_t actor,int32_t amount);
   bool PollBarter(BarterRequest& out);
@@ -1072,6 +1093,7 @@ private:
   std::vector<ScriptItemNotice> pendingScriptItems_;
   std::vector<uint32_t> pendingScriptSounds_,pendingTerminalBack_;
   std::vector<BarterRequest> pendingBarters_;
+  std::vector<uint32_t> pendingRepairs_;
   std::vector<KarmaEvent> pendingKarmaEvents_;
   std::vector<TheftEvent> pendingTheftEvents_;
   uint32_t scriptOpenedContainer_=0; // transient delegation, cleared on leave/load

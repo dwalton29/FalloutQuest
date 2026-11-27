@@ -20,7 +20,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptRuntimeGeneration_(source.scriptRuntimeGeneration_),
       pendingScriptMessages_(source.pendingScriptMessages_),scriptPrompts_(source.scriptPrompts_),pendingQuestNotices_(source.pendingQuestNotices_),
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingLocationNotices_(source.pendingLocationNotices_),pendingScriptItems_(source.pendingScriptItems_),
-      pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
+      pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingRepairs_(source.pendingRepairs_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),scriptOpenedContainer_(source.scriptOpenedContainer_),containerInteraction_(source.containerInteraction_),
       containerKarmaCommitted_(source.containerKarmaCommitted_),eventDiagnostic_(source.eventDiagnostic_) {inventoryEventCandidate_=true;}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
@@ -292,7 +292,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   scriptPrompts_.swap(other.scriptPrompts_);
   pendingScriptSounds_.swap(other.pendingScriptSounds_);
   pendingTerminalBack_.swap(other.pendingTerminalBack_);
-  pendingBarters_.swap(other.pendingBarters_);
+  pendingBarters_.swap(other.pendingBarters_);pendingRepairs_.swap(other.pendingRepairs_);
   pendingQuestNotices_.swap(other.pendingQuestNotices_);
   pendingExperienceNotices_.swap(other.pendingExperienceNotices_);
   pendingLocationNotices_.swap(other.pendingLocationNotices_);

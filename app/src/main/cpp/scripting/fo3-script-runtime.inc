@@ -932,6 +932,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     }
     case C::ModDisposition:ok=ModActorDisposition(c.form,int32_t(c.value));break;
+    case C::ShowRepairMenu:ok=QueueRepair(receiver());break;
     case C::ShowBarterMenu:
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=std::isfinite(value)&&value>=-100&&value<=100&&std::floor(value)==value&&QueueBarter(c.form,int(value));

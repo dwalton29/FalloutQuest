@@ -250,6 +250,7 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
 }
 } // namespace fo3player
 #include "fo3-barter-state.inc"
+#include "fo3-repair-state.inc"
 
 namespace fo3player {
 bool Player::ScriptAddItem(uint32_t receiver,uint32_t form,int32_t count,bool silent,float condition){

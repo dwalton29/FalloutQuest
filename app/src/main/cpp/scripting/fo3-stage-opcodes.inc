@@ -83,6 +83,7 @@
     case 0x1171: return {"settalkingactivatoractor","r",0,false};
     case 0x1176: return {"addperk","r",1,false};
     case 0x1177: return {"rewardxp","n",1,false};
+    case 0x117a: return {"showrepairmenu","",0,false};
     case 0x117c: return {"addnote","r",1,false};
     case 0x117d: return {"removenote","r",1,false};
     case 0x117e: return {"gethasnote","r",1,true};

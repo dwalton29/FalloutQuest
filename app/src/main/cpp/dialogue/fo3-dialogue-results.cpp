@@ -358,6 +358,9 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       if(!(in>>a)){error="missing ModDisposition target/value";return false;}
       if(a=="player"){if(!(in>>a)){error="missing ModDisposition value";return false;}}
       if(!cmd.form||!number(a,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-2147483648.0||double(cmd.value)>2147483647.0){error="invalid ModDisposition";return false;}
+    } else if(commandName=="showrepairmenu"||commandName=="srm"){
+      cmd.type=CommandType::ShowRepairMenu;
+      if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"unknown repair service actor";return false;}
     } else if(op=="showbartermenu"||op=="sbm"||
         (op.size()>15&&op.compare(op.size()-15,15,".showbartermenu")==0)||
         (op.size()>4&&op.compare(op.size()-4,4,".sbm")==0)) {

@@ -248,6 +248,26 @@ static void OriginalBridge(const char* path){
   assert(StartFo3Dialogue(0x3b46));Speak();Tick(false,true);Tick();if(gDialogue.Active())Speak();Clean();
   std::cout<<"Original Lucas production bridge: handshake, three reentries, package movement and post-combat reentry passed\n";
 }
+static void RepairBridge(){
+  PrepareSynthetic();
+  auto catalog=gPlayerSession->player.Definitions();
+  catalog.references[42].base=43;catalog.actorInventories[43]={};
+  auto& greeting=catalog.pipboy.topics.at(80).front();
+  greeting.flags=1;greeting.end.source="ShowRepairMenu";
+  fo3player::Item item;item.kind=fo3player::ItemKind::Weapon;item.name="Test item";
+  item.formId=100;item.maxCondition=100;item.value=50;catalog.items[100]=item;
+  fo3player::Item caps;caps.formId=0xf;caps.value=1;catalog.items[0xf]=caps;
+  gPlayerSession=std::make_unique<Session>(catalog);auto& p=gPlayerSession->player;
+  assert(p.Add(100,1,.1f)&&p.Add(0xf,100));Tick();
+  assert(StartFo3Dialogue(42)&&!gRepair.panel.visible);Speak();
+  // This INFO ends conversation. Its completed service request retains its speaker.
+  assert(!gDialogue.Active()&&Fo3DialogueFocus()&&gRepair.session.actor==42&&
+         gRepair.panel.visible&&gRepair.session.offers.size()==1);
+  const int price=gRepair.session.offers.front().price;
+  Tick(true);assert(gRepair.session.offers.empty()&&p.ItemCount(0xf)==100-price);
+  Tick(true);assert(p.ScriptItemCount(42,0xf)==price);
+  Tick(false,true);assert(!Fo3BarterFocus()&&!Fo3DialogueFocus());Tick();
+}
 static void BarterBridge(){
   PrepareSynthetic();auto c=gPlayerSession->player.Definitions();
   c.references[42].base=43;c.references[99].base=333;
@@ -733,4 +753,4 @@ static void OriginalPlazaPublication(const char* esm){
   loading=refreshAllowed=exteriorRefresh=false;
   std::cout<<"GNR exterior transaction publishes the Behemoth, four collision children and one explosion; no scene load during live actor preparation."<<std::endl;
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();FarewellWithB();BarterBridge();CellPublication();NonresidentPublication();IntercomPackageAdmission();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);OriginalPlazaPublication(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+int main(int argc,char** argv){Synthetic();SkipWithA();FarewellWithB();BarterBridge();RepairBridge();CellPublication();NonresidentPublication();IntercomPackageAdmission();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);OriginalPlazaPublication(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}

@@ -209,8 +209,8 @@
       "REFR": 1
     },
     "compilation": {
-      "accepted": 7641,
-      "rejected": 280,
+      "accepted": 7693,
+      "rejected": 228,
       "with_deferred_failure": 174,
       "mixed_event_blocks": 156,
       "needs_owner": 42,
@@ -218,14 +218,13 @@
       "unprobed": 4
     },
     "preview": {
-      "entered": 6637,
-      "rejected": 887,
+      "entered": 6685,
+      "rejected": 839,
       "unprobed": 564,
       "mixed_event_blocks": 169,
       "skipped": 79
     },
     "observed_gaps": {
-      "unsupported command form/ShowRepairMenu": 47,
       "invalid actor value damage/restore": 28,
       "unsupported command form/SetOwnership": 25,
       "unsupported condition/IsPlayerMovingIntoNewSpace": 25,
@@ -238,13 +237,13 @@
       "unsupported command form/OpenTeammateContainer": 19,
       "unsupported UseWeapon firing procedure": 18,
       "unsupported expression operand/GetDestroyed": 18,
-      "ShowBarterMenu requires actor reference": 17,
       "unsupported condition/IsActorTalkingThroughActivator": 17,
       "invalid Kill actor": 16,
       "unsupported command arguments/Say": 15,
       "Activate requires a reference owner": 14,
       "unsupported command form/ResetAI": 14,
       "unsupported command form/SetMerchantContainer": 14,
+      "ShowBarterMenu requires actor reference": 13,
       "AddItemHealthPercent/invalid inventory health percent": 12,
       "unresolved PlaceAtMe reference or base": 12,
       "unsupported command form/CastImmediateOnSelf": 12,
@@ -255,11 +254,11 @@
       "unsupported condition/GetInSameCell": 11,
       "unsupported expression operand/GetGameSetting": 11,
       "invalid inventory command": 10,
-      "RemoveItem/invalid inventory command": 9,
       "invalid reference action receiver": 9,
       "unsupported condition/GetDayOfWeek": 9,
       "unsupported condition/IsRaining": 9,
       "AddScriptPackage/invalid reference action receiver": 8,
+      "RemoveItem/invalid inventory command": 8,
       "unsupported actor value": 8,
       "unsupported command form/RemoveMe": 8,
       "unsupported command form/ShowWarning": 8,
@@ -277,13 +276,13 @@
       "unsupported expression operand/IsInInterior": 6,
       "invalid PlayGroup receiver/group": 5,
       "invalid dispel receiver or source": 5,
-      "invalid faction membership": 5,
       "unresolved EVP reference": 5,
       "unsupported command form/SetVATSTarget": 5,
       "unsupported condition/GetHealthPercentage": 5,
       "unsupported expression operand/HasLoaded3D": 5,
       "EquipItem/invalid actor equipment item": 4,
       "invalid SetOpenState": 4,
+      "invalid faction membership": 4,
       "unrecognized script preamble at line #": 4,
       "unsupported command form/SetItemValue": 4,
       "unsupported command form/UnequipItem": 4,
@@ -785,9 +784,8 @@
     },
     "unmapped_operands": {},
     "preview_rejections": {
-      "script command rejected by canonical Player API": 318,
+      "script command rejected by canonical Player API": 322,
       "terminal action unavailable": 147,
-      "unsupported command form/ShowRepairMenu": 47,
       "unsupported executed command/StartCombat/implicit command requires a script owner": 31,
       "distance location unavailable": 25,
       "unsupported command form/ModActorValue": 22,
@@ -796,10 +794,10 @@
       "item query unavailable": 20,
       "implicit command requires a script owner": 18,
       "unsupported expression syntax": 18,
-      "ShowBarterMenu requires actor reference": 17,
       "package procedure speech unavailable": 16,
       "unresolved expression operand": 15,
       "animation reference unavailable": 14,
+      "ShowBarterMenu requires actor reference": 13,
       "invalid Kill actor": 13,
       "unsupported command form/SetMerchantContainer": 12,
       "unsupported command form/SetOwnership": 12,
@@ -815,7 +813,6 @@
       "unsupported command arguments/KillActor": 7,
       "unsupported command form/RemoveMe": 7,
       "unsupported command form/TriggerLODApocalypse": 7,
-      "unsupported executed command/RemoveItem/invalid inventory command": 7,
       "unsupported function #": 7,
       "activation actor unavailable": 6,
       "invalid reference action receiver": 6,
@@ -824,6 +821,7 @@
       "unsupported command form/SetDestroyed": 6,
       "unsupported executed command/AddItemHealthPercent/invalid inventory health percent": 6,
       "unsupported executed command/AddScriptPackage/invalid reference action receiver": 6,
+      "unsupported executed command/RemoveItem/invalid inventory command": 6,
       "unsupported expression operand/GetDestroyed": 6,
       "invalid StartConversation references/topic": 5,
       "unsupported command form/SetVATSTarget": 5,
@@ -840,8 +838,8 @@
       "unsupported command form/UnequipItem": 4,
       "unsupported executed command/AddItem/invalid inventory command": 4,
       "invalid SetOpenState": 3,
-      "invalid faction membership": 3,
       "unsupported actor value": 3,
+      "unsupported command form/SendAssaultAlarm": 3,
       "unsupported expression operand/GetForceSneak": 3,
       "GetDisabled reference #": 2,
       "GetLinkedRef receiver is unset": 2,
@@ -851,13 +849,13 @@
       "invalid PlaceAtMe count": 2,
       "invalid PlaySound caller": 2,
       "invalid PlaySound3D receiver or sound": 2,
+      "invalid faction membership": 2,
       "invalid lock level": 2,
       "live PushActorAway needs knockdown and get-up": 2,
       "orphan endif": 2,
       "reference context unavailable": 2,
       "unresolved reference assignment": 2,
       "unsupported command form/FireWeapon": 2,
-      "unsupported command form/SendAssaultAlarm": 2,
       "unsupported command form/SetFactionReaction": 2,
       "unsupported command form/SetPCCanUsePowerArmor": 2,
       "unsupported command form/ShowPlasticSurgeonMenu": 2,
@@ -907,7 +905,7 @@
       "GetStage": 247,
       "GetSecondsPassed": 193,
       "GetDead": 123,
-      "GetItemCount": 101,
+      "GetItemCount": 102,
       "GetStageDone": 74,
       "GetActorValue": 66,
       "GetDistance": 63,
@@ -955,7 +953,6 @@
       "IsActor": 1
     },
     "handler_diagnostics": {
-      "unsupported command form/ShowRepairMenu": 47,
       "unsupported command form/SetOwnership": 25,
       "unsupported condition/IsPlayerMovingIntoNewSpace": 25,
       "unsupported command form/ModActorValue": 23,
@@ -1079,7 +1076,7 @@
       "GetStageDone": 311,
       "GetPCIsSex": 214,
       "GetDeadCount": 174,
-      "GetInFaction": 158,
+      "GetInFaction": 170,
       "GetIsVoiceType": 99,
       "HasPerk": 88,
       "GetIsSex": 78,
@@ -1116,13 +1113,13 @@
     },
     "literal_event_dispatch_sites": {
       "gamemode": [
-        "scripting/fo3-script-runtime.inc:2024",
-        "scripting/fo3-script-runtime.inc:2039",
-        "scripting/fo3-script-runtime.inc:2057"
+        "scripting/fo3-script-runtime.inc:2025",
+        "scripting/fo3-script-runtime.inc:2040",
+        "scripting/fo3-script-runtime.inc:2058"
       ],
       "onactivate": [
         "npc/fo3-npc-door-runtime.inc:121",
-        "scripting/fo3-script-runtime.inc:953",
+        "scripting/fo3-script-runtime.inc:954",
         "scripting/fo3-script-transaction.inc:77",
         "scripting/fo3-script-transaction.inc:166"
       ],
@@ -1131,9 +1128,9 @@
         "scripting/fo3-world-script-runtime.inc:538"
       ],
       "ondeath": [
-        "scripting/fo3-script-runtime.inc:1010",
-        "scripting/fo3-script-runtime.inc:1667",
-        "scripting/fo3-script-runtime.inc:1711",
+        "scripting/fo3-script-runtime.inc:1011",
+        "scripting/fo3-script-runtime.inc:1668",
+        "scripting/fo3-script-runtime.inc:1712",
         "weapons/fo3-weapon-player.cpp:617"
       ],
       "onload": [
@@ -1148,7 +1145,7 @@
       ],
       "scripteffectstart": [
         "player/fo3-aid-player.inc:290",
-        "scripting/fo3-script-runtime.inc:1636"
+        "scripting/fo3-script-runtime.inc:1637"
       ],
       "onadd": [
         "player/fo3-player-state.cpp:1041",
@@ -1163,7 +1160,7 @@
         "npc/fo3-npc-combat-runtime.inc:699"
       ],
       "scripteffectfinish": [
-        "scripting/fo3-script-runtime.inc:1716"
+        "scripting/fo3-script-runtime.inc:1717"
       ],
       "onpackagedone": [
         "scripting/fo3-script-transaction.inc:228"
@@ -1193,8 +1190,8 @@
       "onunequip": [
         "player/fo3-player-state.cpp:1107",
         "player/fo3-player-state.cpp:1117",
-        "scripting/fo3-script-runtime.inc:1279",
-        "scripting/fo3-script-runtime.inc:1389"
+        "scripting/fo3-script-runtime.inc:1280",
+        "scripting/fo3-script-runtime.inc:1390"
       ],
       "ondestructionstagechange": [],
       "ondrop": [],
@@ -1203,6 +1200,6 @@
       "onrelease": [],
       "onactorunequip": []
     },
-    "index_sha256": "dee9f1f56fe60a8b0cc43e64b636f4222081a189fe9f9e3286a693aebae07c4b"
+    "index_sha256": "3e60a52d6177e283427a569ed36208dbc39a8956fa78d58cbbf5671ad143698f"
   }
 }

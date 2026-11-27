@@ -114,7 +114,7 @@ void remember(Owners& owners, uint32_t id, uint32_t ref) {
 void survey(Player& player) {
     const auto& catalog = player.Definitions();
     const auto& d = catalog.pipboy;
-    Owners placements, scriptOwners, questOwners, packageActors;
+    Owners placements, scriptOwners, questOwners, packageActors, factionSpeakers;
     for (const auto& [ref, r] : catalog.references) {
         if (!r.valid) continue;
         remember(placements, r.base, ref);
@@ -123,6 +123,14 @@ void survey(Player& player) {
         auto actor = d.dialogueActors.find(r.base);
         if (actor != d.dialogueActors.end())
             for (auto package : actor->second.packages) remember(packageActors, package, ref);
+        const auto* stats = player.ActorStatistics(ref);
+        if (!stats || stats->creature || player.ActorHealth(ref) <= 0) continue;
+        const auto* factions = player.ActorCategory(ref, 4);
+        bool disabled = false;
+        std::string error;
+        if (!factions || factions->factions.empty() || !player.ReferenceDisabled(ref, disabled, error) || disabled) continue;
+        for (const auto& [id, rank] : factions->factions)
+            if (rank >= 0) remember(factionSpeakers, id, ref);
     }
     for (const auto& [id, q] : d.quests) remember(questOwners, q.script, id);
     for (const auto& [id, s] : d.scripts) {
@@ -163,11 +171,22 @@ void survey(Player& player) {
                 followsOr = (c.flags & 1) != 0;
             }
         }
+        // A single positive speaker-faction gate can be exercised with an actual
+        // enabled member. Record this as a sample, since the speaker is not unique.
+        bool factionSample = false;
+        if (!owner && !i.speaker && i.conditions.size() == 1) {
+            const auto& c = i.conditions.front();
+            if (!c.flags && !c.run && c.function == 71 && c.value == 1) {
+                auto found = factionSpeakers.find(c.a);
+                if (found != factionSpeakers.end()) { owner = found->second; factionSample = true; }
+            }
+        }
         for (unsigned phase = 0; phase < 2; ++phase) {
             const auto& s = phase ? i.end : i.begin;
             if (!present(s)) continue;
             const auto k = key("INFO", i.id, phase ? "end" : "begin");
             row(k, "owner", std::to_string(owner));
+            if (factionSample) row(k, "owner_basis", "sampled faction member");
             compile(k, player, s, owner);
             conditions(k, "info", i.conditions, player, owner);
             const auto q = d.quests.find(i.quest);

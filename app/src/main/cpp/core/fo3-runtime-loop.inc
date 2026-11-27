@@ -2328,11 +2328,13 @@ private:
                         Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
                     menuUpdate.Finish();
                     fqperf::Scope dialogueUpdate(fqperf::DialogueUpdate);
+                    const bool dialogueInput=!(lockControls||Fo3LockpickFocus()||terminalControls||Fo3TerminalInputBlocked()||
+                        scriptControls||Fo3ScriptMessageFocus()||Fo3LevelUpFocus());
                     UpdateFo3Dialogue(gameplaySeconds,
-                        !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid?lootScrollY_:0,
-                        !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid&&activateDownQ1700_,
-                        !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid&&pipBackDown_,
-                        sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
+                        dialogueInput&&q210RightValid?lootScrollY_:0,
+                        dialogueInput&&q210RightValid&&activateDownQ1700_,
+                        dialogueInput&&q210RightValid&&pipBackDown_,
+                        dialogueInput&&sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
                         q210LeftValid?fingerTriggerValue_[0]:0,q210LeftValid&&barterConfirmDown_);
                     dialogueUpdate.Finish();
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
@@ -2989,7 +2991,13 @@ private:
                 fo3levelui::Render(mvp.m,gLevelUp.panel);
             }
             const auto headMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
-            if(showHud&&gPlayerSession&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()){
+            if(showHud&&gRepair.panel.visible&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()){
+                Mat4 offset{};offset.m[0]=offset.m[5]=offset.m[10]=offset.m[15]=1.f;
+                offset.m[14]=-1.1f;offset.m[13]=.10f;
+                const auto mvp=Multiply(headMvp,offset);
+                fo3dialogueui::Render(mvp.m,gRepair.panel);
+            }
+            if(showHud&&gPlayerSession&&!Fo3BarterFocus()&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()){
                 const auto& panel=gDialoguePanel.visible?gDialoguePanel:fo3worldscript::scriptSubtitle;
                 if(panel.visible){
                     Mat4 offset{};

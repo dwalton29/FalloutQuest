@@ -19,7 +19,7 @@ const Stack* BarterStack(const std::vector<Stack>& v,uint64_t id) {
   for(const auto& s:v)if(s.id==id)return &s;
   return nullptr;
 }
-int64_t BarterCaps(const std::vector<Stack>& v) {
+int64_t InventoryCaps(const std::vector<Stack>& v) {
   int64_t n=0;for(const auto& s:v)if(s.formId==0xf)n+=s.count;return n;
 }
 }
@@ -162,7 +162,7 @@ bool Player::BarterBalance(const BarterSession& session,int64_t& net,std::string
     if(!std::isfinite(totalPrice)||double(std::abs(totalPrice))>INT32_MAX){error="Transaction too large";return false;}
   }
   net=int64_t(totalPrice); // Caps are integer currency; round only after stack totals.
-  const auto playerCaps=BarterCaps(session.player),merchantCaps=BarterCaps(session.merchant);
+  const auto playerCaps=InventoryCaps(session.player),merchantCaps=InventoryCaps(session.merchant);
   if(playerCaps>INT32_MAX||merchantCaps>INT32_MAX||net>playerCaps||-net>merchantCaps||
      playerCaps-net>INT32_MAX||merchantCaps+net>INT32_MAX){error=net>0?"Not enough player caps":"Not enough merchant caps";return false;}
   return true;
@@ -189,7 +189,7 @@ bool Player::ConfirmBarter(BarterSession& session,std::string& error) {
     if(v.size()>=10000||(!id&&candidate.nextStackId==UINT64_MAX))return false;
     v.push_back({id?id:candidate.nextStackId++,0xf,int32_t(amount),1,false});return true;
   };
-  if(!caps(candidate.inventory,BarterCaps(session.player)-net)||!caps(merchant,BarterCaps(session.merchant)+net)){
+  if(!caps(candidate.inventory,InventoryCaps(session.player)-net)||!caps(merchant,InventoryCaps(session.merchant)+net)){
     error="Currency capacity exceeded";return false;}
   size_t total=0;for(const auto& c:candidate.containers)total+=c.second.size();
   if(total>30000||revision_==UINT64_MAX){error="Save capacity exceeded";return false;}

@@ -15,8 +15,9 @@ struct DialogueEligibility {uint64_t revision=UINT64_MAX;double until=0;bool val
 std::unordered_map<uint32_t,DialogueEligibility> gDialogueEligibility;
 std::unordered_set<std::string> gDialogueDiagnostics;
 #include "fo3-barter-runtime.inc"
-bool Fo3BarterFocus(){return gBarter.active;}
-bool Fo3DialogueFocus(){return gDialogue.Active();}
+#include "fo3-repair-runtime.inc"
+bool Fo3BarterFocus(){return gBarter.active||gRepair.panel.visible;}
+bool Fo3DialogueFocus(){return gDialogue.Active()||gRepair.panel.visible;}
 Q230ActorVisual* DialogueActor(uint32_t reference) {
   for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==reference)return &actor;
   return nullptr;
@@ -222,7 +223,11 @@ void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
   fo3audio::DialogueStop();
   if(previous&&gPlayerSession){fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();}
 }
-void EndFo3Dialogue(const char* reason){CleanupFo3Dialogue(gDialogue.actor,reason);}
+void EndFo3Dialogue(const char* reason){
+  CloseFo3Repair();
+  if(gPlayerSession){uint32_t unused;while(gPlayerSession->player.PollRepair(unused)){}}
+  CleanupFo3Dialogue(gDialogue.actor,reason);
+}
 bool StartFo3Dialogue(uint32_t reference,uint32_t topic=0,
                       fo3dialogue::GreetingInitiator initiator=fo3dialogue::GreetingInitiator::Player) {
   if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
@@ -270,6 +275,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
     // OpenXR focus can transiently leave FOCUSED while the application remains
     // visible (system UI/headset state). Do not destroy an authored conversation
     // for that presentation-level event; input is already gated by focused below.
+    else if(gRepair.panel.visible)UpdateFo3Repair(now,stick,pressA,pressB,x,focused);
     else if(gBarter.active)UpdateFo3Barter(now,stick,horizontal,leftTrigger,trigger,x,pressA,pressB,focused);
     else if(focused&&pressB){
       auto ctx=DialogueContext(*actor);const auto previous=gDialogue.audioToken;
@@ -334,8 +340,16 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
         }
       }
     }
+  }else if(gRepair.panel.visible){
+    if(!gPlayerSession||Fo3PipboyFocus()||IsFo3LoadingVisible())CloseFo3Repair();
+    else UpdateFo3Repair(now,stick,pressA,pressB,x,focused);
   }
-  if(gPlayerSession&&gDialogue.Active()&&gDialogue.phase!=fo3dialogue::Phase::Speaking&&!gBarter.active){
+  if(gPlayerSession&&!gBarter.active&&!gRepair.panel.visible&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible()&&
+     gDialogue.phase!=fo3dialogue::Phase::Speaking&&gDialogue.phase!=fo3dialogue::Phase::Results){
+    uint32_t repairer=0;
+    if(gPlayerSession->player.PollRepair(repairer)&&RefreshFo3Repair(repairer))gRepair.xDown=x;
+  }
+  if(gPlayerSession&&gDialogue.Active()&&gDialogue.phase!=fo3dialogue::Phase::Speaking&&!Fo3BarterFocus()){
     fo3player::BarterRequest request;
     if(gPlayerSession->player.PollBarter(request)&&request.actor==gDialogue.actor&&
        gPlayerSession->player.OpenBarter(request.actor,request.discount,gBarter.session)){
