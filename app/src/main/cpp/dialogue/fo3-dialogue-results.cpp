@@ -284,6 +284,19 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       if(in>>a){
         if(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid resurrection animation flag";return false;}
       }else in.clear();
+    } else if(commandName=="setownership"||commandName=="clearownership"||op=="setcellownership"){
+      if(op=="setcellownership"){
+        cmd.type=CommandType::SetCellOwnership;
+        if(!(in>>a)||!bindReference(a,cmd.receiverLocal,cmd.form)){error="unresolved ownership cell";return false;}
+      }else{
+        cmd.type=commandName=="setownership"?CommandType::SetOwnership:CommandType::ClearOwnership;
+        if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"unresolved ownership reference";return false;}
+      }
+      if(cmd.type!=CommandType::ClearOwnership){
+        if(in>>a){
+          if(!bindReference(a,cmd.targetLocal,cmd.index)){error="unresolved owner";return false;}
+        }else{in.clear();cmd.index=fo3player::PlayerBase;}
+      }
     } else if(commandName=="setcombatstyle"||commandName=="setcs"||commandName=="setplayerteammate"){
       if(!bindReceiver()){error="unresolved actor for "+commandName;return false;}
       if(commandName=="setplayerteammate"){

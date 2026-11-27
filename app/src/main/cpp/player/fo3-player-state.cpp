@@ -66,6 +66,16 @@ int32_t I32(const uint8_t *p) {
   std::memcpy(&result, &u, 4);
   return result;
 }
+void ReadOwnershipField(OwnershipData& data,const Sub& sub) {
+  if(sub.type=="XOWN"){
+    data.explicitOwner=true;
+    if(sub.size==4)data.owner=fo3esm::ReadU32(sub.data);else data.valid=false;
+  }else if(sub.type=="XRNK"){
+    if(sub.size==4)data.rank=I32(sub.data);else data.valid=false;
+  }else if(sub.type=="XGLB"){
+    if(sub.size==4)data.global=fo3esm::ReadU32(sub.data);else data.valid=false;
+  }
+}
 const Sub *Find(const std::vector<Sub> &subs, const char *type) {
   for (const auto &s : subs)
     if (s.type == type)
@@ -457,6 +467,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
         }
         Reference ref;ref.flags=flags;ref.cell=groupCells.empty()?0:groupCells.back();
         const auto* base=Find(subs,"NAME");if(base&&base->size==4)ref.base=fo3esm::ReadU32(base->data);
+        for(const auto& sub:subs)ReadOwnershipField(ref.ownership,sub);
+        ref.owner=ref.ownership.owner;
         ref.valid=ref.base!=0;next.references[form]=ref;
         // Preserve the decoded authored placement before Pip-Boy's target
         // finalizer retains only quest/navigation references.
@@ -579,18 +591,6 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
               ref.valid = false;
             else
               ref.condition = fo3esm::ReadF32(sub.data);
-          } else if (sub.type == "XOWN") {
-            if (sub.size != 4)
-              ref.valid = false;
-            else
-              ref.owner = fo3esm::ReadU32(sub.data);
-            ref.ownership.owner=ref.owner;ref.ownership.explicitOwner=true;
-          } else if(sub.type=="XRNK") {
-            if(sub.size!=4)ref.ownership.valid=false;
-            else ref.ownership.rank=I32(sub.data);
-          } else if(sub.type=="XGLB") {
-            if(sub.size!=4)ref.ownership.valid=false;
-            else ref.ownership.global=fo3esm::ReadU32(sub.data);
           } else if (sub.type == "XLOC") {
             if (sub.size < 12)
               ref.valid = false;
@@ -601,18 +601,20 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error,const
               ref.lockLevel=sub.data[0];ref.lockFlags=sub.data[8];
               if(sub.size>=20)std::copy_n(sub.data+12,8,ref.lockMetadata.begin());
             }
+          } else {
+            ReadOwnershipField(ref.ownership,sub);
+            if(sub.type=="XOWN"&&sub.size!=4)ref.valid=false;
           }
         }
+        ref.owner=ref.ownership.owner;
         ref.valid = ref.valid && ref.count > 0 &&
                     std::isfinite(ref.condition) && ref.condition >= 0 &&
                     ref.condition <= 1;
         next.references[form] = ref;
       } else if (type == "CELL") {
         CellOwnership cell;cell.editor=Text(subs,"EDID");cell.name=Text(subs,"FULL");
-        const auto *owner=Find(subs,"XOWN"),*rank=Find(subs,"XRNK"),*global=Find(subs,"XGLB"),*data=Find(subs,"DATA");
-        if(owner){cell.data.explicitOwner=true;cell.data.valid=owner->size==4;if(cell.data.valid)cell.data.owner=fo3esm::ReadU32(owner->data);}
-        if(rank){if(rank->size==4)cell.data.rank=I32(rank->data);else cell.data.valid=false;}
-        if(global){if(global->size==4)cell.data.global=fo3esm::ReadU32(global->data);else cell.data.valid=false;}
+        for(const auto& sub:subs)ReadOwnershipField(cell.data,sub);
+        const auto* data=Find(subs,"DATA");
         if(data&&data->size)cell.flags=data->data[0];
         next.cellOwnership[form]=cell;
       } else if (type == "DOOR") {
@@ -1326,10 +1328,11 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
     return true;
   // Personal NPC doors can be locked against the player even when the
   // authored owner has no key item. Leave the canonical lock in place.
-  if(actor!=PlayerRef&&ref.owner){
+  if(actor!=PlayerRef){
+    const auto owner=DirectOwnership(id).owner;
     const auto placement=catalog_->actorPlacements.find(actor);
-    if(placement!=catalog_->actorPlacements.end()&&
-       (ref.owner==actor||ref.owner==placement->second.base))return true;
+    if(owner&&placement!=catalog_->actorPlacements.end()&&
+       (owner==actor||owner==placement->second.base))return true;
   }
   if (!ref.key)
     return false;
@@ -1779,7 +1782,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(const auto& container:state_.containers)for(const auto& stack:container.second)collectScript(stack);
   for(const auto& weapon:state_.worldWeapons)collectScript(weapon.instance);
   const bool hasRevivedCorpse=std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& entry){return entry.second.revivedAuthoredCorpse;});
-  const bool hasActorOrders=!state_.combatStyleOverrides.empty()||!state_.playerTeammates.empty();
+  const bool hasOwnershipChanges=!state_.ownerOverrides.empty();
+  const bool hasActorOrders=hasOwnershipChanges||!state_.combatStyleOverrides.empty()||!state_.playerTeammates.empty();
   const bool seededShaders=!state_.magicShaders.empty();
   const bool hasAnimations=hasActorOrders||seededShaders||!scriptAnimations_.empty();
   const bool hasEffects=hasAnimations||!state_.placedBlastHits.empty()||!state_.placedEffects.empty()||!state_.magicShaders.empty();
@@ -2186,7 +2190,12 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(state_.playerTeammates.size()));
     for(uint32_t actor:state_.playerTeammates)Put32(payload,actor);
   }
-  Put32(bytes, hasActorOrders ? 50 : seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasOwnershipChanges){
+    Put32(payload,0x314e574f); // OWN1
+    Put32(payload,uint32_t(state_.ownerOverrides.size()));
+    for(const auto& [target,owner]:state_.ownerOverrides){Put32(payload,target);Put32(payload,owner);}
+  }
+  Put32(bytes, hasOwnershipChanges ? 51 : hasActorOrders ? 50 : seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -2246,7 +2255,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 50))
+      (version < 1 || version > 51))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2262,6 +2271,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   next.referenceEnabled.clear();
   next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
+  next.ownerOverrides.clear();
   next.combatStyleOverrides.clear();next.playerTeammates.clear();
   next.actorDamage.clear();next.actorKillers.clear();next.ragdollPushes.clear();next.magicShaders.clear();next.placedEffects.clear();next.placedBlastHits.clear();next.actorKnockouts.clear();next.unconsciousActors.clear();next.ghostActors.clear();
   next.actors.clear();
@@ -3052,6 +3062,17 @@ bool Player::Restore(const std::string &path, std::string &error) {
           const auto actor=fo3esm::ReadU32(p+at);
           if(actor==PlayerRef||!catalog_->actorPlacements.count(actor)||
              !next.playerTeammates.insert(actor).second)return fail("Invalid player teammate");
+        }
+      }
+      if(version>=51){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314e574f)return fail("Missing ownership changes");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(payload.size()-at!=8ull*count)return fail("Invalid ownership change count");
+        for(uint32_t i=0;i<count;++i,at+=8){
+          const auto target=fo3esm::ReadU32(p+at),owner=fo3esm::ReadU32(p+at+4);
+          if((!catalog_->references.count(target)&&(!owner||!catalog_->cellOwnership.count(target)))||
+             (owner&&OwnershipBase(owner)!=owner)||!next.ownerOverrides.emplace(target,owner).second)
+            return fail("Invalid saved ownership");
         }
       }
       if(at!=payload.size())return fail("Trailing player save data");

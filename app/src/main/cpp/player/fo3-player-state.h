@@ -304,6 +304,8 @@ struct State {
   std::map<std::pair<uint32_t,uint32_t>,ShaderPlayback> magicShaders;
   std::map<uint32_t,uint32_t> combatStyleOverrides;
   std::set<uint32_t> playerTeammates;
+  // REFR/ACHR/ACRE and CELL FormIDs share one namespace. Zero clears direct ownership.
+  std::map<uint32_t,uint32_t> ownerOverrides;
   std::vector<PlacedEffect> placedEffects;
   std::vector<PlacedBlastHit> placedBlastHits;
   std::unordered_set<uint32_t> unconsciousActors,ghostActors;
@@ -922,6 +924,8 @@ public:
   bool DoorInteractionCrime(uint32_t reference) const;
   bool ScriptReferenceLocation(uint32_t reference,fo3pipdata::Location& location,float* height=nullptr) const;
   bool ScriptPackage(uint32_t reference,uint32_t package,bool add);
+  bool ChangeScriptOwnership(uint32_t target,uint32_t owner,bool cell);
+  bool ScriptIsOwner(uint32_t reference,uint32_t owner,float& result) const;
   OwnershipResult ResolveOwnership(uint32_t reference, const OwnershipData* item=nullptr) const;
   OwnershipResult ContainerStackOwnership(uint32_t reference,uint64_t stack) const;
   void BeginContainerInteraction(uint32_t reference);
@@ -995,6 +999,8 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  uint32_t OwnershipBase(uint32_t form) const;
+  OwnershipData DirectOwnership(uint32_t form) const;
   bool TransferWeaponAmmo(uint64_t instance,const fo3weapon::Definition&,int32_t capacity,bool ready);
   friend bool LoadCatalog(const std::string&,Catalog&,std::string&,const TriggerModelLoader&);
   friend struct Session;

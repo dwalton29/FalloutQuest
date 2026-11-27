@@ -509,7 +509,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.voices[id] = Text(s, "EDID");
   else if (t == "NPC_" || t == "CREA" || t == "TACT") {
     d.npcVoices[id] = U(Find(s, t=="TACT"?"VNAM":"VTCK"));
-    ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");actor.talkingActivator=t=="TACT";
+    ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");actor.talkingActivator=t=="TACT";actor.creature=t=="CREA";
     if(auto bounds=Find(s,"OBND");bounds&&bounds->n==12&&t!="TACT")
       for(size_t i=0;i<6;++i)actor.objectBounds[i]=int16_t(fo3esm::ReadU16(bounds->p+2*i));
     if(t=="CREA")actor.bodyParts=U(Find(s,"PNAM"));

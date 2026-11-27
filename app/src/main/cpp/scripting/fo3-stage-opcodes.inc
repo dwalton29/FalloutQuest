@@ -69,6 +69,8 @@
     case 0x1101: return {"stopcombatalarmonactor","",0,false};
     case 0x110d: return {"setquestobject","rn",2,false};
     case 0x1114: return {"playbink","snnnn",1,false};
+    case 0x1116: return {"isowner","r",0,true};
+    case 0x1117: return {"setownership","r",0,false};
     case 0x1119: return {"setcellownership","rr",1,false};
     case 0x111c: return {"setactorfullname","r",1,false};
     case 0x1123: return {"pms","rn",1,false};
@@ -91,6 +93,7 @@
     case 0x1180: return {"removefromfaction","r",1,false};
     case 0x1182: return {"restoreactorvalue","an",2,false};
     case 0x118a: return {"pushactoraway","rn",2,false};
+    case 0x118c: return {"clearownership","",0,false};
     case 0x1190: return {"playidle","s",1,false};
     case 0x1191: return {"applyimagespacemodifier","rn",1,false};
     case 0x1192: return {"removeimagespacemodifier","rn",1,false};

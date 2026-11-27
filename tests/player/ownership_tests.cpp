@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include "audio/fo3-audio-catalog.h"
+#include "dialogue/fo3-dialogue-conditions.h"
 #include "ui/interaction/fo3-item-notifications.h"
 #include <cstdio>
 #include <fstream>
@@ -98,6 +99,93 @@ void Synthetic(){
  reward.source="RewardKarma -5\nRemoveItem MissingForm 1\n";
  Check(!scripted.ExecuteDialogueResult(reward,error)&&scripted.Snapshot().karma==15&&!scripted.PollKarmaEvent(k),"failed script rolls back karma feedback");
 }
+void ScriptOwnership(){
+ auto c=Fixture();
+ c.pipboy.formNames.insert({{"cupref",3},{"cabinet",20},{"shop",60},{"shopkeeper",90},{"guild",80}});
+ c.references[20].cell=60;
+ c.references[21].cell=60;
+ Player p(c);
+ std::string error;
+ fo3pipdata::ResultScript change;
+ change.source="Cabinet.SetOwnership\nif Cabinet.IsOwner && CupRef.IsOwner Shopkeeper\nSetCellOwnership Shop Guild\nendif";
+ auto plan=p.PrepareDialogueTransaction(change,{},error);
+ Check(plan&&p.ResolveOwnership(20).Theft(),"preview preserves live ownership");
+ Check(p.CommitScriptTransaction(*plan)&&p.ResolveOwnership(20).permitted,"commit changes cabinet access");
+ Check(p.ResolveOwnership(6).inherited&&p.ResolveOwnership(6).data.owner==80,"cell change reaches inherited references");
+ Check(p.RollbackScriptTransaction(*plan)&&p.ResolveOwnership(20).Theft()&&p.ResolveOwnership(6).data.owner==90,"rollback restores both owners");
+ Check(p.ExecuteDialogueResult(change,error),error.c_str());
+ Check(p.PrepareContainer(21),"open mixed container");
+ for(const auto& row:*p.ContainerContents(21)){
+   const auto ownership=p.ContainerStackOwnership(21,row.id);
+   Check(!ownership.inherited&&ownership.data.owner==row.ownership.owner,"explicit stack owner overrides scripted cell owner");
+ }
+ Check(p.PrepareContainer(20),"open reward cabinet");
+ const auto stack=p.ContainerContents(20)->front().id;
+ Check(p.ContainerStackOwnership(20,stack).permitted&&p.TakeContainerStack(20,stack),"reward can be collected");
+ TheftEvent theft;
+ Check(!p.PollTheftEvent(theft)&&p.Snapshot().karma==10,"legal reward has no crime or karma penalty");
+ change.source="ClearOwnership";
+ Check(p.ExecuteDialogueResult(change,error,20),"clear implicit reference owner");
+ Check(p.ResolveOwnership(20).inherited&&p.ResolveOwnership(20).data.owner==80,"cleared reference inherits current cell owner");
+ fo3dialogue::Context ctx;ctx.player=&p;
+ fo3pipdata::Condition cond;cond.function=278;cond.run=2;cond.reference=20;cond.a=80;cond.value=0;
+ Check(fo3dialogue::Conditions({cond},ctx,error),"IsOwner ignores inherited ownership");
+ cond.reference=3;cond.a=90;cond.value=1;
+ Check(fo3dialogue::Conditions({cond},ctx,error),"explicit owner in reference-run condition");
+ change.source="SetCellOwnership Shop\nCupRef.SetOwnership Guild";
+ Check(p.ExecuteDialogueResult(change,error)&&p.ResolveOwnership(20).permitted,"omitted CELL owner selects player");
+ change.source="CupRef.SetOwnership\nShop.SetOwnership Guild";
+ Check(!p.ExecuteDialogueResult(change,error)&&p.ResolveOwnership(3).data.owner==80,"wrong reference type rolls back preceding assignment");
+ change.source="CupRef.SetOwnership CupRef";
+ Check(!p.ExecuteDialogueResult(change,error)&&p.ResolveOwnership(3).data.owner==80,"object is not an owner");
+ change.source="SetCellOwnership CupRef";
+ Check(!p.ExecuteDialogueResult(change,error),"reject a non-cell operand");
+ Check(p.Save("/tmp/fq-script-owners.fqps",error),error.c_str());
+ Player restored(c);
+ Check(restored.Restore("/tmp/fq-script-owners.fqps",error)&&restored.ResolveOwnership(20).inherited&&
+       restored.ResolveOwnership(20).permitted&&restored.ResolveOwnership(3).data.owner==80,"save keeps explicit, cleared and cell ownership");
+ Check(restored.Restore("/tmp/fq-theft-v12.fqps",error)&&restored.ResolveOwnership(20).data.owner==90,"legacy save resets later ownership changes");
+}
+
+void OriginalScriptOwnership(Catalog c){
+ const auto& names=c.pipboy.formNames;
+ const auto mq05=names.at("mq05"),ms04=names.at("ms04");
+ const auto chest=names.at("vendorleostahldrugsref"),cabinet=names.at("dukovsliquorcabinetref");
+ const auto faction=names.at("dukovsharefaction");
+ const auto clue=names.at("ms08notebanfieldref"),ms08=names.at("ms08");
+ const auto lab=names.at("grayditchdoctorleskoslab"),doctor=names.at("doctorlesko");
+ c.initial.pipboy.quests[mq05].stage=85;
+ Player p(std::move(c));p.RegisterOriginalActors();
+ std::string error;
+ const auto& catalog=p.Definitions();
+ const auto& info=catalog.dialogueInfos.at(0x208c3);
+ const auto key=catalog.pipboy.formNames.at("leostahldrugsvendorkey");
+ const auto keys=p.ItemCount(key);
+ auto reward=p.PrepareDialogueInfoTransaction(info.first,0x208c3,DialogueScriptPhase::End,error,catalog.pipboy.formNames.at("leostahlref"));
+ Check(reward&&p.ResolveOwnership(chest).Theft()&&p.ItemCount(key)==keys,"original reward preview");
+ Check(p.CommitScriptTransaction(*reward)&&p.ResolveOwnership(chest).kind==OwnershipKind::Player&&p.ItemCount(key)==keys+1,"original dialogue grants key and ownership together");
+ const auto [topic,index]=catalog.dialogueInfos.at(0x42ed1);
+ auto compiled=catalog.pipboy.topics.at(topic).at(index).end;
+ compiled.source.clear();
+ Check(!compiled.compiled.empty()&&p.ExecuteDialogueResult(compiled,error)&&p.ResolveOwnership(cabinet).data.owner==faction,"compiled-only original cabinet transfer");
+ const auto stage=p.PrepareQuestStageTransaction(ms04,100,error);
+ Check(bool(stage),error.c_str());
+ Check(p.CommitScriptTransaction(*stage)&&p.Snapshot().ownerOverrides.at(lab)==doctor,"Grayditch stage assigns the lab");
+ auto trigger=p.PrepareReferenceEventTransaction(0x4faf0,"OnTriggerEnter",PlayerRef,error);
+ Check(bool(trigger),error.c_str());
+ Check(p.CommitScriptTransaction(*trigger),"commit barn trigger");
+ for(unsigned n=1;n<=33;++n){
+   const auto name=std::string("barnscavengeritem")+(n<10?"0":"")+std::to_string(n);
+   const auto ref=catalog.pipboy.formNames.at(name);
+   float stillOwned=0;
+   const auto oldOwner=catalog.references.at(ref).owner;
+   Check(oldOwner&&p.ScriptIsOwner(ref,oldOwner,stillOwned)&&!stillOwned,"all barn items release their original owners");
+ }
+ auto note=p.PrepareReferenceEventTransaction(clue,"OnActivate",PlayerRef,error);
+ Check(bool(note),error.c_str());
+ Check(p.CommitScriptTransaction(*note)&&p.Snapshot().pipboy.quests.at(ms08).stages.count(1),"original owner-specific clue enters its quest stage");
+}
+
 void Original(const char* path){
  Catalog c;std::string error;const bool loaded=LoadCatalog(path,c,error);Check(loaded,error.c_str());
  Check(c.theftKarma==-5,"original fKarmaModStealing");
@@ -105,6 +193,7 @@ void Original(const char* path){
  fo3audio::Catalog audio;Check(fo3audio::LoadCatalog(path,audio,error),error.c_str());
  Check(audio.sounds.at(audio.names.at("UIKarmaDown")).path=="sound/fx/ui/ui_karma_down.wav","original Karma loss sound");
  Check(audio.sounds.at(audio.names.at("UIKarmaUp")).path=="sound/fx/ui/ui_karma_up.wav","original Karma gain sound");
+ OriginalScriptOwnership(c);
  Player p(std::move(c));size_t owned=0,unowned=0,inherited=0,ranked=0;
  for(const auto& ref:p.Definitions().references){auto o=p.ResolveOwnership(ref.first);
    if(p.CanPickup(ref.first)){if(o.Theft())++owned;else ++unowned;}
@@ -130,4 +219,4 @@ void Original(const char* path){
  Check(p.Restore("/tmp/fq-original-theft.fqps",error)&&p.IsCollected(loose)&&p.Snapshot().karma==start-5,"original save/reload");
  std::cout<<"Original owned="<<owned<<" legal="<<unowned<<" inherited="<<inherited<<" ranked="<<ranked<<" Megaton loose="<<std::hex<<loose<<" container="<<container<<std::dec<<" takes="<<takes<<"\n";
 }
-int main(int argc,char**argv){try{Synthetic();if(argc>1)Original(argv[1]);std::cout<<"Ownership/theft tests passed\n";}catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(int argc,char**argv){try{Synthetic();ScriptOwnership();if(argc>1)Original(argv[1]);std::cout<<"Ownership/theft tests passed\n";}catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 1;}}

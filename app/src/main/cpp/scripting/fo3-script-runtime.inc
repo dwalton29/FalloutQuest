@@ -28,6 +28,9 @@ class Expression {
     std::string animationGroup;
     if(query=="isanimplaying"&&at<tokens.size()&&std::isalpha(static_cast<unsigned char>(tokens[at].front())))
       animationGroup=tokens[at++];
+    std::string ownerArgument;
+    if(query=="isowner"&&at<tokens.size()&&(std::isalnum(static_cast<unsigned char>(tokens[at].front()))||tokens[at].front()=='_'))
+      ownerArgument=tokens[at++];
     if(syntaxOnly){
       size_t arguments=0;
       if(query=="getequipped"||query=="gethasnote"||query=="getinworldspace"||query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getisreference"||query=="getav"||
@@ -114,6 +117,11 @@ class Expression {
       }
       value=actor!=p.Snapshot().actors.end()&&(query=="getiscurrentpackage"?actor->second.package:actor->second.hostile)==argument;
       return true;
+    }
+    if(query=="isowner"){
+      const auto reference=dot==std::string::npos?owner:form(t.substr(0,dot));
+      const auto expected=ownerArgument.empty()?fo3player::PlayerBase:form(ownerArgument);
+      return p.ScriptIsOwner(reference,expected,value)||Fail("ownership query reference or owner unavailable");
     }
     if(query=="getplayerteammatecount"){value=float(p.Snapshot().playerTeammates.size());return true;}
     if(query=="getplayerteammate"){
@@ -722,6 +730,12 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Resurrect:
       if(c.value!=0){error="animated resurrection requires an authored get-up clip";return false;}
       ok=ResurrectActor(c.form);break;
+    case C::ClearOwnership:ok=ChangeScriptOwnership(receiver(),0,false);break;
+    case C::SetOwnership:case C::SetCellOwnership:{
+      const auto newOwner=resolve(c.targetLocal,c.index);
+      ok=newOwner&&ChangeScriptOwnership(receiver(),newOwner,c.type==C::SetCellOwnership);
+      break;
+    }
     case C::SetCombatStyle:{
       const auto style=resolve(c.targetLocal,c.index);
       ok=(!c.targetLocal||style)&&SetActorCombatStyle(receiver(),style);

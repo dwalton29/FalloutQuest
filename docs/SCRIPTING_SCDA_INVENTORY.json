@@ -209,24 +209,23 @@
       "REFR": 1
     },
     "compilation": {
-      "accepted": 7693,
-      "rejected": 228,
-      "with_deferred_failure": 174,
-      "mixed_event_blocks": 156,
+      "accepted": 7711,
+      "rejected": 216,
+      "with_deferred_failure": 170,
+      "mixed_event_blocks": 154,
       "needs_owner": 42,
       "no_event_blocks": 39,
       "unprobed": 4
     },
     "preview": {
-      "entered": 6685,
-      "rejected": 839,
+      "entered": 6706,
+      "rejected": 819,
       "unprobed": 564,
-      "mixed_event_blocks": 169,
+      "mixed_event_blocks": 168,
       "skipped": 79
     },
     "observed_gaps": {
       "invalid actor value damage/restore": 28,
-      "unsupported command form/SetOwnership": 25,
       "unsupported condition/IsPlayerMovingIntoNewSpace": 25,
       "unsupported command form/ModActorValue": 23,
       "unsupported reference assignment": 21,
@@ -358,7 +357,6 @@
       "unsupported command": 1,
       "unsupported command arguments/other/  freed == # ": 1,
       "unsupported command form/ClearActorsFactionsPlayerEnemyFlag": 1,
-      "unsupported command form/ClearOwnership": 1,
       "unsupported command form/DisableNavMesh": 1,
       "unsupported command form/EnableNavMesh": 1,
       "unsupported command form/ExitGame": 1,
@@ -366,7 +364,6 @@
       "unsupported command form/ResetInterior": 1,
       "unsupported command form/ResetQuest": 1,
       "unsupported command form/SetAngle": 1,
-      "unsupported command form/SetCellOwnership": 1,
       "unsupported command form/SetCellPublicFlag": 1,
       "unsupported command form/SetPCSleepHours": 1,
       "unsupported command form/SetRumble": 1,
@@ -389,7 +386,6 @@
       "unsupported expression operand/IsEssential": 1,
       "unsupported expression operand/IsInList": 1,
       "unsupported expression operand/IsLimbGone": 1,
-      "unsupported expression operand/IsOwner": 1,
       "unsupported expression operand/IsPC1stPerson": 1,
       "unsupported expression operand/IsPCSleeping": 1,
       "unsupported expression operand/IsPS3": 1,
@@ -793,21 +789,19 @@
       "terminal conditions changed": 21,
       "item query unavailable": 20,
       "implicit command requires a script owner": 18,
-      "unsupported expression syntax": 18,
+      "unsupported expression syntax": 17,
       "package procedure speech unavailable": 16,
       "unresolved expression operand": 15,
       "animation reference unavailable": 14,
       "ShowBarterMenu requires actor reference": 13,
       "invalid Kill actor": 13,
       "unsupported command form/SetMerchantContainer": 12,
-      "unsupported command form/SetOwnership": 12,
       "unsupported command form/ShowBarberMenu": 12,
       "unsupported command form/OpenTeammateContainer": 11,
       "unsupported command form/SetItemValue": 10,
       "unsupported executed command/other": 10,
       "invalid inventory command": 9,
       "unresolved PlaceAtMe reference or base": 8,
-      "unsupported command form/SetCellOwnership": 8,
       "GetInSameCell reference location unavailable": 7,
       "unbalanced expression": 7,
       "unsupported command arguments/KillActor": 7,
@@ -902,7 +896,7 @@
     },
     "bound_expression_calls": {
       "IsActionRef": 272,
-      "GetStage": 247,
+      "GetStage": 249,
       "GetSecondsPassed": 193,
       "GetDead": 123,
       "GetItemCount": 102,
@@ -950,10 +944,10 @@
       "GetIsLockBroken": 1,
       "GetPCMiscStat": 1,
       "GetXPForNextLevel": 1,
-      "IsActor": 1
+      "IsActor": 1,
+      "IsOwner": 1
     },
     "handler_diagnostics": {
-      "unsupported command form/SetOwnership": 25,
       "unsupported condition/IsPlayerMovingIntoNewSpace": 25,
       "unsupported command form/ModActorValue": 23,
       "unsupported command form/DamageObject": 19,
@@ -1025,7 +1019,6 @@
       "unsupported expression operand/GetPCIsSex": 2,
       "unsupported expression operand/IsWeaponInList": 2,
       "unsupported command form/ClearActorsFactionsPlayerEnemyFlag": 1,
-      "unsupported command form/ClearOwnership": 1,
       "unsupported command form/DisableNavMesh": 1,
       "unsupported command form/EnableNavMesh": 1,
       "unsupported command form/ExitGame": 1,
@@ -1033,7 +1026,6 @@
       "unsupported command form/ResetInterior": 1,
       "unsupported command form/ResetQuest": 1,
       "unsupported command form/SetAngle": 1,
-      "unsupported command form/SetCellOwnership": 1,
       "unsupported command form/SetCellPublicFlag": 1,
       "unsupported command form/SetPCSleepHours": 1,
       "unsupported command form/SetRumble": 1,
@@ -1056,7 +1048,6 @@
       "unsupported expression operand/IsEssential": 1,
       "unsupported expression operand/IsInList": 1,
       "unsupported expression operand/IsLimbGone": 1,
-      "unsupported expression operand/IsOwner": 1,
       "unsupported expression operand/IsPC1stPerson": 1,
       "unsupported expression operand/IsPCSleeping": 1,
       "unsupported expression operand/IsPS3": 1,
@@ -1113,13 +1104,13 @@
     },
     "literal_event_dispatch_sites": {
       "gamemode": [
-        "scripting/fo3-script-runtime.inc:2025",
-        "scripting/fo3-script-runtime.inc:2040",
-        "scripting/fo3-script-runtime.inc:2058"
+        "scripting/fo3-script-runtime.inc:2039",
+        "scripting/fo3-script-runtime.inc:2054",
+        "scripting/fo3-script-runtime.inc:2072"
       ],
       "onactivate": [
         "npc/fo3-npc-door-runtime.inc:121",
-        "scripting/fo3-script-runtime.inc:954",
+        "scripting/fo3-script-runtime.inc:968",
         "scripting/fo3-script-transaction.inc:77",
         "scripting/fo3-script-transaction.inc:166"
       ],
@@ -1128,10 +1119,10 @@
         "scripting/fo3-world-script-runtime.inc:538"
       ],
       "ondeath": [
-        "scripting/fo3-script-runtime.inc:1011",
-        "scripting/fo3-script-runtime.inc:1668",
-        "scripting/fo3-script-runtime.inc:1712",
-        "weapons/fo3-weapon-player.cpp:617"
+        "scripting/fo3-script-runtime.inc:1025",
+        "scripting/fo3-script-runtime.inc:1682",
+        "scripting/fo3-script-runtime.inc:1726",
+        "weapons/fo3-weapon-player.cpp:623"
       ],
       "onload": [
         "scripting/fo3-world-script-runtime.inc:547"
@@ -1141,16 +1132,16 @@
       ],
       "onhit": [
         "scripting/fo3-script-transaction.inc:180",
-        "weapons/fo3-weapon-player.cpp:615"
+        "weapons/fo3-weapon-player.cpp:621"
       ],
       "scripteffectstart": [
         "player/fo3-aid-player.inc:290",
-        "scripting/fo3-script-runtime.inc:1637"
+        "scripting/fo3-script-runtime.inc:1651"
       ],
       "onadd": [
-        "player/fo3-player-state.cpp:1041",
-        "player/fo3-player-state.cpp:1051",
-        "player/fo3-player-state.cpp:1058"
+        "player/fo3-player-state.cpp:1043",
+        "player/fo3-player-state.cpp:1053",
+        "player/fo3-player-state.cpp:1060"
       ],
       "ontriggerleave": [
         "scripting/fo3-world-script-runtime.inc:524",
@@ -1160,7 +1151,7 @@
         "npc/fo3-npc-combat-runtime.inc:699"
       ],
       "scripteffectfinish": [
-        "scripting/fo3-script-runtime.inc:1717"
+        "scripting/fo3-script-runtime.inc:1731"
       ],
       "onpackagedone": [
         "scripting/fo3-script-transaction.inc:228"
@@ -1171,7 +1162,7 @@
       ],
       "onhitwith": [
         "scripting/fo3-script-transaction.inc:181",
-        "weapons/fo3-weapon-player.cpp:616"
+        "weapons/fo3-weapon-player.cpp:622"
       ],
       "onpackagestart": [
         "scripting/fo3-script-transaction.inc:229"
@@ -1185,13 +1176,13 @@
       ],
       "scripteffectupdate": [],
       "onequip": [
-        "player/fo3-player-state.cpp:1108"
+        "player/fo3-player-state.cpp:1110"
       ],
       "onunequip": [
-        "player/fo3-player-state.cpp:1107",
-        "player/fo3-player-state.cpp:1117",
-        "scripting/fo3-script-runtime.inc:1280",
-        "scripting/fo3-script-runtime.inc:1390"
+        "player/fo3-player-state.cpp:1109",
+        "player/fo3-player-state.cpp:1119",
+        "scripting/fo3-script-runtime.inc:1294",
+        "scripting/fo3-script-runtime.inc:1404"
       ],
       "ondestructionstagechange": [],
       "ondrop": [],
@@ -1200,6 +1191,6 @@
       "onrelease": [],
       "onactorunequip": []
     },
-    "index_sha256": "3e60a52d6177e283427a569ed36208dbc39a8956fa78d58cbbf5671ad143698f"
+    "index_sha256": "e94f54320614b8edce60f70e69c94dc59375f9a466336803a40ded7c2eef92ab"
   }
 }

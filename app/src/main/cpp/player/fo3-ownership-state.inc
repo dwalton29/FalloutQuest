@@ -13,17 +13,64 @@ const fo3pipdata::ActorDefinition* OwnershipActor(const Catalog& c,uint32_t id,u
   return nullptr;
 }
 }
+uint32_t Player::OwnershipBase(uint32_t form) const {
+  if(form==PlayerRef||form==PlayerBase)return PlayerBase;
+  const auto placed=catalog_->actorPlacements.find(form);
+  if(placed!=catalog_->actorPlacements.end())form=placed->second.base;
+  if(catalog_->factionFlags.count(form))return form;
+  const auto actor=catalog_->pipboy.dialogueActors.find(form);
+  return actor!=catalog_->pipboy.dialogueActors.end()&&!actor->second.talkingActivator&&
+         !actor->second.creature?form:0;
+}
+
+OwnershipData Player::DirectOwnership(uint32_t form) const {
+  OwnershipData data;
+  const auto ref=catalog_->references.find(form);
+  if(ref!=catalog_->references.end()){
+    data=ref->second.ownership;
+    if(ref->second.owner){data.owner=ref->second.owner;data.explicitOwner=true;}
+  }else{
+    const auto cell=catalog_->cellOwnership.find(form);
+    if(cell!=catalog_->cellOwnership.end())data=cell->second.data;
+  }
+  const auto changed=state_.ownerOverrides.find(form);
+  if(changed!=state_.ownerOverrides.end()){
+    // The native commands edit ExtraOwnership only. Rank and global are separate extras.
+    data.owner=changed->second;data.explicitOwner=data.owner!=0;
+  }
+  return data;
+}
+
+bool Player::ChangeScriptOwnership(uint32_t target,uint32_t owner,bool cell){
+  const bool knownTarget=cell?catalog_->cellOwnership.count(target):catalog_->references.count(target);
+  if(!knownTarget)return false;
+  if(owner){
+    owner=OwnershipBase(owner);
+    if(!owner)return false;
+  }else if(cell)return false;
+  if(DirectOwnership(target).owner!=owner){
+    state_.ownerOverrides[target]=owner;
+    ++revision_;
+  }
+  return true;
+}
+
+bool Player::ScriptIsOwner(uint32_t reference,uint32_t owner,float& result) const {
+  if(!catalog_->references.count(reference))return false;
+  const auto base=OwnershipBase(owner);
+  if(!base)return false;
+  result=DirectOwnership(reference).owner==base;
+  return true;
+}
+
 OwnershipResult Player::ResolveOwnership(uint32_t id,const OwnershipData* item) const {
   OwnershipResult out;
   const auto ref=catalog_->references.find(id);
   if(ref==catalog_->references.end()){out.known=false;out.permitted=false;out.kind=OwnershipKind::Unknown;return out;}
   out.cell=ref->second.cell;
-  out.data=ref->second.ownership;
-  // owner retained for existing callers/fixtures; loader no longer flattens CELL.
-  if(ref->second.owner){out.data.owner=ref->second.owner;out.data.explicitOwner=true;}
-  if(!out.data.explicitOwner || !out.data.owner) {
-    const auto cell=catalog_->cellOwnership.find(out.cell);
-    if(cell!=catalog_->cellOwnership.end()){out.data=cell->second.data;out.inherited=out.data.explicitOwner;}
+  out.data=DirectOwnership(id);
+  if((!out.data.explicitOwner||!out.data.owner)&&catalog_->cellOwnership.count(out.cell)){
+    out.data=DirectOwnership(out.cell);out.inherited=out.data.explicitOwner;
   }
   if(item&&item->explicitOwner){out.data=*item;out.inherited=false;}
   const auto owner=out.data.owner;
@@ -50,7 +97,7 @@ OwnershipResult Player::ResolveOwnership(uint32_t id,const OwnershipData* item) 
   }
   // XGLB/COED NPC global permission semantics are not established. Keep
   // unresolved interactions blocked rather than charge or exempt arbitrarily.
-  if(out.data.global){out.known=false;out.permitted=false;out.karmaEligible=false;}
+  if(out.kind==OwnershipKind::NPC&&out.data.global){out.known=false;out.permitted=false;out.karmaEligible=false;}
   return out;
 }
 bool Player::DoorInteractionCrime(uint32_t reference) const {
@@ -65,7 +112,7 @@ OwnershipResult Player::ContainerStackOwnership(uint32_t id,uint64_t stack) cons
     // Keep the existing corpse inventory path separate from CELL-owned world
     // property. An actor's personal CNTO inventory is not a CELL REFR item.
     if(ref!=catalog_->references.end()&&catalog_->actorInventories.count(ref->second.base)&&
-       ActorHealth(id)==0&&!s.ownership.explicitOwner)return {};
+       ActorHealth(id)==0&&!s.ownership.explicitOwner&&!DirectOwnership(id).owner)return {};
     return ResolveOwnership(id,&s.ownership);
   }
   OwnershipResult out;out.known=false;out.permitted=false;out.kind=OwnershipKind::Unknown;return out;

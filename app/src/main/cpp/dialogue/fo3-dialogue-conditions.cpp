@@ -63,9 +63,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   ActorContext who=ctx.speaker;
   if(c.run==1)who=ctx.target;
   else if(c.run==2){if(c.reference==0x14){who=ctx.target;who.reference=fo3player::PlayerRef;}else if(c.reference!=ctx.speaker.reference){
-    if(c.function==35){
+    if(c.function==35||c.function==278){
       auto ref=p.Definitions().references.find(c.reference);
-      if(ref==p.Definitions().references.end()){error="GetDisabled reference unavailable";return false;}
+      if(ref==p.Definitions().references.end()){error="condition reference unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
@@ -100,6 +100,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(!pc&&!p.Definitions().actorPlacements.count(who.reference)){error="actor state unavailable";return false;}
     value=c.function==107?p.ActorKnockedOut(who.reference):c.function==237?p.ActorGhost(who.reference):p.ActorUnconscious(who.reference);
     return true;
+  case 278:
+    if(p.ScriptIsOwner(who.reference,c.a?c.a:fo3player::PlayerBase,value))return true;
+    error="ownership query reference or owner unavailable";return false;
   case 454:
     if(!pc&&!p.Definitions().actorPlacements.count(who.reference)){error="teammate actor unavailable";return false;}
     value=p.IsPlayerTeammate(who.reference);return true;
