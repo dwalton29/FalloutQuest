@@ -1782,7 +1782,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(const auto& container:state_.containers)for(const auto& stack:container.second)collectScript(stack);
   for(const auto& weapon:state_.worldWeapons)collectScript(weapon.instance);
   const bool hasRevivedCorpse=std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& entry){return entry.second.revivedAuthoredCorpse;});
-  const bool hasOwnershipChanges=!state_.ownerOverrides.empty();
+  const bool hasMerchantLinks=!state_.merchantContainerOverrides.empty();
+  const bool hasOwnershipChanges=hasMerchantLinks||!state_.ownerOverrides.empty();
   const bool hasActorOrders=hasOwnershipChanges||!state_.combatStyleOverrides.empty()||!state_.playerTeammates.empty();
   const bool seededShaders=!state_.magicShaders.empty();
   const bool hasAnimations=hasActorOrders||seededShaders||!scriptAnimations_.empty();
@@ -2195,7 +2196,12 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(state_.ownerOverrides.size()));
     for(const auto& [target,owner]:state_.ownerOverrides){Put32(payload,target);Put32(payload,owner);}
   }
-  Put32(bytes, hasOwnershipChanges ? 51 : hasActorOrders ? 50 : seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasMerchantLinks){
+    Put32(payload,0x3143524d); // MRC1
+    Put32(payload,uint32_t(state_.merchantContainerOverrides.size()));
+    for(const auto& [actor,chest]:state_.merchantContainerOverrides){Put32(payload,actor);Put32(payload,chest);}
+  }
+  Put32(bytes, hasMerchantLinks ? 52 : hasOwnershipChanges ? 51 : hasActorOrders ? 50 : seededShaders ? 49 : hasAnimations ? 48 : hasEffects ? 47 : hasPushes ? 46 : hasKillers ? 45 : hasIncapacity ? 44 : hasRevivedCorpse ? 43 : hasItemScriptSection ? 42 : hasEquipmentLocks ? 41 : hasPlayerOwnership ? 40 : hasObjectDamage ? 39 : hasActorApparel ? 38 : hasLimbs ? 37 : hasAid ? 36 : hasAppearance ? 35 : hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -2255,7 +2261,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 51))
+      (version < 1 || version > 52))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2271,7 +2277,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   next.referenceEnabled.clear();
   next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
-  next.ownerOverrides.clear();
+  next.ownerOverrides.clear();next.merchantContainerOverrides.clear();
   next.combatStyleOverrides.clear();next.playerTeammates.clear();
   next.actorDamage.clear();next.actorKillers.clear();next.ragdollPushes.clear();next.magicShaders.clear();next.placedEffects.clear();next.placedBlastHits.clear();next.actorKnockouts.clear();next.unconsciousActors.clear();next.ghostActors.clear();
   next.actors.clear();
@@ -3067,12 +3073,22 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=51){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314e574f)return fail("Missing ownership changes");
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(payload.size()-at!=8ull*count)return fail("Invalid ownership change count");
+        if(count>(payload.size()-at)/8)return fail("Invalid ownership change count");
         for(uint32_t i=0;i<count;++i,at+=8){
           const auto target=fo3esm::ReadU32(p+at),owner=fo3esm::ReadU32(p+at+4);
           if((!catalog_->references.count(target)&&(!owner||!catalog_->cellOwnership.count(target)))||
              (owner&&OwnershipBase(owner)!=owner)||!next.ownerOverrides.emplace(target,owner).second)
             return fail("Invalid saved ownership");
+        }
+      }
+      if(version>=52){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x3143524d)return fail("Missing merchant container links");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(payload.size()-at!=8ull*count)return fail("Invalid merchant link count");
+        for(uint32_t i=0;i<count;++i,at+=8){
+          const auto actor=fo3esm::ReadU32(p+at),chest=fo3esm::ReadU32(p+at+4);
+          if(!ValidMerchantLink(actor,chest)||(chest&&!(catalog_->references.at(chest).flags&0x400))||
+             !next.merchantContainerOverrides.emplace(actor,chest).second)return fail("Invalid saved merchant link");
         }
       }
       if(at!=payload.size())return fail("Trailing player save data");

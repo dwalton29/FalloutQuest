@@ -209,17 +209,17 @@
       "REFR": 1
     },
     "compilation": {
-      "accepted": 7711,
-      "rejected": 216,
-      "with_deferred_failure": 170,
+      "accepted": 7722,
+      "rejected": 191,
       "mixed_event_blocks": 154,
-      "needs_owner": 42,
+      "with_deferred_failure": 132,
+      "needs_owner": 94,
       "no_event_blocks": 39,
       "unprobed": 4
     },
     "preview": {
-      "entered": 6706,
-      "rejected": 819,
+      "entered": 6730,
+      "rejected": 795,
       "unprobed": 564,
       "mixed_event_blocks": 168,
       "skipped": 79
@@ -241,8 +241,6 @@
       "unsupported command arguments/Say": 15,
       "Activate requires a reference owner": 14,
       "unsupported command form/ResetAI": 14,
-      "unsupported command form/SetMerchantContainer": 14,
-      "ShowBarterMenu requires actor reference": 13,
       "AddItemHealthPercent/invalid inventory health percent": 12,
       "unresolved PlaceAtMe reference or base": 12,
       "unsupported command form/CastImmediateOnSelf": 12,
@@ -780,7 +778,7 @@
     },
     "unmapped_operands": {},
     "preview_rejections": {
-      "script command rejected by canonical Player API": 322,
+      "script command rejected by canonical Player API": 309,
       "terminal action unavailable": 147,
       "unsupported executed command/StartCombat/implicit command requires a script owner": 31,
       "distance location unavailable": 25,
@@ -788,15 +786,14 @@
       "invalid actor value damage/restore": 21,
       "terminal conditions changed": 21,
       "item query unavailable": 20,
-      "implicit command requires a script owner": 18,
+      "implicit command requires a script owner": 19,
       "unsupported expression syntax": 17,
       "package procedure speech unavailable": 16,
       "unresolved expression operand": 15,
       "animation reference unavailable": 14,
-      "ShowBarterMenu requires actor reference": 13,
       "invalid Kill actor": 13,
-      "unsupported command form/SetMerchantContainer": 12,
       "unsupported command form/ShowBarberMenu": 12,
+      "unsupported executed command/ShowBarterMenu/implicit command requires a script owner": 12,
       "unsupported command form/OpenTeammateContainer": 11,
       "unsupported command form/SetItemValue": 10,
       "unsupported executed command/other": 10,
@@ -883,6 +880,7 @@
       "unsupported executed command/EvaluatePackage/unresolved EVP reference": 1,
       "unsupported executed command/SetActorValue/implicit command requires a script owner": 1,
       "unsupported executed command/SetActorValue/unsupported actor value": 1,
+      "unsupported executed command/SetMerchantContainer/implicit command requires a script owner": 1,
       "unsupported expression operand/GetDestructionStage": 1,
       "unsupported expression operand/GetLevel": 1,
       "unsupported expression operand/HasLoaded3D": 1,
@@ -957,7 +955,6 @@
       "unsupported expression operand/GetDestroyed": 18,
       "unsupported condition/IsActorTalkingThroughActivator": 17,
       "unsupported command form/ResetAI": 14,
-      "unsupported command form/SetMerchantContainer": 14,
       "unsupported command form/CastImmediateOnSelf": 12,
       "unsupported command form/ShowBarberMenu": 12,
       "unsupported condition/GetHasNote": 12,
@@ -1099,18 +1096,18 @@
       "all_mapped": 8336
     },
     "probe_context_requirements": {
-      "implicit command requires a script owner": 64,
+      "implicit command requires a script owner": 78,
       "local assignment requires a script owner": 49
     },
     "literal_event_dispatch_sites": {
       "gamemode": [
-        "scripting/fo3-script-runtime.inc:2039",
-        "scripting/fo3-script-runtime.inc:2054",
-        "scripting/fo3-script-runtime.inc:2072"
+        "scripting/fo3-script-runtime.inc:2044",
+        "scripting/fo3-script-runtime.inc:2059",
+        "scripting/fo3-script-runtime.inc:2077"
       ],
       "onactivate": [
         "npc/fo3-npc-door-runtime.inc:121",
-        "scripting/fo3-script-runtime.inc:968",
+        "scripting/fo3-script-runtime.inc:973",
         "scripting/fo3-script-transaction.inc:77",
         "scripting/fo3-script-transaction.inc:166"
       ],
@@ -1119,9 +1116,9 @@
         "scripting/fo3-world-script-runtime.inc:538"
       ],
       "ondeath": [
-        "scripting/fo3-script-runtime.inc:1025",
-        "scripting/fo3-script-runtime.inc:1682",
-        "scripting/fo3-script-runtime.inc:1726",
+        "scripting/fo3-script-runtime.inc:1030",
+        "scripting/fo3-script-runtime.inc:1687",
+        "scripting/fo3-script-runtime.inc:1731",
         "weapons/fo3-weapon-player.cpp:623"
       ],
       "onload": [
@@ -1136,7 +1133,7 @@
       ],
       "scripteffectstart": [
         "player/fo3-aid-player.inc:290",
-        "scripting/fo3-script-runtime.inc:1651"
+        "scripting/fo3-script-runtime.inc:1656"
       ],
       "onadd": [
         "player/fo3-player-state.cpp:1043",
@@ -1151,7 +1148,7 @@
         "npc/fo3-npc-combat-runtime.inc:699"
       ],
       "scripteffectfinish": [
-        "scripting/fo3-script-runtime.inc:1731"
+        "scripting/fo3-script-runtime.inc:1736"
       ],
       "onpackagedone": [
         "scripting/fo3-script-transaction.inc:228"
@@ -1181,8 +1178,8 @@
       "onunequip": [
         "player/fo3-player-state.cpp:1109",
         "player/fo3-player-state.cpp:1119",
-        "scripting/fo3-script-runtime.inc:1294",
-        "scripting/fo3-script-runtime.inc:1404"
+        "scripting/fo3-script-runtime.inc:1299",
+        "scripting/fo3-script-runtime.inc:1409"
       ],
       "ondestructionstagechange": [],
       "ondrop": [],
@@ -1191,6 +1188,6 @@
       "onrelease": [],
       "onactorunequip": []
     },
-    "index_sha256": "e94f54320614b8edce60f70e69c94dc59375f9a466336803a40ded7c2eef92ab"
+    "index_sha256": "7979758a2101f594a27e9b5d6b77e16b4506f44948b942d2228f734e58c21d1c"
   }
 }

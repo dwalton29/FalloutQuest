@@ -86,11 +86,15 @@ class FragmentRequirementTests(unittest.TestCase):
         from fragment_requirements import prepare_evidence
         evidence = {'owner': 0, 'blocks': {
             '7': {'compile': 'needs_owner', 'context_required': {'local assignment requires a script owner: target'}},
-            '11': {'deferred_error': {'StartCombat player (implicit command requires a script owner)'}}}}
+            '11': {'compile': 'with_deferred_failure', 'deferred_error': {'StartCombat player (implicit command requires a script owner)'}},
+            '12': {'compile': 'with_deferred_failure', 'deferred_error': {
+                'StartCombat player (implicit command requires a script owner)', 'unsupported command: Other'}}}}
         gaps = set()
-        prepare_evidence(evidence, {'startcombat': 'StartCombat'}, gaps)
+        prepare_evidence(evidence, {'startcombat': 'StartCombat', 'other': 'Other'}, gaps)
         self.assertEqual(evidence['blocks']['11']['context_required'], ['implicit command requires a script owner'])
-        self.assertEqual(gaps, set())
+        self.assertEqual(evidence['blocks']['11']['compile'], 'needs_owner')
+        self.assertEqual(evidence['blocks']['12']['compile'], 'with_deferred_failure')
+        self.assertEqual(gaps, {'unsupported command form/Other'})
         self.assertEqual(evidence['blocks']['7']['context_required'], ['local assignment requires a script owner'])
 
     def test_form_value_and_custom_message_substitutions(self):

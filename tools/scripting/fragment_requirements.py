@@ -355,6 +355,10 @@ def prepare_evidence(target, aliases, observations, owner=None):
                 observations.add(reason)
     if context:
         target['context_required'] = sorted(context)
+        deferred = target.get('deferred_error', ())
+        if (target.get('compile') == 'with_deferred_failure' and deferred and
+                all(reason.rsplit('/', 1)[-1] in context for reason in deferred)):
+            target['compile'] = 'needs_owner'
     if 'expression' in target:
         evaluations = set()
         for raw in target.pop('expression'):

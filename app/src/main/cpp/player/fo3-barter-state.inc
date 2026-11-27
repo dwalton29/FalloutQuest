@@ -23,10 +23,38 @@ int64_t InventoryCaps(const std::vector<Stack>& v) {
   int64_t n=0;for(const auto& s:v)if(s.formId==0xf)n+=s.count;return n;
 }
 }
+uint32_t Player::MerchantContainer(uint32_t actor) const {
+  const auto changed=state_.merchantContainerOverrides.find(actor);
+  if(changed!=state_.merchantContainerOverrides.end())return changed->second;
+  const auto link=catalog_->merchantContainers.find(actor);
+  return link!=catalog_->merchantContainers.end()?link->second:0;
+}
+bool Player::ValidMerchantLink(uint32_t actor,uint32_t chest) const {
+  const auto placed=catalog_->references.find(actor);
+  if(placed==catalog_->references.end()||!placed->second.valid||!catalog_->actorPlacements.count(actor))return false;
+  if(!chest)return true;
+  const auto stock=catalog_->references.find(chest);
+  return stock!=catalog_->references.end()&&stock->second.valid&&catalog_->containers.count(stock->second.base);
+}
+bool Player::SetMerchantContainer(uint32_t actor,uint32_t chest){
+  if(!ValidMerchantLink(actor,chest))return false;
+  // Retail ignores an ineligible stock reference and continues the script.
+  if(chest&&!(catalog_->references.at(chest).flags&0x400))return true;
+  if(MerchantContainer(actor)==chest)return true;
+  const auto authored=catalog_->merchantContainers.find(actor);
+  if((authored==catalog_->merchantContainers.end()?0:authored->second)==chest)
+    state_.merchantContainerOverrides.erase(actor);
+  else state_.merchantContainerOverrides[actor]=chest;
+  // A menu requested for the previous chest must not open on the replacement.
+  const auto stale=std::remove_if(pendingBarters_.begin(),pendingBarters_.end(),
+      [actor](const BarterRequest& request){return request.actor==actor;});
+  if(stale!=pendingBarters_.end()){pendingBarters_.erase(stale,pendingBarters_.end());++scriptEffectRevision_;}
+  ++revision_;return true;
+}
 bool Player::MerchantAvailable(uint32_t actor) const {
-  const auto m=catalog_->merchantContainers.find(actor);
+  const auto stock=MerchantContainer(actor);
   const auto r=catalog_->references.find(actor);
-  if(m==catalog_->merchantContainers.end()||!m->second||r==catalog_->references.end()||!r->second.valid)return false;
+  if(!stock||r==catalog_->references.end()||!r->second.valid)return false;
   bool disabled=false;std::string error;
   if(!ReferenceDisabled(actor,disabled,error)||disabled||ActorHealth(actor)<=0)return false;
   auto saved=state_.actors.find(actor);if(saved!=state_.actors.end()){
@@ -35,10 +63,11 @@ bool Player::MerchantAvailable(uint32_t actor) const {
     // restrictions belong to GetOffersServicesNow CTDAs where the ESM uses
     // them, not an extra gate that hides Moira's unconditionally scripted trade.
   }
-  const auto chest=catalog_->references.find(m->second);
+  const auto chest=catalog_->references.find(stock);
   if(chest==catalog_->references.end()||!chest->second.valid)return false;
   const auto c=catalog_->containers.find(chest->second.base);
-  if(c==catalog_->containers.end()||!c->second.valid||c->second.script)return false;
+  // Trading reads the inventory without activating the placed chest.
+  if(c==catalog_->containers.end()||!c->second.valid)return false;
   // Inherited services require template resolution, rather than the actor's
   // personal equipment. Resolve only the authored Use AI Data template bit.
   uint32_t base=r->second.base;std::unordered_set<uint32_t> seen;
@@ -60,10 +89,10 @@ bool Player::PollBarter(BarterRequest& out) {
 }
 bool Player::OpenBarter(uint32_t actor,int discount,BarterSession& out) {
   if(discount < -100||discount>100||!MerchantAvailable(actor))return false;
-  const auto chest=catalog_->merchantContainers.at(actor);
+  const auto chest=MerchantContainer(actor);
   // Merchant storage can be locked, buried, and nonresident. This is not a
   // player loot action, so it neither opens the lock nor emits theft events.
-  if(!RestockMerchant(actor,chest)||!PrepareInventory(chest,false))return false;
+  if(!RestockMerchant(chest)||!PrepareInventory(chest,false))return false;
   if(!state_.merchantVisits.count(chest)){state_.merchantVisits[chest]={state_.gameDaysPassed,state_.gameHour};++revision_;}
   BarterSession candidate;candidate.actor=actor;candidate.container=chest;candidate.discount=discount;
   candidate.owner=this;candidate.skill=uint8_t(EffectiveSkill(size_t(Skill::Barter)));candidate.perks=state_.pipboy.perks;
@@ -146,7 +175,7 @@ bool Player::BarterPrice(const Stack& s,bool buying,int discount,float& out) con
 bool Player::BarterBalance(const BarterSession& session,int64_t& net,std::string& error) const {
   error.clear();net=0;
   if(session.owner!=this||session.skill!=uint8_t(EffectiveSkill(size_t(Skill::Barter)))||session.perks!=state_.pipboy.perks||session.discount < -100||session.discount>100||!MerchantAvailable(session.actor)||
-     catalog_->merchantContainers.at(session.actor)!=session.container){error="Merchant unavailable";return false;}
+     MerchantContainer(session.actor)!=session.container){error="Merchant unavailable";return false;}
   const auto live=state_.containers.find(session.container);
   if(live==state_.containers.end()||!SameBarterStacks(session.player,state_.inventory)||!SameBarterStacks(session.merchant,live->second)){
     error="Inventory changed. Reopen barter.";return false;}
@@ -205,30 +234,49 @@ void Player::TouchMerchantCells(uint32_t cell) {
   // Q230: no merchant has ever been visited, so there is no restock clock to
   // update. Avoid an immutable catalog-wide scan on every tracked-head frame.
   if(!cell||state_.merchantVisits.empty())return;
-  for(const auto& merchant:catalog_->merchantContainers){auto visit=state_.merchantVisits.find(merchant.second);
-    if(visit==state_.merchantVisits.end())continue;
-    const auto actor=catalog_->references.find(merchant.first),chest=catalog_->references.find(merchant.second);
-    if(actor==catalog_->references.end()||chest==catalog_->references.end())continue;
-    const auto saved=state_.actors.find(merchant.first);
-    const auto actorCell=saved==state_.actors.end()?actor->second.cell:saved->second.cell;
-    if(cell!=actorCell&&cell!=chest->second.cell)continue;
-    if(!RestockMerchant(merchant.first,merchant.second))continue;
-    auto current=state_.merchantVisits.find(merchant.second);
-    if(current->second.day!=state_.gameDaysPassed||current->second.hour!=state_.gameHour){
-      current->second={state_.gameDaysPassed,state_.gameHour};++revision_;++actorPoseRevisions_;
+  std::vector<uint32_t> due;
+  const auto timeChanged=[&](const MerchantVisit& visit){
+    return visit.day!=state_.gameDaysPassed||visit.hour!=state_.gameHour;
+  };
+  // A visited chest still occupies its cell while its merchant offers other stock.
+  for(const auto& [chest,visit]:state_.merchantVisits)
+    if(timeChanged(visit)&&catalog_->references.at(chest).cell==cell)due.push_back(chest);
+  const auto considerSeller=[&](uint32_t actor,uint32_t chest){
+    const auto visit=state_.merchantVisits.find(chest);
+    if(visit==state_.merchantVisits.end()||!timeChanged(visit->second))return;
+    const auto placed=catalog_->references.find(actor);
+    if(placed==catalog_->references.end())return;
+    const auto saved=state_.actors.find(actor);
+    const auto actorCell=saved==state_.actors.end()?placed->second.cell:saved->second.cell;
+    if(cell==actorCell)due.push_back(chest);
+  };
+  for(const auto& [actor,chest]:catalog_->merchantContainers)
+    if(!state_.merchantContainerOverrides.count(actor))considerSeller(actor,chest);
+  for(const auto& [actor,chest]:state_.merchantContainerOverrides)considerSeller(actor,chest);
+  // Chests can be shared. Restocking replaces state_, so finish reading the links first.
+  std::sort(due.begin(),due.end());
+  due.erase(std::unique(due.begin(),due.end()),due.end());
+  for(const auto chest:due){
+    if(!RestockMerchant(chest))continue;
+    auto& visit=state_.merchantVisits.at(chest);
+    if(visit.day!=state_.gameDaysPassed||visit.hour!=state_.gameHour){
+      visit={state_.gameDaysPassed,state_.gameHour};++revision_;++actorPoseRevisions_;
     }
   }
 }
-bool Player::RestockMerchant(uint32_t actor,uint32_t chest) {
+bool Player::RestockMerchant(uint32_t chest) {
   const auto visit=state_.merchantVisits.find(chest);
   if(visit==state_.merchantVisits.end()||!scriptPlayerPositionKnown_)return true;
   const double now=double(state_.gameDaysPassed)*24+state_.gameHour;
   const double then=double(visit->second.day)*24+visit->second.hour;
   if(now-then<catalog_->merchantRespawnHours)return true;
   const auto& ref=catalog_->references.at(chest);const auto& base=catalog_->containers.at(ref.base);
-  // Encounter-zone overrides and scripted containers require the zone/script
-  // reset runtime. Do not fabricate stock for those unsupported cases.
-  if(!base.respawns||base.script||catalog_->encounterZoneReferences.count(chest)||!actor)return true;
+  if(!base.respawns||catalog_->encounterZoneReferences.count(chest))return true;
+  if(base.script){
+    const auto program=catalog_->eventPrograms.find(base.script);
+    if(program==catalog_->eventPrograms.end()||!program->second.error.empty()||program->second.blocks.empty()||
+       HasReferenceEvent(chest,"OnReset"))return true;
+  }
   Player candidate(*this,ScriptCandidateTag{});
   candidate.state_.containers.erase(chest);
   candidate.state_.merchantVisits[chest]={state_.gameDaysPassed,state_.gameHour};

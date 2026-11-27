@@ -204,8 +204,119 @@ void AuthoredServices(){
  Check(session.Resolve(8,ctx)!=nullptr,"authored service condition succeeds when offering");
  actor.hostile=PlayerRef;Check(offering.UpdateActor(1,actor)&&!offering.MerchantAvailable(1),"hostile merchant still blocked");
 }
+void ScriptMerchantContainers(){
+ auto c=Fixture();
+ c.gameTimeScale=3600;
+ c.actorPlacements[1]=c.pipboy.targets.at(1);
+ c.references[2].flags=0x400;c.references[2].cell=12;
+ c.references[3].base=202;c.references[3].flags=0x400;c.references[3].cell=13;
+ c.containers[202].entries={{100,0,2},{0xf,0,500}};
+ c.containers[202].respawns=true;
+ c.references[4]=c.references.at(3);c.references[4].flags=0;
+ c.pipboy.formNames["otherstock"]=3;c.pipboy.formNames["temporary"]=4;
+ Player p(c);Check(p.Add(0xf,1000),"seed trading caps");
+ std::string error;
+ BarterSession original,switched;
+ Check(p.OpenBarter(1,0,original)&&original.container==2,"authored stock");
+ Check(p.Save("/tmp/fq-before-stock-switch.fqps",error),"save earlier stock state");
+ fo3pipdata::ResultScript script;
+ script.source="Merchant.SetMerchantContainer OtherStock\nMerchant.SBM -5";
+ auto plan=p.PrepareDialogueTransaction(script,{},error);
+ Check(plan&&p.MerchantContainer(1)==2,"preview leaves stock alone");
+ Check(p.CommitScriptTransaction(*plan)&&p.MerchantContainer(1)==3,"committed chest link");
+ Check(p.RollbackScriptTransaction(*plan)&&p.MerchantContainer(1)==2,"rolled-back chest link");
+ BarterRequest request;
+ Check(!p.PollBarter(request),"rolled-back menu");
+ Check(p.QueueBarter(1,0),"request original merchant menu");
+ Check(p.ExecuteDialogueResult(script,error)&&p.PollBarter(request)&&request.discount==-5&&!p.PollBarter(request),"only replacement stock menu survives");
+ original.selections={{original.merchant.front().id,1,true}};
+ Check(!p.ConfirmBarter(original,error)&&p.ItemCount(0xf)==1000,"old quote cannot charge the wrong chest");
+ Check(p.OpenBarter(request.actor,request.discount,switched)&&switched.container==3,"new chest stock");
+ switched.selections={{switched.merchant.front().id,1,true}};
+ Check(p.ConfirmBarter(switched,error)&&p.ScriptItemCount(3,100)==1&&p.ScriptItemCount(2,100)==10,"only selected stock depleted");
+ script.source="SetMerchantContainer Temporary";
+ Check(p.ExecuteDialogueResult(script,error,1)&&p.MerchantContainer(1)==3,"transient reference leaves link alone");
+ script.source="RemoveMerchantContainer\nSetMerchantContainer Merchant";
+ Check(!p.ExecuteDialogueResult(script,error,1)&&p.MerchantContainer(1)==3,"invalid target aborts script atomically");
+ Check(p.Save("/tmp/fq-scripted-merchant.fqps",error),"save merchant link");
+ Player saved(c);
+ Check(saved.Restore("/tmp/fq-scripted-merchant.fqps",error)&&saved.OpenBarter(1,0,switched)&&
+       switched.container==3&&switched.merchant.front().count==1,"restored link and stock");
+ saved.SetScriptPlayerLocation(0,0,0,99,0);
+ for(int i=0;i<73;++i)Check(saved.AdvanceGameClock(1),"advance restock clock");
+ saved.SetScriptPlayerLocation(0,0,0,13,0);
+ Check(saved.ScriptItemCount(3,100)==2,"scripted merchant stock respawns on return");
+ script={};script.compiled={0xb8,0x11,0,0};
+ Check(saved.ExecuteDialogueResult(script,error,1)&&!saved.MerchantContainer(1)&&
+       !saved.OpenBarter(1,0,switched),"removed link cannot reopen old chest");
+ Check(saved.Save("/tmp/fq-scripted-merchant.fqps",error)&&p.Restore("/tmp/fq-scripted-merchant.fqps",error)&&
+       !p.MerchantContainer(1),"removed authored link survives reload");
+ Check(p.Restore("/tmp/fq-before-stock-switch.fqps",error)&&p.MerchantContainer(1)==2,"older save retains the authored XMRC");
+ c.merchantContainers.erase(1);
+ c.pipboy.quests[80].script=81;
+ auto& questScript=c.pipboy.scripts[81];
+ questScript.source="scn ShopController\nref Seller\nref Stock\nBegin GameMode\nEnd";
+ questScript.variables={{1,"Seller"},{2,"Stock"}};
+ Player newVendor(c);
+ script={};script.source="set Seller to Merchant\nset Stock to OtherStock\nSeller.SetMerchantContainer Stock\nSeller.SBM";
+ Check(newVendor.ExecuteDialogueResult(script,error,80)&&newVendor.PollBarter(request)&&
+       newVendor.OpenBarter(request.actor,request.discount,switched)&&switched.container==3,"script-local actor and chest establish a new merchant");
+ script.source="set Stock to 0\nSeller.SetMerchantContainer Stock";
+ Check(!newVendor.ExecuteDialogueResult(script,error,80)&&newVendor.MerchantContainer(1)==3,"unset reference argument cannot remove the current stock");
+}
+
+void OriginalMerchantSwitches(Catalog catalog){
+ const auto& ids=catalog.pipboy.formNames;
+ const auto leo=ids.at("leostahlref"),cutter=ids.at("cutterref");
+ // The original drug-sale topic requires this quest local and the water plant.
+ catalog.initial.pipboy.dialogueVariables[(uint64_t(0x3b31)<<32)|29]=1;
+ Player p(std::move(catalog));p.RegisterOriginalActors();
+ std::string error;
+ auto trade=[&](uint32_t actor,uint32_t topic,uint32_t cell,uint32_t chest){
+   fo3dialogue::Context ctx;ctx.player=&p;
+   ctx.speaker={actor,p.Definitions().references.at(actor).base,cell};
+   ctx.target={PlayerRef,PlayerBase,cell};
+   fo3dialogue::Session conversation;conversation.random.seed(42);
+   if(!conversation.StartTopic(topic,ctx,p))throw std::runtime_error("Original merchant topic unavailable: "+std::to_string(topic));
+   for(unsigned steps=0;conversation.phase==fo3dialogue::Phase::Speaking;++steps){
+     Check(steps<16,"finish merchant response");
+     conversation.AudioDone(conversation.audioToken,true,ctx,p);
+   }
+   BarterRequest request;BarterSession quote;
+   Check(p.PollBarter(request)&&request.actor==actor&&p.OpenBarter(actor,request.discount,quote)&&
+         quote.container==chest,"dialogue opens the intended stock chest");
+   return quote;
+ };
+ const auto& names=p.Definitions().pipboy.formNames;
+ const auto drugs=names.at("vendorchestburiedleostahldrugsref"),diner=names.at("vendorchestburiedbrasslanternref");
+ auto stock=trade(leo,names.at("megleobuydrugs"),0x3a34,drugs);
+ const auto sale=std::find_if(stock.merchant.begin(),stock.merchant.end(),[&](const Stack& row){return p.BarterItemAllowed(leo,row);});
+ Check(sale!=stock.merchant.end(),"original stock offers a tradeable item");
+ const auto form=sale->formId;const auto before=p.ScriptItemCount(drugs,form);
+ Check(p.Add(0xf,3000)&&p.OpenBarter(leo,0,stock),"seed customer purse");
+ auto selected=std::find_if(stock.merchant.begin(),stock.merchant.end(),[&](const Stack& row){return row.formId==form;});
+ Check(selected!=stock.merchant.end(),"item still available");
+ stock.selections={{selected->id,1,true}};
+ Check(p.ConfirmBarter(stock,error)&&p.ScriptItemCount(drugs,form)==before-1,"purchase removes one item from Leo's alternate chest");
+ trade(leo,names.at("megleodrinks"),0x3a2f,diner);
+ trade(leo,names.at("megleobuydrugs"),0x3a34,drugs);
+ Check(p.ScriptItemCount(drugs,form)==before-1,"switching stock does not refill it");
+ const auto& defs=p.Definitions().pipboy;
+ const auto [topic,index]=p.Definitions().dialogueInfos.at(0x200fb);
+ auto begin=defs.topics.at(topic).at(index).begin,end=defs.topics.at(topic).at(index).end;
+ begin.source.clear();end.source.clear();
+ auto compiled=p.PrepareDialogueTransaction(begin,end,error,leo);
+ BarterRequest request;
+ Check(compiled&&p.CommitScriptTransaction(*compiled)&&p.PollBarter(request)&&request.actor==leo&&
+       p.MerchantContainer(leo)==diner,"compiled-only original result sets stock and opens menu");
+ const auto clinic=p.Definitions().references.at(cutter).cell;
+ trade(cutter,names.at("pfcuttersupplies"),clinic,names.at("vendorchestburiedcutterref"));
+ trade(cutter,names.at("pfcutterchems"),clinic,names.at("vendorchestburiedcutterchemsref"));
+}
+
 void Original(const char* path){
  Catalog c;std::string e;Check(LoadCatalog(path,c,e),e.c_str());
+ OriginalMerchantSwitches(c);
  Check(c.merchantContainers.at(0x2d2bc)==0xb4207&&c.merchantContainers.at(0x3b3d)==0x20478,"original XMRC");
  Check(c.containers.at(c.references.at(0xb4207).base).respawns,"original respawn flag");
  Player p(std::move(c));p.RegisterOriginalActors();
@@ -293,4 +404,4 @@ void Original(const char* path){
   BarterSession persisted;Check(restored.OpenBarter(actor,s.discount,persisted)&&persisted.merchant.size()==s.merchant.size(),"original merchant restore");
  }
 }
-int main(int argc,char** argv){try{UiAdapter();RepairServices();Synthetic();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{UiAdapter();RepairServices();Synthetic();ScriptMerchantContainers();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

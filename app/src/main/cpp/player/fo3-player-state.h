@@ -292,6 +292,8 @@ struct State {
   std::unordered_map<uint32_t,bool> questObjectFlags;
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
   std::unordered_map<uint32_t,MerchantVisit> merchantVisits;
+  // Actor reference -> stock chest; zero removes the authored XMRC link.
+  std::map<uint32_t,uint32_t> merchantContainerOverrides;
   std::unordered_map<uint32_t,int32_t> actorDispositionModifiers;
   std::unordered_map<uint32_t,uint32_t> cellNameMessages; // CELL -> original MESG FULL
   std::unordered_set<uint32_t> achievements; // local authored events, no platform unlock
@@ -967,6 +969,8 @@ public:
   bool QueueScriptDefaultActivate(uint32_t reference,uint32_t activator);
   bool CanLootContainer(uint32_t reference) const;
   bool PrepareContainer(uint32_t reference);
+  uint32_t MerchantContainer(uint32_t actor) const;
+  bool SetMerchantContainer(uint32_t actor,uint32_t chest);
   bool MerchantAvailable(uint32_t actor) const;
   bool OpenBarter(uint32_t actor,int discount,BarterSession& out);
   bool BarterItemAllowed(uint32_t actor,const Stack& item) const;
@@ -1039,7 +1043,8 @@ private:
                   std::vector<Stack>& contents,uint64_t& nextId) const;
   bool AddScriptItem(uint32_t form,int32_t count,bool silent=false,float condition=1);
   void TouchMerchantCells(uint32_t cell);
-  bool RestockMerchant(uint32_t actor,uint32_t chest);
+  bool ValidMerchantLink(uint32_t actor,uint32_t chest) const;
+  bool RestockMerchant(uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;
   bool ValidateAidState(const State& state) const;
   float AidModifier(const State&,uint32_t actorValue) const;

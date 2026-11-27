@@ -6,11 +6,11 @@ The index covers each nonempty SCDA fragment in the supplied base master. A row 
 
 ### Look up affected fragments
 
-From the repository root, this lists every fragment for which the host compiler diagnosed an unsupported form of SetMerchantContainer.
+From the repository root, this lists every fragment for which the host compiler diagnosed an unsupported form of OpenTeammateContainer.
 
 ```sh
 gzip -dc docs/SCRIPTING_FRAGMENT_REQUIREMENTS.jsonl.gz |
-  jq -r 'select(.observed_gaps | index("unsupported command form/SetMerchantContainer")) | .id'
+  jq -r 'select(.observed_gaps | index("unsupported command form/OpenTeammateContainer")) | .id'
 ```
 
 To find all uses, including ones for which the probe has no diagnostic, query the dependency fields. For example, use `select(.expression_calls | index("GetDead"))` to find nested calls to GetDead. The data can also be read with Python's standard `gzip.open(path, "rt")` and `json.loads(line)`.
@@ -20,6 +20,8 @@ The host tests also exercise the original Taft Tunnel follower package and a com
 The linked-reference tests run the original planetarium ambush and Jefferson Memorial controller scripts. They check the enabled actor, the two successive reference lookups, and transaction rollback.
 
 The ownership tests exercise an original reward dialogue, a faction-owned cabinet, a quest-stage cell transfer, an owner-specific clue and a trigger that releases 33 placed items. They also check direct versus inherited ownership, container theft, transaction rollback and save migration.
+
+The barter tests run original stock-switching dialogue and check purchases, saved links, stale quotes and restocking after the player leaves and returns.
 
 ### Rebuild the inventory
 

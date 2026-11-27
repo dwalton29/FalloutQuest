@@ -374,11 +374,14 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     } else if(commandName=="showrepairmenu"||commandName=="srm"){
       cmd.type=CommandType::ShowRepairMenu;
       if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"unknown repair service actor";return false;}
-    } else if(op=="showbartermenu"||op=="sbm"||
-        (op.size()>15&&op.compare(op.size()-15,15,".showbartermenu")==0)||
-        (op.size()>4&&op.compare(op.size()-4,4,".sbm")==0)) {
-      const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
-      if(!cmd.form){error="ShowBarterMenu requires actor reference";return false;}
+    } else if(commandName=="setmerchantcontainer"||commandName=="removemerchantcontainer"){
+      if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"unknown merchant reference";return false;}
+      cmd.type=commandName=="setmerchantcontainer"?CommandType::SetMerchantContainer:CommandType::RemoveMerchantContainer;
+      if(cmd.type==CommandType::SetMerchantContainer&&(!(in>>a)||!bindReference(a,cmd.targetLocal,cmd.index))){
+        error="unresolved merchant container reference";return false;
+      }
+    } else if(commandName=="showbartermenu"||commandName=="sbm"){
+      if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"unknown barter actor";return false;}
       cmd.type=CommandType::ShowBarterMenu;std::getline(in,cmd.expression);
       cmd.expression=fo3script::Trim(cmd.expression);
     } else if(op=="addnote"||op=="player.addnote"||op=="removenote"||op=="player.removenote") {

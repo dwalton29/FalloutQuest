@@ -86,6 +86,7 @@
     case 0x1176: return {"addperk","r",1,false};
     case 0x1177: return {"rewardxp","n",1,false};
     case 0x117a: return {"showrepairmenu","",0,false};
+    case 0x1173: return {"showbartermenu","n",0,false};
     case 0x117c: return {"addnote","r",1,false};
     case 0x117d: return {"removenote","r",1,false};
     case 0x117e: return {"gethasnote","r",1,true};
@@ -103,6 +104,8 @@
     case 0x11a5: return {"getobjectivedisplayed","rn",2,true};
     case 0x11a7: return {"pipboyradio","sr",1,false};
     case 0x11ad: return {"completeallobjectives","r",1,false};
+    case 0x11b7: return {"setmerchantcontainer","r",1,false};
+    case 0x11b8: return {"removemerchantcontainer","",0,false};
     case 0x11bc: return {"additemhealthpercent","rnnn",3,false};
     case 0x11c5: return {"setplayerteammate","n",1,false};
     case 0x11c6: return {"getplayerteammate","",0,true};

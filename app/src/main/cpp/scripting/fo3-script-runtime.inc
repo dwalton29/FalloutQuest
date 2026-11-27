@@ -947,9 +947,14 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     }
     case C::ModDisposition:ok=ModActorDisposition(c.form,int32_t(c.value));break;
     case C::ShowRepairMenu:ok=QueueRepair(receiver());break;
+    case C::RemoveMerchantContainer:ok=SetMerchantContainer(receiver(),0);break;
+    case C::SetMerchantContainer:{
+      const auto chest=resolve(c.targetLocal,c.index);
+      ok=chest&&SetMerchantContainer(receiver(),chest);break;
+    }
     case C::ShowBarterMenu:
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
-      if(ok)ok=std::isfinite(value)&&value>=-100&&value<=100&&std::floor(value)==value&&QueueBarter(c.form,int(value));
+      if(ok)ok=std::isfinite(value)&&value>=-100&&value<=100&&std::floor(value)==value&&QueueBarter(receiver(),int(value));
       break;
     case C::Unavailable:error="unsupported executed command: "+c.expression;return false;
     case C::DefaultActivate:{
