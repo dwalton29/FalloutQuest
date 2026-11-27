@@ -356,6 +356,20 @@ public:
   }
 };
 }
+namespace fo3dialogue {
+bool HasNumericExpression(const Command& c) {
+  using C = CommandType;
+  if (c.type == C::If || c.type == C::ElseIf || c.type == C::Variable || c.type == C::Global) return true;
+  return !c.expression.empty() && (c.type == C::SayTo || c.type == C::SetActorAIValue ||
+      c.type == C::RewardXP || c.type == C::RewardKarma || c.type == C::ShowMessage ||
+      c.type == C::ShowBarterMenu || c.type == C::AddItem || c.type == C::RemoveItem);
+}
+
+bool BindNumericExpression(const fo3player::Player& player, uint32_t owner, uint32_t scriptId,
+    const std::string& expression, CommandFormCapture& forms, float& value, std::string& error) {
+  return fo3script::Expression(player,owner,expression,error,scriptId,&forms).Evaluate(value);
+}
+}
 #include "fo3-script-transaction.inc"
 namespace fo3player {
 bool Player::PreviewDialogueResult(const fo3pipdata::ResultScript& script,std::string& error,uint32_t speaker) const {
@@ -451,7 +465,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::SayTo||c.type==C::SetActorAIValue||c.type==C::RewardXP||c.type==C::RewardKarma||c.type==C::ShowMessage||c.type==C::ShowBarterMenu||c.type==C::AddItem||c.type==C::RemoveItem)&&!c.expression.empty())){
+    if(fo3dialogue::HasNumericExpression(c)){
       float v;
       if(!fo3script::Expression(*this,owner,c.expression,error,scriptId,nullptr,true).Evaluate(v))return false;
       // Capture resolvable original bindings without demanding capabilities
@@ -459,7 +473,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       // against the state after preceding commands, inside the transaction.
       if(scriptTrace_){
         std::string capabilityError;
-        (void)fo3script::Expression(*this,owner,c.expression,capabilityError,scriptId,&expressionForms).Evaluate(v);
+        (void)fo3dialogue::BindNumericExpression(*this,owner,scriptId,c.expression,expressionForms,v,capabilityError);
         if(capabilityError.rfind("script provenance",0)==0){error=capabilityError;return false;}
         if(expressionForms.exhausted){error="script provenance byte limit exceeded";return false;}
       }

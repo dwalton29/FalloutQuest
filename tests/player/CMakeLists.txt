@@ -484,3 +484,9 @@ target_compile_options(new_game_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wn
 target_include_directories(new_game_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(new_game_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME new_game_tests COMMAND new_game_tests)
+
+add_executable(script_fragment_probe EXCLUDE_FROM_ALL ../../tools/scripting/probe_fragments.cpp
+    ${dialogue_shared} ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
+target_compile_features(script_fragment_probe PRIVATE cxx_std_17)
+target_include_directories(script_fragment_probe PRIVATE ../../app/src/main/cpp)
+target_link_libraries(script_fragment_probe PRIVATE ZLIB::ZLIB)

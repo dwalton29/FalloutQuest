@@ -58,6 +58,11 @@ inline uint64_t CaptureNumericLocalKey(const fo3pipdata::Definitions& d,uint32_t
   if(key&&capture&&!capture->AddLocal(uint32_t(key),fo3script::Lower(token)))return 0;
   return key;
 }
+// Shared by execution preflight and the host corpus audit. Binding observes the supplied
+// state and records dependencies without advancing the script random stream.
+bool HasNumericExpression(const Command&);
+bool BindNumericExpression(const fo3player::Player&,uint32_t owner,uint32_t scriptId,
+    const std::string&,CommandFormCapture&,float& value,std::string& error);
 bool CompileSourceResult(const fo3pipdata::Definitions&,const fo3pipdata::ResultScript&,std::vector<Command>&,std::string&,uint32_t owner,uint32_t scriptId,CommandFormCapture* forms,bool decodedNative=false);
 bool CompileResult(const fo3pipdata::Definitions&,const fo3pipdata::ResultScript&,std::vector<Command>&,std::string&,uint32_t owner=0,uint32_t scriptId=0,CommandFormCapture* forms=nullptr);
 }
