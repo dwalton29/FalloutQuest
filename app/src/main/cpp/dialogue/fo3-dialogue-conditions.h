@@ -18,6 +18,7 @@ struct Context {
 };
 using Diagnostic=std::function<void(const std::string&)>;
 bool Compare(float,float,uint8_t);
+bool InteriorCell(const fo3player::Player&,uint32_t cell,float& value,std::string& error);
 bool DeadCount(const fo3player::Player&,uint32_t base,float& value,std::string& error);
 bool Conditions(const std::vector<fo3pipdata::Condition>&,const Context&,std::string&);
 uint64_t VariableKey(const fo3pipdata::Definitions&,uint32_t owner,uint32_t index,bool quest,CommandFormCapture* capture=nullptr);

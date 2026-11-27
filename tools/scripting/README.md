@@ -23,6 +23,8 @@ The ownership tests exercise an original reward dialogue, a faction-owned cabine
 
 The barter tests run original stock-switching dialogue and check purchases, saved links, stale quotes and restocking after the player leaves and returns.
 
+The dialogue tests exercise the original Harkness GameMode script, Zimmer’s indoor and outdoor packages, and Bumble’s Little Lamplight cell check. They move actors and the player across a cell boundary and verify both outcomes.
+
 ### Rebuild the inventory
 
 ```sh

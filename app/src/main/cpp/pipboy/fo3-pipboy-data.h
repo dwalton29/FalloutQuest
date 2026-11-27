@@ -2,6 +2,8 @@
 #pragma once
 #include <cstdint>
 #include <array>
+#include <map>
+#include <tuple>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -330,6 +332,7 @@ struct Definitions {
   std::unordered_map<uint32_t, std::string> cellEditors;
   std::unordered_map<uint32_t, std::unordered_set<uint32_t>> linkedRadioCells;
   std::unordered_map<uint32_t,std::array<int32_t,2>> cellGrids;
+  std::map<std::tuple<uint32_t,int32_t,int32_t>,uint32_t> exteriorCells;
   std::unordered_map<uint32_t, Script> scripts;
   std::unordered_set<uint32_t> scriptReferencedForms; // Original SCRO dependencies survive placement pruning.
   std::unordered_map<std::string, uint32_t> questNames;

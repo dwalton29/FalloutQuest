@@ -10,6 +10,12 @@ bool Compare(float a,float b,uint8_t flags) {
   if(!std::isfinite(a)||!std::isfinite(b))return false;
   switch(flags>>5){case 0:return a==b;case 1:return a!=b;case 2:return a>b;case 3:return a>=b;case 4:return a<b;case 5:return a<=b;default:return false;}
 }
+bool InteriorCell(const fo3player::Player& player,uint32_t cell,float& value,std::string& error){
+  const auto& cells=player.Definitions().cellOwnership;
+  const auto it=cells.find(cell);
+  if(it==cells.end()){error="interior query cell unavailable";return false;}
+  value=(it->second.flags&1)!=0;return true;
+}
 bool DeadCount(const fo3player::Player& player,uint32_t base,float& value,std::string& error){
   const auto& definitions=player.Definitions();
   if(!definitions.pipboy.dialogueActors.count(base)){error="GetDeadCount actor base unavailable";return false;}
@@ -60,8 +66,10 @@ uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,Co
 static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value,std::string& error) {
   if(!ctx.player){error="missing player";return false;}
   const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;const auto& state=p.Snapshot();
+  const bool cellQuery=c.function==32||c.function==67||c.function==230||c.function==300||c.function==310;
   ActorContext who=ctx.speaker;
   if(c.run==1)who=ctx.target;
+  else if(c.run==2&&cellQuery)who={c.reference};
   else if(c.run==2){if(c.reference==0x14){who=ctx.target;who.reference=fo3player::PlayerRef;}else if(c.reference!=ctx.speaker.reference){
     if(c.function==35||c.function==278){
       auto ref=p.Definitions().references.find(c.reference);
@@ -78,9 +86,39 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(source==d.targets.end()||!source->second.linkedReference){error="linked reference context unavailable";return false;}
     const auto linked=p.Definitions().references.find(source->second.linkedReference);
     if(linked==p.Definitions().references.end()||!linked->second.valid){error="linked reference unavailable";return false;}
+    if(cellQuery)who={};
     who.reference=linked->first;who.base=linked->second.base;
   }
   else if(c.run!=0){error="unsupported run-on context";return false;}
+  if(cellQuery){
+    auto cellOf=[&](uint32_t ref){
+      if(!ref)return 0u;
+      if(const auto cell=p.ScriptReferenceCell(ref))return cell;
+      for(const auto* actor:{&ctx.speaker,&ctx.target})
+        if(ref==(actor->proxy?actor->proxy:actor->reference)&&actor->cell)return actor->cell;
+      return 0u;
+    };
+    // GetInCellParam permits a null second operand in CTDA and falls back
+    // to the run-on subject (the Bumble escort packages use this encoding).
+    const auto ref=c.function==230&&c.b?c.b:(who.proxy?who.proxy:who.reference);
+    const auto cell=ref?cellOf(ref):who.cell;
+    if(c.function==310){
+      if(!d.worlds.count(c.a)){error="worldspace query form unavailable";return false;}
+      const auto world=d.cellWorlds.find(cell);
+      if(world!=d.cellWorlds.end()){value=world->second==c.a;return true;}
+      if(who.world){value=who.world==c.a;return true;}
+      error="worldspace query location unavailable";return false;
+    }
+    if(!cell){error="condition reference cell unavailable";return false;}
+    if(c.function==32){
+      const auto other=cellOf(c.a);
+      if(!other){error="GetInSameCell target cell unavailable";return false;}
+      value=cell==other;return true;
+    }
+    if(c.function==300)return InteriorCell(p,cell,value,error);
+    if(!d.cellWorlds.count(c.a)){error="condition comparison cell unavailable";return false;}
+    value=fo3pipdata::InCell(d,cell,c.a);return true;
+  }
   const bool pc=who.reference==0x14;
   const auto* def=(pc||!d.targets.count(who.reference))?fo3pipdata::ActorCategory(d,pc?7:who.base,(c.function==71||c.function==73)?4:1):p.ActorCategory(who.reference,(c.function==71||c.function==73)?4:1);
   auto quest=state.pipboy.quests.find(c.a);
@@ -120,7 +158,6 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 56:{auto q=d.quests.find(c.a);if(q==d.quests.end()){error="quest unavailable";return false;}value=quest==state.pipboy.quests.end()?(q->second.flags&1)!=0:quest->second.running;return true;}
   case 58:value=quest==state.pipboy.quests.end()?0:quest->second.stage;return d.quests.count(c.a)!=0;
   case 59:value=quest!=state.pipboy.quests.end()&&quest->second.stages.count(c.b);return d.quests.count(c.a)!=0;
-  case 67:value=fo3pipdata::InCell(d,who.cell,c.a);return who.cell!=0;
   case 68:case 69:case 70:case 71:case 73:
     if(!def){error="actor identity unavailable";return false;}
     if(c.function==68)value=def->actorClass==c.a;
@@ -166,7 +203,6 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   // Quest is neither of the original console platforms. These gates also
   // occur on tutorial stage items, so rejecting them blocks the caller's INFO.
   case 309:case 523:value=0;return true;
-  case 310:value=who.world==c.a;return who.world!=0;
   case 372:{auto list=d.formLists.find(c.a);if(list==d.formLists.end()){error="form list unavailable";return false;}value=std::find(list->second.begin(),list->second.end(),pc?7:who.base)!=list->second.end();return true;}
   case 449:{
     if(!pc||!d.perks.count(c.a)){error="perk state unavailable";return false;}

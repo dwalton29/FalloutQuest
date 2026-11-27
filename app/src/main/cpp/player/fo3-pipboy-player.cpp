@@ -250,15 +250,28 @@ bool Player::AddAchievement(uint32_t id) {
   if(state_.achievements.insert(id).second)++revision_;
   return true;
 }
+uint32_t Player::ScriptReferenceCell(uint32_t reference) const {
+  fo3pipdata::Location location;
+  if(ScriptReferenceLocation(reference,location)){
+    // An exterior scene can span several cells, and a persistent reference's
+    // ESM parent can be the world's holding cell. Resolve its current grid.
+    if(location.world){
+      const double x=std::floor(double(location.x)/4096),y=std::floor(double(location.y)/4096);
+      if(x>=INT32_MIN&&x<=INT32_MAX&&y>=INT32_MIN&&y<=INT32_MAX){
+        const auto& cells=catalog_->pipboy.exteriorCells;
+        const auto grid=cells.find({location.world,int32_t(x),int32_t(y)});
+        if(grid!=cells.end())return grid->second;
+      }
+    }
+    return location.cell;
+  }
+  if(reference==PlayerRef)return 0;
+  // Static references outside the Pip-Boy target index still have a CELL.
+  const auto placed=catalog_->references.find(reference);
+  return placed==catalog_->references.end()?0u:placed->second.cell;
+}
 bool Player::ScriptInSameCell(uint32_t reference,bool& result,std::string& error,uint32_t target) const {
-  auto cellOf=[&](uint32_t id)->uint32_t{
-    if(id==PlayerRef)return scriptPlayerPositionKnown_?scriptPlayerCell_:0u;
-    const auto actor=state_.actors.find(id);
-    if(actor!=state_.actors.end())return actor->second.cell;
-    const auto ref=catalog_->references.find(id);
-    return ref==catalog_->references.end()?0u:ref->second.cell;
-  };
-  const auto from=cellOf(reference),to=cellOf(target);
+  const auto from=ScriptReferenceCell(reference),to=ScriptReferenceCell(target);
   if(!from||!to){error="GetInSameCell reference location unavailable";return false;}
   result=from==to;return true;
 }

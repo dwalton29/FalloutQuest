@@ -760,6 +760,7 @@ public:
   bool SetCellFullName(uint32_t cell,uint32_t message);
   std::string CellFullName(uint32_t cell) const;
   bool AddAchievement(uint32_t id);
+  uint32_t ScriptReferenceCell(uint32_t reference) const;
   bool ScriptInSameCell(uint32_t reference,bool& result,std::string& error,uint32_t target=PlayerRef) const;
   bool ReevaluatePackage(uint32_t reference);
   // Returns false for an unknown/deleted reference or malformed/cyclic graph.

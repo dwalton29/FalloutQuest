@@ -367,8 +367,111 @@ static void QuestFoundation() {
   bad.source="SetStage missing 10";assert(!p.ExecuteDialogueResult(bad,error));
   std::cout<<"Quest transaction, conditions, nesting, journal, globals, stop/completion and rejection passed\n";
 }
+static void OriginalLocationScripts(const fo3player::Catalog& catalog) {
+  fo3player::Player player(catalog);
+  player.RegisterOriginalActors();
+  const auto& d=player.Definitions().pipboy;
+  const auto& names=d.formNames;
+  const auto harkness=names.at("harknessref"),zimmer=names.at("zimmerref");
+  const auto inside=player.Snapshot().actors.at(zimmer);
+  assert(catalog.cellOwnership.at(inside.cell).flags&1);
+  const auto wasteland=names.at("wasteland");
+  const auto west=d.exteriorCells.at({wasteland,-1,0});
+  const auto east=d.exteriorCells.at({wasteland,0,0});
+  std::string error;
+  fo3pipdata::ResultScript setup;
+  setup.source="set MS08Fin.AndroidReset to -1\nset MS08Fin.EndSceneDone to 1\n"
+               "set MS08Fin.EndSceneType to 1\nset MS08Fin.EndSceneStage to 1";
+  assert(player.ExecuteDialogueResult(setup,error));
+  Context ctx;ctx.player=&player;ctx.speaker.reference=zimmer;ctx.target.reference=harkness;
+  auto eligible=[&](const char* package){
+    const auto pass=Conditions(d.packages.at(names.at(package)).conditions,ctx,error);
+    assert(error.empty());return pass;
+  };
+  assert(eligible("ms08zimmerleavewithharknesstoexterior"));
+  assert(!eligible("ms08zimmerleavewithharknesstointerior"));
+
+  auto move=[&](uint32_t ref,uint32_t cell,uint32_t world,float x){
+    auto actor=player.Snapshot().actors.at(ref);
+    actor.cell=cell;actor.world=world;actor.position={x,0,0};
+    assert(player.UpdateActor(ref,actor));
+  };
+  move(zimmer,west,wasteland,-1);
+  move(harkness,west,wasteland,-1);
+  player.SetScriptPlayerLocation(-1,0,0,west,wasteland);
+  assert(!eligible("ms08zimmerleavewithharknesstoexterior"));
+  assert(eligible("ms08zimmerleavewithharknesstointerior"));
+  assert(eligible("ms08zimmerconfrontharknessconversation"));
+  // Cross x=0 without changing the resident scene. Both sides share a world.
+  player.SetScriptPlayerLocation(0,0,0,west,wasteland);
+  assert(player.ScriptReferenceCell(fo3player::PlayerRef)==east);
+  assert(!eligible("ms08zimmerconfrontharknessconversation"));
+  player.SetScriptPlayerLocation(-1,0,0,west,wasteland);
+  move(harkness,west,wasteland,1);
+  assert(!eligible("ms08zimmerconfrontharknessconversation"));
+  move(harkness,west,wasteland,-1);
+
+  // Run the original GameMode block on both sides of Harkness's destination.
+  auto actor=player.Snapshot().actors.at(harkness);
+  actor.package=names.at("ms08harknessrunawaytointerior");
+  assert(player.UpdateActor(harkness,actor));
+  const auto stage=VariableKey(d,"ms08fin.endscenestage");
+  auto tick=[&](){
+    auto plan=player.PrepareReferenceEventTransaction(harkness,"GameMode",0,error);
+    if(!plan)std::cerr<<"Harkness GameMode "<<error<<'\n';
+    assert(plan&&player.CommitScriptTransaction(*plan));
+  };
+  tick();
+  bool disabled=true;
+  assert(player.ReferenceDisabled(harkness,disabled,error)&&!disabled);
+  assert(player.Snapshot().pipboy.dialogueVariables.at(stage)==1);
+  move(harkness,inside.cell,inside.world,inside.position[0]);
+  tick();
+  assert(player.ReferenceDisabled(harkness,disabled,error)&&disabled);
+  assert(player.Snapshot().pipboy.dialogueVariables.at(stage)==-3);
+
+  // The original Bumble wait package encodes GetInCellParam without a second reference.
+  const auto& gates=d.packages.at(names.at("bumblewaitatslaver")).conditions;
+  const auto gate=std::find_if(gates.begin(),gates.end(),[](const auto& c){return c.function==230;});
+  assert(gate!=gates.end()&&gate->b==0);
+  const auto bumble=names.at("bumbleref");
+  move(bumble,west,wasteland,-1);ctx.speaker.reference=bumble;
+  assert(!Conditions({*gate},ctx,error)&&error.empty());
+  // LL is a prefix cell. Check a real Little Lamplight interior whose editor
+  // ID starts with LL, while Harkness stays in a differently named interior.
+  const auto child=names.at("llgrandchamber");
+  assert(child!=gate->a&&fo3pipdata::InCell(d,child,gate->a));
+  move(bumble,child,0,0);
+  assert(Conditions({*gate},ctx,error)&&error.empty());
+  auto scoped=*gate;scoped.b=harkness;
+  assert(!Conditions({scoped},ctx,error)&&error.empty());
+  scoped.b=0xffffffff;
+  assert(!Conditions({scoped},ctx,error)&&!error.empty());
+  fo3pipdata::Condition interior;interior.function=300;interior.value=1;interior.run=2;
+  interior.reference=fo3player::PlayerRef;
+  assert(!Conditions({interior},ctx,error)&&error.empty());
+  interior.reference=harkness;
+  assert(Conditions({interior},ctx,error)&&error.empty());
+  fo3pipdata::Condition world=interior;world.function=310;world.a=wasteland;world.value=0;
+  assert(Conditions({world},ctx,error)&&error.empty());
+  world.reference=fo3player::PlayerRef;
+  assert(!Conditions({world},ctx,error)&&error.empty());
+
+  // Compiled result only: set MS08Fin.EndSceneOffscreen to IsInInterior.
+  fo3pipdata::ResultScript bytes;
+  bytes.references={names.at("ms08fin")};
+  bytes.compiled={0x15,0,14,0,'r',1,0,'s',4,0,6,0,' ','X',0x2c,0x11,0,0};
+  const auto offscreen=VariableKey(d,"ms08fin.endsceneoffscreen");
+  assert(player.ExecuteDialogueResult(bytes,error,harkness));
+  assert(player.Snapshot().pipboy.dialogueVariables.at(offscreen)==1);
+  assert(player.ExecuteDialogueResult(bytes,error,fo3player::PlayerRef));
+  assert(player.Snapshot().pipboy.dialogueVariables.at(offscreen)==0);
+  std::cout<<"Original Rivet City package gates, Harkness GameMode and Bumble cell checks passed\n";
+}
+
 static void OriginalQuest(const char* path) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  OriginalLocationScripts(c);
   const auto& d=c.pipboy;
   assert(d.quests.at(0x14e9e).stages.at(10).items.size()==1);
   assert(d.quests.at(0xc0f66).stages.at(11).items.size()==15);

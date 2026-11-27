@@ -76,6 +76,7 @@
     case 0x1123: return {"pms","rn",1,false};
     case 0x1125: return {"sms","r",1,false};
     case 0x1128: return {"isanimplaying","g",0,true};
+    case 0x112c: return {"isininterior","",0,true};
     case 0x1136: return {"getinworldspace","r",1,true};
     case 0x113c: return {"setscale","n",1,false};
     case 0x114a: return {"addachievement","n",1,false};

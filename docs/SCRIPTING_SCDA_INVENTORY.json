@@ -248,7 +248,6 @@
       "unsupported condition/GetHasNote": 12,
       "unsupported condition/IsTimePassing": 12,
       "unsupported command form/SendAssaultAlarm": 11,
-      "unsupported condition/GetInSameCell": 11,
       "unsupported expression operand/GetGameSetting": 11,
       "invalid inventory command": 10,
       "invalid reference action receiver": 9,
@@ -270,7 +269,6 @@
       "unsupported command form/SetDestroyed": 6,
       "unsupported condition/GetInZone": 6,
       "unsupported expression operand/HasPerk": 6,
-      "unsupported expression operand/IsInInterior": 6,
       "invalid PlayGroup receiver/group": 5,
       "invalid dispel receiver or source": 5,
       "unresolved EVP reference": 5,
@@ -285,7 +283,6 @@
       "unsupported command form/UnequipItem": 4,
       "unsupported condition/GetBaseActorValue": 4,
       "unsupported condition/GetDetected": 4,
-      "unsupported condition/IsInInterior": 4,
       "unsupported expression operand/GetCurrentAIPackage": 4,
       "unsupported expression operand/GetKillingBlowLimb": 4,
       "unsupported expression operand/HasMagicEffect": 4,
@@ -321,7 +318,6 @@
       "unsupported command form/ShowPlasticSurgeonMenu": 2,
       "unsupported command form/ShowTutorialMenu": 2,
       "unsupported command form/StopWaiting": 2,
-      "unsupported condition/GetInCellParam": 2,
       "unsupported condition/GetMajorCrimeCount": 2,
       "unsupported condition/IsWin32": 2,
       "unsupported expression operand/GetDayOfWeek": 2,
@@ -860,6 +856,7 @@
       "actor health unavailable": 1,
       "actor query reference unavailable": 1,
       "damaging explosion requires resident positions and line of sight": 1,
+      "interior query cell unavailable": 1,
       "invalid AI actor value": 1,
       "invalid index": 1,
       "invalid inventory health percent": 1,
@@ -884,7 +881,6 @@
       "unsupported expression operand/GetDestructionStage": 1,
       "unsupported expression operand/GetLevel": 1,
       "unsupported expression operand/HasLoaded3D": 1,
-      "unsupported expression operand/IsInInterior": 1,
       "unsupported expression operand/IsPCSleeping": 1,
       "unsupported player miscellaneous statistic": 1
     },
@@ -934,6 +930,7 @@
       "GetEquipped": 3,
       "GetLinkedRef": 3,
       "IsIdlePlaying": 3,
+      "IsInInterior": 3,
       "IsTalking": 3,
       "GetLockLevel": 2,
       "GetUnconscious": 2,
@@ -960,7 +957,6 @@
       "unsupported condition/GetHasNote": 12,
       "unsupported condition/IsTimePassing": 12,
       "unsupported command form/SendAssaultAlarm": 11,
-      "unsupported condition/GetInSameCell": 11,
       "unsupported expression operand/GetGameSetting": 11,
       "unsupported condition/GetDayOfWeek": 9,
       "unsupported condition/IsRaining": 9,
@@ -970,7 +966,6 @@
       "unsupported command form/SetDestroyed": 6,
       "unsupported condition/GetInZone": 6,
       "unsupported expression operand/HasPerk": 6,
-      "unsupported expression operand/IsInInterior": 6,
       "unsupported command form/SetVATSTarget": 5,
       "unsupported condition/GetHealthPercentage": 5,
       "unsupported expression operand/HasLoaded3D": 5,
@@ -978,7 +973,6 @@
       "unsupported command form/UnequipItem": 4,
       "unsupported condition/GetBaseActorValue": 4,
       "unsupported condition/GetDetected": 4,
-      "unsupported condition/IsInInterior": 4,
       "unsupported expression operand/GetCurrentAIPackage": 4,
       "unsupported expression operand/GetKillingBlowLimb": 4,
       "unsupported expression operand/HasMagicEffect": 4,
@@ -1006,7 +1000,6 @@
       "unsupported command form/ShowPlasticSurgeonMenu": 2,
       "unsupported command form/ShowTutorialMenu": 2,
       "unsupported command form/StopWaiting": 2,
-      "unsupported condition/GetInCellParam": 2,
       "unsupported condition/GetMajorCrimeCount": 2,
       "unsupported condition/IsWin32": 2,
       "unsupported expression operand/GetDayOfWeek": 2,
@@ -1068,7 +1061,7 @@
       "GetIsVoiceType": 99,
       "HasPerk": 88,
       "GetIsSex": 78,
-      "GetInCell": 70,
+      "GetInCell": 72,
       "GetDistance": 65,
       "GetGlobalValue": 60,
       "GetTalkedToPC": 55,
@@ -1085,7 +1078,10 @@
       "GetOpenState": 8,
       "IsInCombat": 7,
       "GetLevel": 5,
+      "GetInSameCell": 4,
+      "IsInInterior": 4,
       "IsWeaponOut": 3,
+      "GetInCellParam": 2,
       "IsPS3": 2,
       "IsSneaking": 2,
       "IsXBox": 2,
@@ -1101,13 +1097,13 @@
     },
     "literal_event_dispatch_sites": {
       "gamemode": [
-        "scripting/fo3-script-runtime.inc:2044",
-        "scripting/fo3-script-runtime.inc:2059",
-        "scripting/fo3-script-runtime.inc:2077"
+        "scripting/fo3-script-runtime.inc:2043",
+        "scripting/fo3-script-runtime.inc:2058",
+        "scripting/fo3-script-runtime.inc:2076"
       ],
       "onactivate": [
         "npc/fo3-npc-door-runtime.inc:121",
-        "scripting/fo3-script-runtime.inc:973",
+        "scripting/fo3-script-runtime.inc:972",
         "scripting/fo3-script-transaction.inc:77",
         "scripting/fo3-script-transaction.inc:166"
       ],
@@ -1116,9 +1112,9 @@
         "scripting/fo3-world-script-runtime.inc:538"
       ],
       "ondeath": [
-        "scripting/fo3-script-runtime.inc:1030",
-        "scripting/fo3-script-runtime.inc:1687",
-        "scripting/fo3-script-runtime.inc:1731",
+        "scripting/fo3-script-runtime.inc:1029",
+        "scripting/fo3-script-runtime.inc:1686",
+        "scripting/fo3-script-runtime.inc:1730",
         "weapons/fo3-weapon-player.cpp:623"
       ],
       "onload": [
@@ -1133,7 +1129,7 @@
       ],
       "scripteffectstart": [
         "player/fo3-aid-player.inc:290",
-        "scripting/fo3-script-runtime.inc:1656"
+        "scripting/fo3-script-runtime.inc:1655"
       ],
       "onadd": [
         "player/fo3-player-state.cpp:1043",
@@ -1148,7 +1144,7 @@
         "npc/fo3-npc-combat-runtime.inc:699"
       ],
       "scripteffectfinish": [
-        "scripting/fo3-script-runtime.inc:1736"
+        "scripting/fo3-script-runtime.inc:1735"
       ],
       "onpackagedone": [
         "scripting/fo3-script-transaction.inc:228"
@@ -1178,8 +1174,8 @@
       "onunequip": [
         "player/fo3-player-state.cpp:1109",
         "player/fo3-player-state.cpp:1119",
-        "scripting/fo3-script-runtime.inc:1299",
-        "scripting/fo3-script-runtime.inc:1409"
+        "scripting/fo3-script-runtime.inc:1298",
+        "scripting/fo3-script-runtime.inc:1408"
       ],
       "ondestructionstagechange": [],
       "ondrop": [],
@@ -1188,6 +1184,6 @@
       "onrelease": [],
       "onactorunequip": []
     },
-    "index_sha256": "7979758a2101f594a27e9b5d6b77e16b4506f44948b942d2228f734e58c21d1c"
+    "index_sha256": "636acc1c98a007789f72a657a67a3738abe68bfc1acc057b3209ab186cf9b955"
   }
 }

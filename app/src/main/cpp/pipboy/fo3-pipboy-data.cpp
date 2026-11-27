@@ -274,7 +274,11 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   } else if (t == "CELL") {
     d.cellWorlds[id] = world;
     if(!editorKey.empty())d.cellEditors.emplace(id,std::move(editorKey));
-    if(auto grid=Find(s,"XCLC");grid&&grid->n>=8)d.cellGrids[id]={int32_t(U(grid)),int32_t(U(grid,4))};
+    if(auto grid=Find(s,"XCLC");grid&&grid->n>=8){
+      const int32_t x=int32_t(U(grid)),y=int32_t(U(grid,4));
+      d.cellGrids[id]={x,y};
+      if(world)d.exteriorCells[{world,x,y}]=id;
+    }
   }
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
     auto p = Place(flags, s, cell, world);

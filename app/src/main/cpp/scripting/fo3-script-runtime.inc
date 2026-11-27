@@ -206,19 +206,18 @@ class Expression {
       if(!d.worlds.count(world)||!p.ScriptReferenceLocation(id,location))return Fail("worldspace query location unavailable");
       value=location.world==world;return true;
     }
-    if(query=="getincellparam"){
-      if(tokens.size()-at<2)return Fail("missing cell or reference");
-      const auto cell=form(tokens[at++]);const auto id=form(tokens[at++]);
-      fo3pipdata::Location location;
-      if(!d.cellWorlds.count(cell)||!p.ScriptReferenceLocation(id,location))return Fail("cell query location unavailable");
-      value=fo3pipdata::InCell(d,location.cell,cell);return true;
+    if(query=="isininterior"){
+      const auto ref=dot==std::string::npos?owner:form(t.substr(0,dot));
+      return fo3dialogue::InteriorCell(p,p.ScriptReferenceCell(ref),value,error);
     }
-    if(query=="getincell"){
-      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+    if(query=="getincell"||query=="getincellparam"){
       if(at==tokens.size())return Fail("missing cell query");
-      const auto cell=form(tokens[at++]);fo3pipdata::Location location;
-      if(!d.cellWorlds.count(cell)||!p.ScriptReferenceLocation(id,location))return Fail("cell query location unavailable");
-      value=fo3pipdata::InCell(d,location.cell,cell);return true;
+      const auto expected=form(tokens[at++]);
+      if(query=="getincellparam"&&at==tokens.size())return Fail("missing cell reference");
+      const auto ref=query=="getincellparam"?form(tokens[at++]):(dot==std::string::npos?owner:form(t.substr(0,dot)));
+      const auto cell=p.ScriptReferenceCell(ref);
+      if(!cell||!d.cellWorlds.count(expected))return Fail("cell query location unavailable");
+      value=fo3pipdata::InCell(d,cell,expected);return true;
     }
     if(query=="iskiller"){
       if(at==tokens.size())return Fail("missing killer reference");
