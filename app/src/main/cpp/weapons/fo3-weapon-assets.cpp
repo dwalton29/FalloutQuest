@@ -1,5 +1,7 @@
 #include "fo3-weapon-assets.h"
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace fo3weapon {
 namespace {
@@ -10,9 +12,10 @@ bool Finite(const fo3anim::Matrix &m) {
 }
 void GripFingers::Bind(const fo3anim::Skeleton& source,const fo3anim::Skeleton& avatar){
   joints.clear();wrist=fo3anim::FindBone(avatar,"Bip01 L Hand");
-  if(wrist<0)return;
+  const int sourceWrist=fo3anim::FindBone(source,"Bip01 L Hand");
+  if(wrist<0||sourceWrist<0)return;
   // Visit parent before child even when the two NIFs order blocks differently.
-  auto children=[&](auto&& visit,int bone,int parent)->void{
+  auto children=[&](auto&& visit,int bone,int parent,int sourceParent)->void{
     for(size_t i=0;i<avatar.bones.size();++i){
       const auto& b=avatar.bones[i];
       if(b.parent!=bone)continue;
@@ -22,19 +25,34 @@ void GripFingers::Bind(const fo3anim::Skeleton& source,const fo3anim::Skeleton& 
       const int match=fo3anim::FindBone(source,b.name);
       if(match<0)continue;
       GripJoint joint{};
-      auto bind=source.bones[match].bind;bind.translation={};bind.scale=1;
-      if(!fo3anim::Inverse(fo3anim::ToMatrix(bind),joint.sourceBindInverse))continue;
-      joint.source=match;joint.avatar=int(i);joint.parent=parent;joint.name=b.name;
+      // The first-person NIF inserts metacarpals between Hand and Finger1–4.
+      // Fold those joints into the segment represented by the avatar knuckle.
+      int ancestor=match;
+      for(;ancestor>=0&&ancestor!=sourceParent;ancestor=source.bones[ancestor].parent)
+        joint.sourceChain.push_back(ancestor);
+      if(ancestor!=sourceParent)continue;
+      std::reverse(joint.sourceChain.begin(),joint.sourceChain.end());
+      auto rest=fo3anim::Identity();
+      for(int index:joint.sourceChain){
+        auto bind=source.bones[index].bind;bind.translation={};bind.scale=1;
+        rest=fo3anim::Multiply(rest,fo3anim::ToMatrix(bind));
+      }
+      if(!fo3anim::Inverse(rest,joint.sourceBindInverse))continue;
+      joint.avatar=int(i);joint.parent=parent;joint.name=b.name;
       for(char& ch:joint.name)if(ch>='A'&&ch<='Z')ch=char(ch-'A'+'a');
-      const int index=int(joints.size());joints.push_back(joint);visit(visit,int(i),index);
+      const int index=int(joints.size());joints.push_back(std::move(joint));visit(visit,int(i),index,match);
     }
   };
-  children(children,wrist,-1);
+  children(children,wrist,-1,sourceWrist);
 }
 void GripFingers::Sample(const fo3anim::Skeleton& avatar,const std::vector<fo3anim::Transform>& locals){
   for(auto& joint:joints){
-    auto rotation=locals.at(joint.source);rotation.translation={};rotation.scale=1;
-    const auto change=fo3anim::Multiply(joint.sourceBindInverse,fo3anim::ToMatrix(rotation));
+    auto segment=fo3anim::Identity();
+    for(int index:joint.sourceChain){
+      auto rotation=locals.at(index);rotation.translation={};rotation.scale=1;
+      segment=fo3anim::Multiply(segment,fo3anim::ToMatrix(rotation));
+    }
+    const auto change=fo3anim::Multiply(joint.sourceBindInverse,segment);
     const auto local=fo3anim::Multiply(fo3anim::ToMatrix(avatar.bones[joint.avatar].bind),change);
     const auto& parent=joint.parent<0?avatar.bindGlobal[wrist]:joints[joint.parent].posed;
     joint.posed=fo3anim::Multiply(parent,local);

@@ -33,6 +33,23 @@ void Synthetic() {
   assert(std::fabs(a.weaponInRight[12]-2)<1e-5f);
   assert(std::fabs(a.leftInWeapon[12]+1)<1e-5f);
   clip.tracks.pop_back();assert(!fo3weapon::BuildAttachment(s, clip, true, a));
+  {
+    Skeleton firstPerson,avatar;
+    auto add=[](Skeleton& s,const char* name,int parent){
+      Bone b;b.name=name;b.parent=parent;b.bind.translation={1,0,0};s.bones.push_back(b);
+    };
+    add(firstPerson,"Bip01 L Hand",-1);add(firstPerson,"Bip01 L Hand01",0);add(firstPerson,"Bip01 L Finger1",1);
+    add(avatar,"Bip01 L Hand",-1);add(avatar,"Bip01 L Finger1",0);
+    assert(FinalizeSkeleton(firstPerson)&&FinalizeSkeleton(avatar));
+    std::vector<Transform> locals;for(const auto& b:firstPerson.bones)locals.push_back(b.bind);
+    locals[1].rotation={.70710678f,0,0,.70710678f};
+    fo3weapon::GripFingers fingers;fingers.Bind(firstPerson,avatar);fingers.Sample(avatar,locals);
+    assert(fingers.joints.size()==1);
+    const auto& posed=fingers.joints.front().posed;
+    const auto tip=Point(posed,{1,0,0},true);
+    assert(std::fabs(tip[0])<1e-5f&&std::fabs(tip[1]-1)<1e-5f);
+    assert(std::fabs(posed[12]-avatar.bindGlobal[1][12])<1e-5f);
+  }
   fo3weapon::ModelNodes m;assert(!fo3weapon::DecodeModelNodes({},m));
   assert(m.MeshPart(0)==fo3weapon::Part::Body);
   fo3weapon::Definition d;d.animation=6;
@@ -66,6 +83,11 @@ void TwoHandAssets(const std::string& root){
       fo3weapon::GripFingers shape;
       shape.Bind(asset.firstPerson,avatar);
       assert(shape.joints.size()>=15);
+      const auto knuckle=std::find_if(shape.joints.begin(),shape.joints.end(),[](const auto& joint){
+        return joint.name=="bip01 l finger1";
+      });
+      assert(knuckle!=shape.joints.end()&&knuckle->sourceChain.size()==2);
+      assert(asset.firstPerson.bones[knuckle->sourceChain.front()].name=="Bip01 L Hand01");
       shape.Sample(avatar,generic.aimLocals);
       const auto base=shape.joints;
       shape.Sample(avatar,asset.aimLocals);

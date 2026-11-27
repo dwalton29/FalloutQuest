@@ -6,7 +6,8 @@ namespace fo3weapon {
 // Copy the first-person finger rotations onto the avatar's own joint lengths.
 // Deltas are in avatar bind space with the wrist fixed; arm IK moves it later.
 struct GripJoint {
-  int source=-1,avatar=-1,parent=-1;
+  int avatar=-1,parent=-1;
+  std::vector<int> sourceChain;
   std::string name;
   fo3anim::Matrix sourceBindInverse,posed,delta;
 };
