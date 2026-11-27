@@ -152,6 +152,14 @@ bool Player::LoadWeaponCarton(uint64_t id){
   const auto& def=catalog_->items.at(s->formId).weapon;
   return def.CartonReload()&&ReloadWeapon(id);
 }
+bool Player::InsertWeaponAmmo(uint64_t id,bool individual){
+  const auto* s=Weapon(id);
+  if(!s||!s->equipped||s->condition<=0)return false;
+  const auto& d=catalog_->items.at(s->formId).weapon;
+  if(!d.Firearm()||!d.LongGun()||s->loadedRounds>=d.clip)return false;
+  if(!individual&&(!s->needsAction||s->loadedRounds))return false;
+  return TransferWeaponAmmo(id,d,individual?1:d.clip,true);
+}
 bool Player::TransferWeaponAmmo(uint64_t id,const fo3weapon::Definition& def,int32_t capacity,bool ready) {
   int32_t rounds = std::min(capacity, AmmoReserve(def.ammo));
   if (!rounds) return false;

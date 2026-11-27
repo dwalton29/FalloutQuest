@@ -67,7 +67,10 @@ void TwoHandAssets(const std::string& root){
       {"huntingrifle",5,0,"2hr",""},{"assaultrifle",6,0,"2ha",""},
       {"combatshotgun",5,3,"2hr","2hrhandgrip3_combatshotgun.kf"},
       {"laserrifle",7,1,"2hr",""},{"bbgun01",5,4,"2hr","2hrhandgrip2_bbgun.kf"},
-      {"minigun",8,4,"2hh",""}}){
+      {"minigun",8,4,"2hh",""},{"g3assaultrifle",6,0,"2ha",""},
+      {"sniperrifle",6,2,"2ha",""},{"plasmarifle",6,1,"2ha",""},
+      {"lasergatling",8,2,"2hh",""},{"lincolnrifle",5,2,"2hr",""},
+      {"railwayrifle",5,5,"2hr",""}}){
     fo3weapon::Definition d;d.valid=true;d.ammo=d.clip=d.ammoUse=d.pellets=1;
     d.animation=sample.animation;d.reload=sample.reload;
     if(d.reload==4&&d.animation==5)d.attackAnimation=32;
@@ -96,10 +99,19 @@ void TwoHandAssets(const std::string& root){
       assert(changed>=3);
     }
     asset.Reload(Read(prefix+"reload"+char('a'+d.reload)+".kf"));
-    assert(asset.ReloadClipSeconds()>0&&asset.ButtonReload(d,true,true)&&asset.ButtonReload(d,false,false));
-    bool manual=asset.ReloadInteraction(d)==fo3weapon::ReloadFamily::Carton||
-      (asset.ReloadInteraction(d)==fo3weapon::ReloadFamily::DetachableRifle&&asset.hasMagazineGrip);
-    assert(asset.ButtonReload(d,true,false)!=manual);
+    assert(asset.ReloadClipSeconds()>0);
+    if(d.CartonReload())assert(asset.hasCartonGrip);
+    else if(asset.individualAmmo){
+      assert(std::string(sample.model)=="lincolnrifle"||std::string(sample.model)=="railwayrifle");
+      assert(asset.clip!=asset.muzzle);
+    }else{
+      assert(asset.clipNode>=0);
+      std::vector<Fo3StaticNifMesh> meshes;
+      assert(LoadFo3StaticNifMeshes(root+"/"+sample.model+".nif",meshes));
+      assert(std::any_of(meshes.begin(),meshes.end(),[&](const auto& mesh){
+        return asset.Descendant(mesh.shapeBlock,asset.clipNode);
+      }));
+    }
     const int hand=fo3anim::FindBone(asset.firstPerson,"Bip01 L Hand");
     const int weapon=fo3anim::FindBone(asset.firstPerson,"Weapon");
     fo3anim::Pose moving;

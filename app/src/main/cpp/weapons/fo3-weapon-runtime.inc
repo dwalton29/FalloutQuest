@@ -9,9 +9,9 @@ using R=fo3vr::R;
 struct Model {
   std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
   fo3weapon::Asset asset;
-  std::vector<GpuObject> objects,flash;
+  std::vector<GpuObject> objects,flash,looseAmmo;
   std::vector<uint8_t> magazines,slides;
-  V centre{},half{},supportAxis{1,0,0};
+  V ammoCentre{},centre{},half{},supportAxis{1,0,0};
   std::array<V,3> strikePoints{};
   fo3anim::Clip prime;
   bool cartonVisible=false;
@@ -35,6 +35,7 @@ fo3weapon::Trigger trigger;
 uint64_t active=0;
 bool held=false,support=false,inside=false,magazine=false,charging=false,pouchNearby=false;
 fo3weapon::ReloadPlayback animatedReload;
+fo3weapon::HandReload handReload;
 double reloadSoundTime=-1,primeStarted=-1,primeSoundTime=-1,cartonNearSince=-1;
 bool rawHeldReady=false;Matrix rawToWeapon=fo3anim::Identity();V rawPalmLocal{},rawSupportPalmLocal{};
 Matrix pose=fo3anim::Identity(),magPose=fo3anim::Identity(),magStart=fo3anim::Identity();
@@ -129,6 +130,29 @@ Model* Ensure(uint32_t form){
     if(!carton)for(size_t n=0;n<part.mesh.positions.size();n+=3){auto p=GamePoint({part.mesh.positions[n],part.mesh.positions[n+1],part.mesh.positions[n+2]});lo={std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};hi={std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};}
     GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))continue;
     gpu.physicalWeapon=true;gpu.refFormId=0;out.objects.push_back(std::move(gpu));out.magazines.push_back(mag);out.slides.push_back(slide);out.bones.push_back(part.mesh.shapeBlock<out.asset.blocks.size()?out.asset.blocks[part.mesh.shapeBlock]:-1);
+  }
+  // An internal feed can have an animated socket but no detachable mesh.
+  // In that case the player's actual AMMO record supplies the carried prop.
+  if(item.weapon.LongGun()&&!item.weapon.CartonReload()&&
+     std::none_of(out.magazines.begin(),out.magazines.end(),[](uint8_t shown){return shown!=0;})){
+    const auto ammo=gPlayerSession->player.Definitions().items.find(item.weapon.ammo);
+    if(ammo!=gPlayerSession->player.Definitions().items.end()&&!ammo->second.model.empty()){
+      Fo3WorldPlacement ammoPlacement;ammoPlacement.baseFormId=ammo->first;ammoPlacement.baseRecordType="AMMO";
+      ammoPlacement.modelPath=ammo->second.model;ammoPlacement.scale=1;
+      parts.clear();V low{INFINITY,INFINITY,INFINITY},high{-INFINITY,-INFINITY,-INFINITY};
+      if(BuildCpuObjects(ammoPlacement,parts)){
+        for(auto& part:parts){
+          GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))continue;
+          for(size_t n=0;n+2<part.mesh.positions.size();n+=3){
+            const auto p=GamePoint({part.mesh.positions[n],part.mesh.positions[n+1],part.mesh.positions[n+2]});
+            low={std::min(low.x,p.x),std::min(low.y,p.y),std::min(low.z,p.z)};
+            high={std::max(high.x,p.x),std::max(high.y,p.y),std::max(high.z,p.z)};
+          }
+          gpu.physicalWeapon=true;gpu.refFormId=0;out.looseAmmo.push_back(std::move(gpu));
+        }
+        if(fo3vr::Finite(low)&&fo3vr::Finite(high))out.ammoCentre=(low+high)*.5f;
+      }
+    }
   }
   const auto projectile=gPlayerSession->player.Definitions().weapons.projectiles.find(item.weapon.projectile);
   if(projectile!=gPlayerSession->player.Definitions().weapons.projectiles.end()&&!projectile->second.flashModel.empty()){
@@ -337,7 +361,7 @@ void AdvanceFlights(float dt){
   }
 }
 void RetireReload(){
-  animatedReload={};magazine=charging=support=pouchNearby=false;
+  animatedReload={};handReload={};magazine=charging=support=pouchNearby=false;
   supportAim={};reloadHandWeight=chargeTravel=0;primeStarted=cartonNearSince=-1;
 }
 void Draw(uint64_t id,uint32_t form){if(!gPlayerSession->player.Equip(id))return;holsterSlots[gPlayerSession->player.Definitions().items.at(form).weapon.BackHolster()?1:0]=id;stowAccess.Reset();active=id;held=true;rawHeldReady=false;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
@@ -355,10 +379,24 @@ Matrix HolsterPose(const fo3weapon::Definition& weapon,const Model* model){
 const fo3player::Stack* Slot(const fo3player::Player& player,bool longGun){
   return fo3weapon::Holstered(player,longGun,active,holsterSlots[longGun?1:0],[](uint32_t form){auto i=models.find(form);return i!=models.end()&&i->second.ready;});
 }
+void DrawWeaponPart(GpuObject& object,const Matrix& matrix,bool alpha,fqspacewarp::Placement placement){
+  if(object.alphaBlend!=alpha)return;
+  std::copy(matrix.begin(),matrix.end(),object.q220DynamicTransform);
+  PrepareFo3InteriorObjectLights(object,nullptr);
+  glDepthMask(object.zBufferWriteQ1200?GL_TRUE:GL_FALSE);glEnable(GL_DEPTH_TEST);
+  if(alpha){glEnable(GL_BLEND);glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend,true),Q1150BlendFactor(object.alphaDestBlend,false));}
+  DrawSceneObject(object,false,placement);
+}
 void DrawModel(Model&m,fqspacewarp::Placement placement,const Matrix&root,bool alpha,bool onlyMag=false,bool removeMag=false,float action=0,bool animated=false){
   auto transform=root;
   // Uploaded vertices include the runtime's fixed model-space origin.
   auto offset=fo3anim::Identity();offset[13]=-FLOOR_Y;offset[14]=-SCENE_FORWARD;transform=fo3anim::Multiply(root,offset);
+  if(onlyMag&&!m.looseAmmo.empty()){
+    const auto at=Rigid(fo3vr::Identity(),GamePoint(m.asset.clip)-m.ammoCentre);
+    const auto matrix=fo3anim::Multiply(fo3anim::Multiply(root,at),offset);
+    for(auto& part:m.looseAmmo)DrawWeaponPart(part,matrix,alpha,placement);
+    return;
+  }
   for(size_t n=0;n<m.objects.size();n++){
     const bool hiddenCarton=m.asset.cartonNode>=0&&(!animated||!m.cartonVisible);
     if((onlyMag&&!m.magazines[n])||(!onlyMag&&m.magazines[n]&&(removeMag||hiddenCarton)))continue;
@@ -366,17 +404,85 @@ void DrawModel(Model&m,fqspacewarp::Placement placement,const Matrix&root,bool a
     auto partTransform=transform;
     if(animated&&n<m.bones.size()&&m.bones[n]>=0&&size_t(m.bones[n])<m.reloadModel.delta.size())partTransform=fo3anim::Multiply(fo3anim::Multiply(root,GameRigid(m.reloadModel.delta[size_t(m.bones[n])])),offset);
     if(action>0&&m.slides[n]){auto travel=fo3anim::Identity();travel[12]=-action*m.supportAxis.x;travel[13]=-action*m.supportAxis.y;travel[14]=-action*m.supportAxis.z;partTransform=fo3anim::Multiply(transform,travel);}
-    std::copy(partTransform.begin(),partTransform.end(),o.q220DynamicTransform);
-    PrepareFo3InteriorObjectLights(o,nullptr);
-    glDepthMask(o.zBufferWriteQ1200?GL_TRUE:GL_FALSE);glEnable(GL_DEPTH_TEST);
-    if(alpha){glEnable(GL_BLEND);glBlendFunc(Q1150BlendFactor(o.alphaSourceBlend,true),Q1150BlendFactor(o.alphaDestBlend,false));}
-    DrawSceneObject(o,false,placement);
+    DrawWeaponPart(o,partTransform,alpha,placement);
   }
 }
 void DrawFlash(Model&m,uint64_t instance,bool alpha){
-  auto transform=fo3anim::Multiply(pose,GameRigid(m.asset.nodes.bindGlobal[fo3anim::FindBone(m.asset.nodes,"ProjectileNode")]));
+  auto transform=fo3anim::Multiply(pose,GameRigid(m.asset.nodes.bindGlobal[m.asset.muzzleNode]));
   auto offset=fo3anim::Identity();offset[13]=-FLOOR_Y;offset[14]=-SCENE_FORWARD;transform=fo3anim::Multiply(transform,offset);
   for(auto&o:m.flash){if(o.alphaBlend!=alpha)continue;std::copy(transform.begin(),transform.end(),o.q220DynamicTransform);PrepareFo3InteriorObjectLights(o,nullptr);glDepthMask(o.zBufferWriteQ1200?GL_TRUE:GL_FALSE);glEnable(GL_DEPTH_TEST);if(alpha){glEnable(GL_BLEND);glBlendFunc(Q1150BlendFactor(o.alphaSourceBlend,true),Q1150BlendFactor(o.alphaDestBlend,false));}DrawSceneObject(o,false,{PlacementKind::Weapon,instance});}
+}
+// The left controller transports the rendered inventory prop. Keep inventory
+// mutations at the two boundaries (removed from the socket, released into it).
+void UpdateLongReload(fo3player::Player& p,const fo3player::Stack& stack,Model& m,
+                      const fo3weapon::Definition& d,V left,bool tracked,double now){
+  const auto id=stack.id;const auto form=stack.formId;
+  const bool single=m.asset.individualAmmo;
+  const bool action=m.asset.ReloadInteraction(d)==fo3weapon::ReloadFamily::DetachableRifle;
+  const V local=GamePoint(m.asset.clip),socket=Point(pose,local);
+  auto dropProp=[&](const Matrix& released){
+    ejectPose=released;ejectVelocity={0,-.3f,0};ejectUntil=now+3;ejectForm=form;++ejectionSerial;
+  };
+  auto eject=[&](bool falling){
+    if(!p.EjectMagazine(id))return false;
+    if(falling)dropProp(pose);
+    if(!m.asset.reloadSounds[1].empty())fo3audio::NamedSound(m.asset.reloadSounds[0]);
+    Pulse(0);FlushFo3PlayerState();return true;
+  };
+  if(inputs.eject&&!single&&!stack.needsAction&&!handReload&&!charging){
+    eject(true);return;
+  }
+  if(!tracked||gQ220Grab[0].active){handReload={};charging=pouchNearby=false;return;}
+  const bool needsSpare=single?stack.loadedRounds<d.clip:stack.needsAction&&!stack.loadedRounds;
+  const bool inPouch=!support&&!handReload&&needsSpare&&p.AmmoReserve(d.ammo)>0&&pouch.Contains(left,true);
+  if(inPouch&&!pouchNearby)Pulse(0,.12f);
+  pouchNearby=inPouch;
+  if(inputs.l&&!support&&!handReload&&!charging){
+    const bool remove=!single&&!stack.needsAction&&fo3vr::Length(left-socket)<.08f;
+    if(inPouch||remove){
+      handReload.Grab(inPouch);
+      if(remove)magStart=pose;
+      else if(m.asset.hasMagazineGrip)
+        magStart=fo3anim::Multiply(HandPose(m,0,false),GameRigid(m.asset.magazineInLeft));
+      else{
+        const R rotation=Rotation(RawSupportHand());
+        magStart=Rigid(rotation,left-fo3vr::Rotate(rotation,local));
+      }
+      magPalm=left;std::copy(gQ218LeftHandQuat,gQ218LeftHandQuat+4,magQuat);
+      Pulse(0,.2f);
+    }else if(action&&stack.needsAction&&stack.loadedRounds&&fo3vr::Length(left-Point(pose,GamePoint(m.asset.slide)))<.10f){
+      Matrix inverse;
+      if(fo3anim::Inverse(pose,inverse)){chargeStart=Point(inverse,left);chargeTravel=0;charging=true;Pulse(0,.12f);}
+    }
+  }
+  if(handReload){
+    Matrix delta;Q220ControllerDeltaMatrix(RuntimePoint(magPalm),magQuat,gWeaponPalm[0],gQ218LeftHandQuat,delta.data());
+    magPose=fo3anim::Multiply(delta,magStart);
+    const bool wasAligned=handReload.aligned,removed=handReload.grip==fo3weapon::AmmoGrip::Removed;
+    const bool released=gQ217FingerGrip[0]<=.25f;
+    const auto event=handReload.Update(tracked,released,fo3vr::Length(Point(magPose,local)-socket));
+    if(handReload.aligned&&!wasAligned)Pulse(0,.14f);
+    if(removed&&released)dropProp(magPose);
+    if(event==fo3weapon::AmmoTransfer::Eject){
+      if(!eject(false))handReload={};
+      else if(released)dropProp(magPose);
+    }
+    if(event==fo3weapon::AmmoTransfer::Insert){
+      const bool seated=action?p.LoadMagazine(id):p.InsertWeaponAmmo(id,single);
+      if(seated){
+        fo3audio::NamedSound(m.asset.reloadSounds[1].empty()?m.asset.reloadSounds[0]:m.asset.reloadSounds[1]);
+        Pulse(0,.32f);FlushFo3PlayerState();Log("HAND RELOAD INSERT",id,form);
+      }
+    }
+    return;
+  }
+  if(charging){
+    chargeTravel=fo3weapon::RearwardPull(Rotation(pose),Position(pose),left,chargeStart,m.supportAxis);
+    if(chargeTravel>=.045f&&p.ChamberWeapon(id)){
+      charging=false;Pulse(0);fo3audio::NamedSound(m.asset.reloadSounds[2]);FlushFo3PlayerState();
+    }
+    if(gQ217FingerGrip[0]<=.25f)charging=false;
+  }
 }
 } // namespace weaponruntime
 
@@ -466,7 +572,7 @@ bool WeaponHeld(){return weaponruntime::held;}
 // switch to Pip-Boy focus and retire its reload state.
 bool WeaponReloadActive(){
   const auto* gun=gPlayerSession?gPlayerSession->player.EquippedWeapon():nullptr;
-  return weaponruntime::support||weaponruntime::animatedReload||fo3weapon::ReloadOwnsLeftHand(weaponruntime::magazine,
+  return weaponruntime::support||weaponruntime::handReload||weaponruntime::animatedReload||fo3weapon::ReloadOwnsLeftHand(weaponruntime::magazine,
     weaponruntime::charging,weaponruntime::held,
     gun&&gun->needsAction&&!gPlayerSession->player.Definitions().items.at(gun->formId).weapon.CartonReload());
 }
@@ -475,26 +581,26 @@ void WeaponPersistWorld(){
   for(const auto&e:world)gPlayerSession->player.UpdateWorldWeapon(e.first,ToSave(e.second));
 }
 void WeaponShutdown(){
-  using namespace weaponruntime;WeaponPersistWorld();for(const auto&e:world)fo3rigid::Live().Remove(fo3rigid::WeaponId(e.first));if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));for(auto&e:models){Q74DeleteGpuObjects(e.second.objects);Q74DeleteGpuObjects(e.second.flash);}models.clear();world.clear();
+  using namespace weaponruntime;WeaponPersistWorld();for(const auto&e:world)fo3rigid::Live().Remove(fo3rigid::WeaponId(e.first));if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));for(auto&e:models){Q74DeleteGpuObjects(e.second.objects);Q74DeleteGpuObjects(e.second.flash);Q74DeleteGpuObjects(e.second.looseAmmo);}models.clear();world.clear();
   active=0;held=false;stowAccess.Reset();zonesReady=false;holsterSlots[0]=holsterSlots[1]=0;RetireReload();inputs={};flights={};ejectUntil=flashUntil=last=0;ammoText[0]=0;fo3ammoui::Shutdown();
 }
 void WeaponRender(bool alpha){
   using namespace weaponruntime;if(!gPlayerSession||IsFo3LoadingVisible())return;
   const auto&p=gPlayerSession->player;const auto*s=p.EquippedWeapon();
   if(s&&s->id==active){auto m=models.find(s->formId);if(m!=models.end()&&m->second.ready){
-    DrawModel(m->second,{PlacementKind::Weapon,s->id},pose,alpha,false,!animatedReload&&s->needsAction&&s->loadedRounds==0,
+    DrawModel(m->second,{PlacementKind::Weapon,s->id},pose,alpha,false,!animatedReload&&((s->needsAction&&s->loadedRounds==0)||handReload.grip==fo3weapon::AmmoGrip::Seated),
               charging?chargeTravel:0,(animatedReload&&m->second.asset.ReloadClipSeconds()>0)||primeStarted>=0);
-    if(magazine)DrawModel(m->second,{PlacementKind::SpareMagazine,s->id},magPose,alpha,true);
+    if(magazine||handReload)DrawModel(m->second,{PlacementKind::SpareMagazine,s->id},magPose,alpha,true);
     else if(held&&fo3weapon::ManualReloadEnabled()&&!animatedReload&&
             m->second.asset.ReloadInteraction(p.Definitions().items.at(s->formId).weapon)==fo3weapon::ReloadFamily::Carton&&
             p.CanReloadWeapon(s->id)){
       const auto local=m->second.asset.nodes.bindGlobal[m->second.asset.cartonNode];
       DrawModel(m->second,{PlacementKind::SpareMagazine,s->id},Rigid(pouch.body,pouch.center-fo3vr::Rotate(pouch.body,Position(GameRigid(local)))),alpha,true);
     }
-    else if(held&&!animatedReload&&s->needsAction&&!s->loadedRounds&&
-            p.AmmoReserve(p.Definitions().items.at(s->formId).weapon.ammo)>0&&
-            (m->second.asset.ReloadInteraction(p.Definitions().items.at(s->formId).weapon)==fo3weapon::ReloadFamily::DetachablePistol||
-             m->second.asset.ReloadInteraction(p.Definitions().items.at(s->formId).weapon)==fo3weapon::ReloadFamily::DetachableRifle)) {
+    else if(held&&fo3weapon::ManualReloadEnabled()&&!animatedReload&&
+            ((s->needsAction&&!s->loadedRounds)||m->second.asset.individualAmmo)&&p.CanReloadWeapon(s->id)&&
+            (p.Definitions().items.at(s->formId).weapon.LongGun()||
+             m->second.asset.ReloadInteraction(p.Definitions().items.at(s->formId).weapon)==fo3weapon::ReloadFamily::DetachablePistol)) {
       // Render the exact detachable mesh from the original WEAP NIF at the
       // physical left-waist pouch. No invented magazine mesh or orientation.
       const auto orientation=pouch.body;
@@ -529,7 +635,9 @@ void WeaponUpdate(double now,bool backButton){
   using namespace weaponruntime;
   // Never turn masked held grips into a synthetic release/drop after pause.
   if(gFo3GameplayInputSuppressed){cartonNearSince=-1;last=now;return;}
-  if(!gWeaponPalmValid[0]||!gWeaponPalmValid[1])cartonNearSince=-1;
+  if(!gWeaponPalmValid[0]||!gWeaponPalmValid[1]){cartonNearSince=-1;handReload={};}
+  if(!fo3weapon::ManualReloadEnabled()){handReload={};magazine=charging=false;}
+  else if(animatedReload){animatedReload={};reloadHandWeight=0;}
   if(!gWeaponPalmValid[1]&&held){RetireReload();rawHeldReady=false;}
   const float dt=std::clamp(float(now-last),0.f,.064f);last=now;
   const auto frame=fo3weapon::FrameAccessFor(gSceneReady,IsFo3LoadingVisible(),
@@ -601,13 +709,17 @@ void WeaponUpdate(double now,bool backButton){
       }
       Matrix inversePose;
       if(fo3anim::Inverse(pose,inversePose)){
-        const bool manualAction=s->needsAction&&reloadFamily==fo3weapon::ReloadFamily::DetachableRifle&&
-          m->asset.hasMagazineGrip&&fo3weapon::ManualReloadEnabled()&&
-          (s->loadedRounds?fo3vr::Length(left-Point(pose,GamePoint(m->asset.slide)))<.10f:pouch.Contains(left));
+        const auto& visible=hadPose?previousPose:pose;
+        const bool canHandle=d.LongGun()&&d.Firearm()&&fo3weapon::ManualReloadEnabled();
+        const bool nearSlot=fo3vr::Length(left-Point(visible,GamePoint(m->asset.clip)))<.08f;
+        const bool nearAction=s->needsAction&&s->loadedRounds&&reloadFamily==fo3weapon::ReloadFamily::DetachableRifle&&
+          fo3vr::Length(left-Point(visible,GamePoint(m->asset.slide)))<.10f;
+        const bool pouchAccess=(m->asset.individualAmmo||s->needsAction||reloadFamily==fo3weapon::ReloadFamily::Carton)&&pouch.Contains(left,true);
+        const bool manualAction=canHandle&&(nearAction||pouchAccess||
+          (inputs.l&&nearSlot&&!m->asset.individualAmmo&&!s->needsAction&&reloadFamily!=fo3weapon::ReloadFamily::Carton));
         if(!support&&tracked&&inputs.left.armed&&!Fo3DialogueFocus()&&!gQ220Grab[0].active&&
-           d.BackHolster()&&m->asset.hasSupport&&!manualAction&&!magazine&&!charging&&!animatedReload){
+           d.BackHolster()&&m->asset.hasSupport&&!manualAction&&!magazine&&!handReload&&!charging&&!animatedReload){
           // Capture against the last displayed mesh, including contact with scenery.
-          const auto& visible=hadPose?previousPose:pose;
           Matrix inverseVisible,inverseSupport;
           if(fo3anim::Inverse(visible,inverseVisible)&&fo3anim::Inverse(rawSupport,inverseSupport)){
             const auto point=fo3weapon::ForeEndContact(Point(inverseVisible,left),GamePoint(m->asset.support),
@@ -650,8 +762,12 @@ void WeaponUpdate(double now,bool backButton){
           else{held=false;RetireReload();Log("HOLSTER DROP DENIED",id,form);}
         }
       }
-      const bool buttonReload=m->asset.ButtonReload(d,fo3weapon::ManualReloadEnabled(),support);
-      if(s&&held&&fo3weapon::ManualReloadEnabled()&&!buttonReload&&!animatedReload&&(reloadFamily==fo3weapon::ReloadFamily::DetachablePistol||reloadFamily==fo3weapon::ReloadFamily::DetachableRifle)){
+      const bool movingAmmo=bool(handReload)||charging;
+      const bool buttonReload=!fo3weapon::ManualReloadEnabled();
+      if(s&&held&&fo3weapon::ManualReloadEnabled()&&!animatedReload&&d.Firearm()&&d.LongGun()&&reloadFamily!=fo3weapon::ReloadFamily::Carton){
+        const auto id=s->id;UpdateLongReload(p,*s,*m,d,left,tracked,now);s=p.Weapon(id);
+      }
+      if(s&&held&&fo3weapon::ManualReloadEnabled()&&!animatedReload&&reloadFamily==fo3weapon::ReloadFamily::DetachablePistol){
         const auto id=s->id;const auto form=s->formId;
         if(inputs.eject&&!support){
           if(p.EjectMagazine(id)){magazine=charging=false;ejectPose=pose;ejectVelocity={0,-.3f,0};ejectUntil=now+3;ejectForm=form;++ejectionSerial;fo3audio::NamedSound(m->asset.reloadSounds[0]);Log("MAG OUT",id,form);s=p.Weapon(id);}
@@ -668,9 +784,7 @@ void WeaponUpdate(double now,bool backButton){
         }
         if(magazine&&!gWeaponPalmValid[0])magazine=false;
         if(magazine){Matrix delta;Q220ControllerDeltaMatrix(RuntimePoint(magPalm),magQuat,gWeaponPalm[0],gQ218LeftHandQuat,delta.data());magPose=fo3anim::Multiply(delta,magStart);
-          const bool near=reloadFamily==fo3weapon::ReloadFamily::DetachableRifle?
-            fo3vr::Length(Point(magPose,GamePoint(m->asset.clip))-Point(pose,GamePoint(m->asset.clip)))<.12f:
-            fo3weapon::InsertionZone(left,Point(pose,m->centre),m->half);
+          const bool near=fo3weapon::InsertionZone(left,Point(pose,m->centre),m->half);
           if(gQ217FingerGrip[0]<=.25f){magazine=false;if(near&&p.LoadMagazine(id)){Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[1]);Log("RELOAD INSERT",id,form);s=p.Weapon(id);}}
         }
         if(charging&&!gWeaponPalmValid[0])charging=false;
@@ -743,7 +857,7 @@ void WeaponUpdate(double now,bool backButton){
           s=p.Weapon(id);
         }
       }
-      if(s&&held&&d.Firearm()&&!animatedReload&&!(magazine&&reloadFamily==fo3weapon::ReloadFamily::Carton)&&
+      if(s&&held&&d.Firearm()&&!animatedReload&&!movingAmmo&&!handReload&&!(magazine&&reloadFamily==fo3weapon::ReloadFamily::Carton)&&
          gWeaponPalmValid[1]&&trigger.Ready(d,inputs,gQ217FingerTrigger[1],now)){
         if(Fo3DialogueFocus())EndFo3Dialogue("player weapon fire");
         const auto id=s->id;const auto form=s->formId;
@@ -795,7 +909,7 @@ void WeaponUpdate(double now,bool backButton){
   if(!physicsAdvanced)Q223AdvanceDynamicBodies();
   {
     FQ_PERF_SCOPE(LooseGrab);
-    if(!support&&!magazine&&!charging&&!animatedReload)Q220UpdateLooseGrab(0,gWeaponPalmValid[0],gWeaponPalm[0],gQ218LeftHandQuat,gQ217FingerGrip[0]);
+    if(!support&&!magazine&&!handReload&&!charging&&!animatedReload)Q220UpdateLooseGrab(0,gWeaponPalmValid[0],gWeaponPalm[0],gQ218LeftHandQuat,gQ217FingerGrip[0]);
     else {gQ220Grab[0].grabUntil=-1;gQ220Grab[0].previousGrip=gQ217FingerGrip[0];}
     if(!held)Q220UpdateLooseGrab(1,gWeaponPalmValid[1],gWeaponPalm[1],gQ218RightHandQuat,gQ217FingerGrip[1]);
     else {gQ220Grab[1].grabUntil=-1;gQ220Grab[1].previousGrip=gQ217FingerGrip[1];}
@@ -803,10 +917,22 @@ void WeaponUpdate(double now,bool backButton){
   s=p.EquippedWeapon();ammoText[0]=0;if(s&&held&&p.Definitions().items.at(s->formId).weapon.Firearm()){
     const auto&d=p.Definitions().items.at(s->formId).weapon;
     if(animatedReload)std::snprintf(ammoText,sizeof(ammoText),"RELOADING  %u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));
-    else if(const auto* displayed=Ensure(s->formId);displayed&&displayed->asset.ButtonReload(d,fo3weapon::ManualReloadEnabled(),support))std::snprintf(ammoText,sizeof(ammoText),"B: RELOAD  %u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));
+    else if(!fo3weapon::ManualReloadEnabled())std::snprintf(ammoText,sizeof(ammoText),"B: RELOAD  %u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));
     else if(d.CartonReload()){
       const char* prompt=magazine?"TIP CARTON AT BARREL  ":p.CanReloadWeapon(s->id)&&!s->loadedRounds?"LEFT WAIST  GRIP  ":"";
       std::snprintf(ammoText,sizeof(ammoText),"%s%u / %d",prompt,s->loadedRounds,p.AmmoReserve(d.ammo));
+    }
+    else if(d.LongGun()){
+      const auto* model=Ensure(s->formId);
+      const bool single=model&&model->asset.individualAmmo;
+      const char* hint="";
+      if(handReload.grip==fo3weapon::AmmoGrip::Seated)hint="MOVE AMMO CLEAR";
+      else if(handReload.grip==fo3weapon::AmmoGrip::Removed)hint="RELEASE OLD AMMO";
+      else if(handReload.grip==fo3weapon::AmmoGrip::Spare)hint=handReload.aligned?"RELEASE TO LOAD":"MOVE AMMO TO SOCKET";
+      else if(s->needsAction&&s->loadedRounds)hint="GRIP ACTION";
+      else if((s->needsAction||single)&&s->loadedRounds<d.clip)hint=p.AmmoReserve(d.ammo)?"GRIP AMMO AT LEFT WAIST":"NO SPARE AMMO";
+      else if(s->loadedRounds<d.clip)hint="GRIP AMMO OR B TO EJECT";
+      std::snprintf(ammoText,sizeof(ammoText),"%s  %u / %d",hint,s->loadedRounds,p.AmmoReserve(d.ammo));
     }
     else if(s->needsAction&&!s->loadedRounds)
       std::snprintf(ammoText,sizeof(ammoText),"LEFT WAIST  GRIP  %d",p.AmmoReserve(d.ammo));

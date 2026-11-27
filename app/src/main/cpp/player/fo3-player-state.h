@@ -879,6 +879,7 @@ public:
   bool EjectMagazine(uint64_t id);
   bool LoadMagazine(uint64_t id);
   bool LoadWeaponCarton(uint64_t instance);
+  bool InsertWeaponAmmo(uint64_t instance,bool individual);
   bool ChamberWeapon(uint64_t id);
   // Explicit development bootstrap; runtime enables only when presentation is ready.
   bool BootstrapDevelopmentWeapon();

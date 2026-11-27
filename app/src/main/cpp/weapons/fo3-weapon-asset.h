@@ -23,8 +23,8 @@ struct Asset {
   std::array<float,3> muzzle{},muzzleForward{},clip{},slide{},support{};
   fo3anim::Matrix weaponToLeft=fo3anim::Identity();
   std::array<std::string,3> reloadSounds{};
-  int clipNode=-1,slideNode=-1,cartonNode=-1;
-  bool valid=false,hasSupport=false;
+  int muzzleNode=-1,clipNode=-1,slideNode=-1,cartonNode=-1;
+  bool valid=false,hasSupport=false,individualAmmo=false;
   bool Decode(const std::vector<uint8_t>& model,
               const std::vector<uint8_t>& skeleton,
               const std::vector<uint8_t>& aim,bool melee=false,
@@ -42,7 +42,7 @@ struct Asset {
     }
     nodes=std::move(authored.hierarchy);blocks=std::move(authored.blockBones);
     const int hand=fo3anim::FindBone(fp,"Bip01 R Hand"),weapon=fo3anim::FindBone(fp,"Weapon");
-    const int muzzleNode=fo3anim::FindBone(nodes,"ProjectileNode");
+    muzzleNode=authored.muzzle;
     fo3anim::Matrix inverse;
     if(hand<0||weapon<0||(!melee&&muzzleNode<0)||!fo3anim::Inverse(p.global[hand],inverse))return false;
     handToWeapon=fo3anim::Multiply(inverse,p.global[weapon]);
@@ -51,8 +51,13 @@ struct Asset {
       muzzleForward=fo3anim::Point(nodes.bindGlobal[muzzleNode],{0,1,0},true);
     }
     cartonNode=fo3anim::FindBone(nodes,"##BBCarton");
-    clipNode=fo3anim::FindBone(nodes,"##Clip");
-    if(clipNode<0)clipNode=fo3anim::FindBone(nodes,"##Magazine");
+    for(const char* node:{"##Clip","##Magazine","##G3Clip","##SRClip","##CSDrum","##MicroFusionCell",
+                          "##PLRBattery","##MinigunAmmo","##RRSpike","##NifRound"}){
+      clipNode=fo3anim::FindBone(nodes,node);
+      if(clipNode>=0)break;
+    }
+    const int internalPort=fo3anim::FindBone(nodes,"##BreachSlide");
+    individualAmmo=internalPort>=0||fo3anim::FindBone(nodes,"##RRSpike")>=0;
     slideNode=fo3anim::FindBone(nodes,"##Slide");
     if(slideNode<0)slideNode=fo3anim::FindBone(nodes,"##Bolt");
     if(clipNode>=0)clip=fo3anim::Point(nodes.bindGlobal[clipNode],{});
@@ -68,6 +73,7 @@ struct Asset {
       }
       if(count){for(float&v:palm)v/=count;support=fo3anim::Point(inverse,palm);hasSupport=true;}
     }
+    if(clipNode<0)clip=internalPort>=0?fo3anim::Point(nodes.bindGlobal[internalPort],{}):support;
     aimLocals=std::move(p.local);firstPerson=std::move(fp);valid=true;return true;
   }
   bool Reload(const std::vector<uint8_t>& bytes) {
@@ -114,14 +120,6 @@ struct Asset {
       if(d.animation==6)return ReloadFamily::DetachableRifle;
     }
     return ReloadFamily::RequiresAudit;
-  }
-  bool ButtonReload(const Definition& d,bool manual,bool supported)const {
-    if(!d.Firearm())return false;
-    if(!manual)return true;
-    if(!d.LongGun())return false;
-    const auto family=ReloadInteraction(d);
-    return supported||(family!=ReloadFamily::Carton&&
-                       !(family==ReloadFamily::DetachableRifle&&hasMagazineGrip));
   }
   float ReloadClipSeconds()const {
     const auto& c=reloadAnimation;

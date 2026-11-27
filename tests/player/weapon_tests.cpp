@@ -384,6 +384,38 @@ void SupportMotionTests(){
   const auto aim=TwoHand(fo3vr::Identity(),{},moved,grip);
   assert(fo3vr::Dot(fo3vr::Unit(fo3vr::Rotate(aim,grip)),fo3vr::Unit(moved))>.9999f);
 }
+void ManualLongGunTests(const Catalog& source){
+  using fo3weapon::AmmoGrip;using fo3weapon::AmmoTransfer;using fo3weapon::HandReload;
+  auto catalog=source;catalog.initial.inventory.clear();catalog.initial.nextStackId=1;
+  Player p(catalog);const auto form=catalog.pipboy.formNames.at("weaplaserrifle");
+  const auto& d=catalog.items.at(form).weapon;
+  assert(p.Add(form,1));const auto id=p.Snapshot().inventory.back().id;
+  assert(p.Equip(id)&&p.Add(d.ammo,d.clip+5)&&p.ReloadWeapon(id)&&p.FireWeapon(id));
+  const auto total=p.AmmoReserve(d.ammo)+p.Weapon(id)->loadedRounds;
+  HandReload hand;
+  hand.Grab(false);assert(hand.Update(true,true,.01f)==AmmoTransfer::None&&!hand);
+  assert(!p.InsertWeaponAmmo(id,false));
+  hand.Grab(false);assert(hand.Update(true,false,.14f)==AmmoTransfer::Eject&&p.EjectMagazine(id));
+  assert(hand.grip==AmmoGrip::Removed&&p.Weapon(id)->loadedRounds==0&&p.AmmoReserve(d.ammo)==total);
+  assert(hand.Update(true,true,.01f)==AmmoTransfer::None&&!hand);
+  hand.Grab(true);assert(hand.Update(true,true,.27f)==AmmoTransfer::None&&!hand);
+  hand.Grab(true);assert(hand.Update(false,true,.01f)==AmmoTransfer::None&&!hand);
+  assert(!p.Weapon(id)->loadedRounds&&p.AmmoReserve(d.ammo)==total);
+  hand.Grab(true);assert(hand.Update(true,false,.07f)==AmmoTransfer::None&&hand.aligned);
+  assert(hand.Update(true,true,.10f)==AmmoTransfer::Insert&&p.InsertWeaponAmmo(id,false));
+  assert(!p.InsertWeaponAmmo(id,false)&&hand.Update(true,true,.01f)==AmmoTransfer::None);
+  assert(p.Weapon(id)->loadedRounds==d.clip&&p.AmmoReserve(d.ammo)==total-d.clip);
+  const auto single=catalog.pipboy.formNames.at("weaprailwayrifle");
+  assert(p.Add(single,1));const auto individual=p.Snapshot().inventory.back().id;
+  const auto type=catalog.items.at(single).weapon.ammo;
+  assert(p.Equip(individual)&&p.Add(type,2));
+  for(int count=1;count<=2;++count){
+    hand.Grab(true);
+    assert(hand.Update(true,true,.02f)==AmmoTransfer::Insert&&p.InsertWeaponAmmo(individual,true));
+    assert(p.Weapon(individual)->loadedRounds==count&&p.AmmoReserve(type)==2-count);
+  }
+  assert(!p.InsertWeaponAmmo(individual,true));
+}
 void LongGunReload(fo3player::Player& p,uint32_t form){
   const auto& d=p.Definitions().items.at(form).weapon;
   assert(p.Add(form,1));
@@ -520,6 +552,7 @@ int main(int argc,char**argv) {
   if(argc>1) {
     Catalog c;std::string error;
     assert(LoadCatalog(argv[1],c,error));
+    ManualLongGunTests(c);
     CartonAndBat(c,c.pipboy.formNames.at("weapbbgun"),c.pipboy.formNames.at("weapbaseballbat"));
     for(const auto* name:{"cg02weapbbgun","weapuniqueblackbartsbbgun"})
       assert(c.items.at(c.pipboy.formNames.at(name)).weapon.CartonReload());

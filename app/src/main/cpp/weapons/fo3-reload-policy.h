@@ -1,9 +1,30 @@
 #pragma once
 #include "player/fo3-vr-body.h"
 namespace fo3weapon {
-// VR presentation/access policy, not Fallout data. Manual loading is the
-// default. Supported long guns also offer a button reload while gripped.
+// Manual transfers are the default. Animated button reloads are an opt-in setting.
 inline bool& ManualReloadEnabled(){static bool enabled=true;return enabled;}
+enum class AmmoGrip { Free, Seated, Removed, Spare };
+enum class AmmoTransfer { None, Eject, Insert };
+
+// VR inventory gestures. Progress is tied to the tracked prop's position.
+// Only moving an installed prop clear, or releasing a spare at its socket,
+// requests a change to the canonical inventory.
+struct HandReload {
+  AmmoGrip grip=AmmoGrip::Free;
+  bool aligned=false;
+  explicit operator bool()const{return grip!=AmmoGrip::Free;}
+  void Grab(bool spare){grip=spare?AmmoGrip::Spare:AmmoGrip::Seated;aligned=false;}
+  AmmoTransfer Update(bool tracked,bool released,float socketDistance){
+    if(!tracked||!std::isfinite(socketDistance)){*this={};return AmmoTransfer::None;}
+    if(grip==AmmoGrip::Seated&&socketDistance>=.12f){
+      grip=released?AmmoGrip::Free:AmmoGrip::Removed;return AmmoTransfer::Eject;
+    }
+    aligned=grip==AmmoGrip::Spare&&socketDistance<=(aligned?.12f:.09f);
+    if(!released)return AmmoTransfer::None;
+    const bool insert=aligned;*this={};
+    return insert?AmmoTransfer::Insert:AmmoTransfer::None;
+  }
+};
 // A button press starts one presentation interval. Ammunition is committed by
 // the caller only when Finish succeeds; dropping the instance cancels it.
 struct ReloadPlayback {

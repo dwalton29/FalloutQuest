@@ -70,7 +70,7 @@ void UpdateFo3Unarmed(double now,float yaw,const std::array<std::optional<fo3vr:
   const auto rotation=fo3vr::Axis({0,1,0},yaw);
   for(size_t hand=0;hand<fists.size();++hand){
     const bool occupied=hand==1?weaponruntime::held:
-      weaponruntime::support||weaponruntime::magazine||weaponruntime::charging||weaponruntime::animatedReload;
+      weaponruntime::support||weaponruntime::magazine||weaponruntime::handReload||weaponruntime::charging||weaponruntime::animatedReload;
     const auto palm=VrPoint(gWeaponPalm[hand]);
     if(occupied||gQ220Grab[hand].active||!tracking[hand]||!gWeaponPalmValid[hand]||!fo3vr::Finite(palm)){
       fists[hand].Reset();continue;
