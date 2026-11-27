@@ -117,11 +117,11 @@ bool Player::CanReloadWeapon(uint64_t id)const{
 }
 bool Player::ReloadWeapon(uint64_t id){
   if(!CanReloadWeapon(id))return false;
-  if(catalog_->items.at(Weapon(id)->formId).weapon.CartonReload())return LoadWeaponCarton(id);
-  Player candidate=*this;const auto* current=candidate.Weapon(id);
-  if((!current->needsAction||current->loadedRounds)&&!candidate.EjectMagazine(id))return false;
-  if(!candidate.LoadMagazine(id)||!candidate.ChamberWeapon(id))return false;
-  state_=std::move(candidate.state_);++revision_;return true;
+  const auto* s=Weapon(id);const auto& def=catalog_->items.at(s->formId).weapon;
+  // Top up the existing instance. This is one inventory mutation even for a
+  // partial reload and avoids copying the world save on the render thread.
+  if(s->loadedRounds<def.clip&&TransferWeaponAmmo(id,def,def.clip-s->loadedRounds,true))return true;
+  return ChamberWeapon(id);
 }
 bool Player::EjectMagazine(uint64_t id) {
   const auto *s = Weapon(id);
@@ -150,9 +150,7 @@ bool Player::LoadWeaponCarton(uint64_t id){
   const auto* s=Weapon(id);
   if(!s||!s->equipped||s->condition<=0)return false;
   const auto& def=catalog_->items.at(s->formId).weapon;
-  if(!def.CartonReload())return false;
-  if(s->loadedRounds<def.clip&&TransferWeaponAmmo(id,def,def.clip-s->loadedRounds,true))return true;
-  return ChamberWeapon(id);
+  return def.CartonReload()&&ReloadWeapon(id);
 }
 bool Player::TransferWeaponAmmo(uint64_t id,const fo3weapon::Definition& def,int32_t capacity,bool ready) {
   int32_t rounds = std::min(capacity, AmmoReserve(def.ammo));

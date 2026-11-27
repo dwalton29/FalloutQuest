@@ -72,15 +72,39 @@ inline V ClosestSupport(V palm,V begin,V end) {
   auto d=end-begin;float n=fo3vr::Dot(d,d);
   return begin+d*std::clamp(n>1e-8f?fo3vr::Dot(palm-begin,d)/n:0.f,0.f,1.f);
 }
+// Smooth only the relative two-controller direction. Moving both hands together
+// still moves the primary grip immediately, including during release.
+struct SupportAim {
+  float weight=0;
+  V separation{};
+  void Update(bool attached,V tracked,float dt) {
+    const float seconds=std::max(0.f,dt);
+    if(attached){
+      if(weight==0)separation=tracked;
+      else separation=separation+(tracked-separation)*(-std::expm1(-40.f*seconds));
+    }
+    const float target=attached?1.f:0.f;
+    weight+=(target-weight)*(-std::expm1(-24.f*seconds));
+    if(std::fabs(target-weight)<.001f)weight=target;
+  }
+};
+inline V ForeEndContact(V palm,V anchor,V axis,V muzzle,bool melee) {
+  axis=fo3vr::Unit(axis);
+  const float extent=melee?.05f:.10f;
+  const float forward=melee?extent:std::clamp(fo3vr::Dot(muzzle-anchor,axis)-.03f,0.f,extent);
+  return ClosestSupport(palm,anchor-axis*extent,anchor+axis*forward);
+}
 // Right roll determines the transported plane. Left roll is not an input.
 // Reversed/degenerate hands retain the one-hand pose rather than flipping.
 inline R TwoHand(const R&one,V primary,V support,V axis,float weight=1) {
   auto direction=support-primary;
-  if(fo3vr::Length(direction)<.08f)return one;
-  auto oldAxis=fo3vr::Rotate(one,fo3vr::Unit(axis));
+  const float span=fo3vr::Length(direction);
+  if(span<=.08f)return one;
+  auto oldAxis=fo3vr::Unit(fo3vr::Rotate(one,axis));
   auto newAxis=fo3vr::Unit(direction),cross=fo3vr::Cross(oldAxis,newAxis);
   float dot=std::clamp(fo3vr::Dot(oldAxis,newAxis),-1.f,1.f);
-  if(fo3vr::Length(cross)<1e-5f||dot<-.85f)return one;
+  if(fo3vr::Length(cross)<1e-5f)return one;
+  weight*=std::clamp((span-.08f)/.06f,0.f,1.f)*std::clamp((dot+.95f)/.15f,0.f,1.f);
   return fo3vr::Multiply(fo3vr::Axis(cross,std::acos(dot)*std::clamp(weight,0.f,1.f)),one);
 }
 // Physics only advances where the existing exterior collision window exists.
@@ -95,9 +119,9 @@ inline bool CartonAligned(V carton,const R& rotation,V port,const R& pour) {
   const V axis{0,1,0};
   return fo3vr::Dot(fo3vr::Rotate(rotation,axis),fo3vr::Rotate(pour,axis))>.20f;
 }
-inline float RearwardPull(const R&rotation,V origin,V palm,V startLocal) {
+inline float RearwardPull(const R&rotation,V origin,V palm,V startLocal,V axis={1,0,0}) {
   const auto local=fo3vr::Rotate(fo3vr::Transpose(rotation),palm-origin);
-  return std::clamp(startLocal.x-local.x,0.f,.045f);
+  return std::clamp(fo3vr::Dot(startLocal-local,axis),0.f,.045f);
 }
 inline float BoxDistance(const R&rotation,V origin,V palm,V centre,V half) {
   const auto local=fo3vr::Rotate(fo3vr::Transpose(rotation),palm-origin)-centre;

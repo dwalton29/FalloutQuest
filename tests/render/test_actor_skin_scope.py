@@ -31,7 +31,9 @@ class Scope(unittest.TestCase):
     def test_player_final_pose_follows_physics(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         prepare=core.split('void QActorPrepareStereoFrame()',1)[1]
-        self.assertIn('Q211UpdatePlayerRig(true);WeaponFinalizePlayerPose();',prepare)
+        self.assertIn('if(ready)Q211UpdatePlayerRig(true);',prepare)
+        self.assertIn('if(left&&weaponPose)WeaponLeftHandPose(palm,hand);',core)
+        self.assertIn('leftAcrossRoot,leftPalmRoot,q220LeftBasisReady,finalPose)',core)
         rig=core.split('void Q211UpdatePlayerRig(',1)[1].split('void Q210DeletePlayerBody',1)[0]
         self.assertIn('if(!finalPose)return target;',rig)
         self.assertIn('beforeSolve={gVrArmState[0],gVrArmState[1]}',rig)

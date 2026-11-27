@@ -8,6 +8,39 @@ bool Finite(const fo3anim::Matrix &m) {
   return true;
 }
 }
+void GripFingers::Bind(const fo3anim::Skeleton& source,const fo3anim::Skeleton& avatar){
+  joints.clear();wrist=fo3anim::FindBone(avatar,"Bip01 L Hand");
+  if(wrist<0)return;
+  // Visit parent before child even when the two NIFs order blocks differently.
+  auto children=[&](auto&& visit,int bone,int parent)->void{
+    for(size_t i=0;i<avatar.bones.size();++i){
+      const auto& b=avatar.bones[i];
+      if(b.parent!=bone)continue;
+      const bool digit=b.name.rfind("Bip01 L Finger",0)==0||b.name.rfind("Bip01 L Thumb",0)==0||
+                       b.name.rfind("Bip01 L Hand0",0)==0;
+      if(!digit)continue;
+      const int match=fo3anim::FindBone(source,b.name);
+      if(match<0)continue;
+      GripJoint joint{};
+      auto bind=source.bones[match].bind;bind.translation={};bind.scale=1;
+      if(!fo3anim::Inverse(fo3anim::ToMatrix(bind),joint.sourceBindInverse))continue;
+      joint.source=match;joint.avatar=int(i);joint.parent=parent;joint.name=b.name;
+      for(char& ch:joint.name)if(ch>='A'&&ch<='Z')ch=char(ch-'A'+'a');
+      const int index=int(joints.size());joints.push_back(joint);visit(visit,int(i),index);
+    }
+  };
+  children(children,wrist,-1);
+}
+void GripFingers::Sample(const fo3anim::Skeleton& avatar,const std::vector<fo3anim::Transform>& locals){
+  for(auto& joint:joints){
+    auto rotation=locals.at(joint.source);rotation.translation={};rotation.scale=1;
+    const auto change=fo3anim::Multiply(joint.sourceBindInverse,fo3anim::ToMatrix(rotation));
+    const auto local=fo3anim::Multiply(fo3anim::ToMatrix(avatar.bones[joint.avatar].bind),change);
+    const auto& parent=joint.parent<0?avatar.bindGlobal[wrist]:joints[joint.parent].posed;
+    joint.posed=fo3anim::Multiply(parent,local);
+    joint.delta=fo3anim::Multiply(joint.posed,avatar.inverseBind[joint.avatar]);
+  }
+}
 bool BuildAttachment(const fo3anim::Skeleton &skeleton,
                      const fo3anim::Clip &aim, bool longGun, Attachment &out) {
   const int right = fo3anim::FindBone(skeleton, "Bip01 R Hand");
@@ -81,6 +114,8 @@ std::string AimPath(const Definition &definition) {
   case 3: case 4: prefix = "1hp"; break;
   case 5: case 7: prefix = "2hr"; break;
   case 6: prefix = "2ha"; break;
+  case 8: prefix = "2hh"; break;
+  case 9: prefix = "2hl"; break;
   default: return {};
   }
   return std::string("meshes/characters/_1stperson/") + prefix + "aim.kf";

@@ -3,6 +3,19 @@
 #include "npc/fo3-actor-animation.h"
 
 namespace fo3weapon {
+// Copy the first-person finger rotations onto the avatar's own joint lengths.
+// Deltas are in avatar bind space with the wrist fixed; arm IK moves it later.
+struct GripJoint {
+  int source=-1,avatar=-1,parent=-1;
+  std::string name;
+  fo3anim::Matrix sourceBindInverse,posed,delta;
+};
+struct GripFingers {
+  int wrist=-1;
+  std::vector<GripJoint> joints;
+  void Bind(const fo3anim::Skeleton& source,const fo3anim::Skeleton& avatar);
+  void Sample(const fo3anim::Skeleton& avatar,const std::vector<fo3anim::Transform>& locals);
+};
 struct Attachment {
   fo3anim::Matrix weaponInRight = fo3anim::Identity();
   fo3anim::Matrix rightInWeapon = fo3anim::Identity();
@@ -24,6 +37,6 @@ struct ModelNodes {
 };
 bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out,bool requireMuzzle=true);
 // No filename/model-name classification: these are FO3 WEAP animation types.
-// Unknown/heavy families require their own verified authored attachments.
+// Require the corresponding first-person aim clip when preparing the model.
 std::string AimPath(const Definition &definition);
 }

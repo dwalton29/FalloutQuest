@@ -4541,7 +4541,7 @@ void WeaponShutdown();
 void WeaponPersistWorld();
 bool WeaponHeld();
 bool WeaponReloadActive();
-bool WeaponAnimatedReloadHand(fo3vr::V&,fo3vr::R&);
+void WeaponLeftHandPose(fo3vr::V&,fo3vr::R&);
 bool Fo3ClosedFist(size_t hand);
 float gWeaponHaptic[2]{};
 Vec3 gWeaponPalm[2]{};
@@ -11374,6 +11374,8 @@ struct Q211Delta {
     bool active = false;
 };
 
+void WeaponLeftFingerPose(std::unordered_map<std::string,Q211Delta>& fingers);
+
 Vec3 Q211Rotate(const float r[9], Vec3 v) {
     return {
         r[0]*v.x + r[1]*v.y + r[2]*v.z,
@@ -11682,6 +11684,7 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
     constexpr float DEG = 0.01745329251994329577f;
     const float jointDegrees[3]{55.0f, 45.0f, 35.0f};
 
+    const auto held=fo3rigid::Live().Held(left?0:1);
     for (const Q217FingerChain& chain : rig.chains) {
         const float curl =
             chain.id == rig.indexChain ? indexCurl : gripCurl;
@@ -11729,7 +11732,6 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
             const float degrees =
                 jointDegrees[std::min<size_t>(i, 2u)];
             auto bendAt=[&](float fraction){return Q218ComposeRigid(cumulative,Q218MakePivotRotation(pivot,axis,-curl*degrees*DEG*fraction));};
-            const auto held=fo3rigid::Live().Held(left?0:1);
             auto penetrates=[&](const Q211Delta& candidate){
                 if(!held)return false;
                 const Vec3 end=i+1<chain.joints.size()?chain.joints[i+1].pivot:Q211Add(joint.pivot,Q211Mul(segmentDirection,.022f));
@@ -11790,7 +11792,6 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
                     const float weight =
                         i == 1u ? 0.70f : 0.30f;
                     auto at=[&](float f){return Q218ComposeRigid(cumulative,Q218MakePivotRotation(pivot,axis,targetAngle*weight*f));};
-                    const auto held=fo3rigid::Live().Held(left?0:1);
                     float fraction=1;
                     if(held)fraction=fo3contact::Limit([&](float f){
                         const auto pose=at(f);const Vec3 end=i+1<rig.thumb.size()?rig.thumb[i+1].pivot:Q211Add(joint.pivot,Q211Mul(thumbDirection,.02f));
@@ -11803,6 +11804,7 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
         }
     }
 
+    if(left)WeaponLeftFingerPose(out);
     return out;
 }
 
@@ -11874,15 +11876,14 @@ void BuildVrAuthoredArms(){
     }
 }
 Q213ArmPose Q213SolveMasterArm(bool left,Vec3 target,const Q220HandBasis& basis,
-                              Vec3 across,Vec3 inward,bool orientationValid){
+                              Vec3 across,Vec3 inward,bool orientationValid,bool weaponPose=false){
     Q213ArmPose pose;const int side=left?0:1;
-    fo3vr::R hand=fo3vr::Identity();fo3vr::V authoredTarget;
-    const bool authored=left&&WeaponAnimatedReloadHand(authoredTarget,hand);
-    if(!authored){
-        if(!orientationValid||!basis.ready){gVrArmState[side]={};return pose;}
-        if(!Q220BasisRotation(basis.littleToThumb,basis.intoPalm,across,inward,hand.data()))return pose;
-    }
-    const auto solved=fo3vr::SolveArm(gVrArms[side],authored?authoredTarget:VrPoint(target),hand,gVrArmState[side],gVrPoseDt);
+    fo3vr::R hand=fo3vr::Identity();
+    if(!orientationValid||!basis.ready){gVrArmState[side]={};return pose;}
+    if(!Q220BasisRotation(basis.littleToThumb,basis.intoPalm,across,inward,hand.data()))return pose;
+    auto palm=VrPoint(target);
+    if(left&&weaponPose)WeaponLeftHandPose(palm,hand);
+    const auto solved=fo3vr::SolveArm(gVrArms[side],palm,hand,gVrArmState[side],gVrPoseDt);
     gVrSolvedArms[side]=solved;
     if(!solved.valid)return pose;
     pose.clavicle=RuntimeDelta(solved.clavicle);pose.upper=RuntimeDelta(solved.upper);
@@ -12111,7 +12112,7 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
 
     Q213ArmPose q213LeftPose,q213RightPose;
     gVrSolvedArms[0]={};gVrSolvedArms[1]={};
-    if(gQ210LeftHandValid)q213LeftPose=Q213SolveMasterArm(true,leftTarget,q220LeftAuthoredBasis,leftAcrossRoot,leftPalmRoot,q220LeftBasisReady);
+    if(gQ210LeftHandValid)q213LeftPose=Q213SolveMasterArm(true,leftTarget,q220LeftAuthoredBasis,leftAcrossRoot,leftPalmRoot,q220LeftBasisReady,finalPose);
     else gVrArmState[0]={};
     if(gQ210RightHandValid)q213RightPose=Q213SolveMasterArm(false,rightTarget,q220RightAuthoredBasis,rightAcrossRoot,rightPalmRoot,q220RightBasisReady);
     else gVrArmState[1]={};
@@ -13560,7 +13561,7 @@ void QActorPrepareStereoFrame() {
     SynchronizeFo3PipboyEquipment();
     const bool ready=Q210EnsurePlayerBody();
     const double setupUs=fqopaque::Micros(setupStarted);
-    if(ready){Q211UpdatePlayerRig(true);WeaponFinalizePlayerPose();}
+    if(ready)Q211UpdatePlayerRig(true);
     if(Fo3ScriptMessageFocus()){PrepareFo3InteriorSceneLights();return;}
     const double npcNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     static double motionAt=-1;static std::array<float,3> oldHead{};static uint32_t motionCell=0;

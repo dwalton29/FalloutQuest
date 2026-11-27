@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 383
-        versionName '0.223.0-inventory-transfer'
+        versionCode 384
+        versionName '0.224.0-two-hand-weapons'
 
         ndk {
             abiFilters 'arm64-v8a'

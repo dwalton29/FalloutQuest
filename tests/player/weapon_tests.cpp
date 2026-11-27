@@ -365,7 +365,44 @@ static void UnarmedGesture(){
   assert(!left.Advance(2.02,1,{11,0,0})); // Discontinuous tracking jump.
   assert(!left.Advance(3.0,1,{11.1f,0,0})); // An unsampled interval is not a swing.
 }
+void SupportMotionTests(){
+  using namespace fo3weapon;
+  const V direction{.4f,0,0},moved{.35f,.15f,.04f};
+  SupportAim a,b;
+  a.Update(true,direction,0.01f);b=a;
+  for(int i=0;i<9;++i)a.Update(true,moved,1.f/90);
+  for(int i=0;i<12;++i)b.Update(true,moved,1.f/120);
+  assert(std::fabs(a.weight-b.weight)<1e-5f&&fo3vr::Length(a.separation-b.separation)<1e-5f);
+  const auto attached=a;
+  a.Update(false,{10,10,10},.01f);
+  assert(a.weight>0&&a.weight<attached.weight&&fo3vr::Length(a.separation-attached.separation)==0);
+  for(int i=0;i<50;++i)a.Update(false,{},.01f);
+  assert(a.weight==0);
+  const V muzzle{0,0,-.16f};
+  const V grip=ForeEndContact({.02f,0,-.4f},{0,0,-.10f},{0,0,-1},muzzle,false);
+  assert(fo3vr::Length(grip-V{0,0,-.13f})<1e-5f);
+  const auto aim=TwoHand(fo3vr::Identity(),{},moved,grip);
+  assert(fo3vr::Dot(fo3vr::Unit(fo3vr::Rotate(aim,grip)),fo3vr::Unit(moved))>.9999f);
+}
+void LongGunReload(fo3player::Player& p,uint32_t form){
+  const auto& d=p.Definitions().items.at(form).weapon;
+  assert(p.Add(form,1));
+  const auto id=p.Snapshot().inventory.back().id;
+  assert(p.Equip(id)&&p.Add(d.ammo,d.clip+2)&&p.CanReloadWeapon(id));
+  const auto before=p.AmmoReserve(d.ammo)+p.Weapon(id)->loadedRounds;
+  fo3weapon::ReloadPlayback playback;
+  assert(playback.Begin(1,d.reloadTime)&&!playback.Begin(1,d.reloadTime));
+  assert(!playback.Finish(1.01)&&playback.PoseWeight(0)==0);
+  playback={};
+  assert(!playback.Finish(100)&&p.AmmoReserve(d.ammo)+p.Weapon(id)->loadedRounds==before);
+  assert(playback.Begin(101,d.reloadTime)&&playback.PoseWeight(d.reloadTime*.5f)==1);
+  assert(playback.Finish(102+d.reloadTime)&&p.ReloadWeapon(id)&&!playback.Finish(103+d.reloadTime));
+  assert(p.Weapon(id)->loadedRounds==d.clip&&p.AmmoReserve(d.ammo)==before-d.clip);
+  assert(!p.CanReloadWeapon(id)&&p.FireWeapon(id)&&p.ReloadWeapon(id));
+  assert(p.Weapon(id)->loadedRounds==d.clip&&p.AmmoReserve(d.ammo)==before-d.clip-d.ammoUse);
+}
 int main(int argc,char**argv) {
+  SupportMotionTests();
   UnarmedGesture();
   ReloadTests();
   {
@@ -585,6 +622,12 @@ int main(int argc,char**argv) {
       assert(rifle.ChamberWeapon(id)&&rifle.FireWeapon(id)&&rifle.Weapon(id)->loadedRounds==23&&rifle.AmmoReserve(0x4240)==7);
       const auto condition=rifle.Weapon(id)->condition;fo3weapon::WorldPose pose;pose.cell=0xa96;pose.velocity={1,2,3};
       assert(rifle.DropWeapon(id,pose)&&rifle.PickupWorldWeapon(id));assert(rifle.Weapon(id)->condition==condition&&rifle.Weapon(id)->loadedRounds==23);
+    }
+    {
+      auto catalog=c;catalog.initial.inventory.clear();catalog.initial.nextStackId=1;
+      Player player(catalog);
+      for(const char* form:{"weaphuntingrifle","weapassaultrifle","weapshotguncombat","weaplaserrifle","weapminigun"})
+        LongGunReload(player,c.pipboy.formNames.at(form));
     }
     const auto&w=c.items.at(0x434f);
     std::cout<<"10mm weight="<<w.weight<<" value="<<w.value<<" condition="<<w.maxCondition<<" ammoName="<<c.items.at(0x4241).name<<"\n";

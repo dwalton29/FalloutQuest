@@ -13,6 +13,7 @@ enum class ReloadFamily { DetachablePistol, DetachableRifle, Cylinder, Tube, Int
 struct Asset {
   fo3anim::Skeleton nodes,firstPerson;
   fo3anim::Clip reloadAnimation;
+  std::vector<fo3anim::Transform> aimLocals;
   fo3anim::Matrix cartonPour=fo3anim::Identity();
   bool hasCartonGrip=false;
   fo3anim::Matrix magazineInLeft=fo3anim::Identity();
@@ -26,13 +27,19 @@ struct Asset {
   bool valid=false,hasSupport=false;
   bool Decode(const std::vector<uint8_t>& model,
               const std::vector<uint8_t>& skeleton,
-              const std::vector<uint8_t>& aim,bool melee=false) {
+              const std::vector<uint8_t>& aim,bool melee=false,
+              const std::vector<uint8_t>& grip={}) {
     *this={};
     fo3anim::Skeleton fp;fo3anim::Clip a;fo3anim::Pose p;
     ModelNodes authored;
     if(!DecodeModelNodes(model,authored,!melee)||
        !fo3anim::DecodeSkeleton(skeleton,fp)||!fo3anim::DecodeClip(aim,a)||
        !fo3anim::Sample(fp,a,.1,p))return false;
+    if(!grip.empty()){
+      fo3anim::Clip overlay;fo3anim::Pose fingers;
+      if(fo3anim::DecodeClip(grip,overlay)&&fo3anim::Sample(fp,overlay,.1,fingers))
+        fo3anim::OverlayPriority(fp,p,overlay,fingers);
+    }
     nodes=std::move(authored.hierarchy);blocks=std::move(authored.blockBones);
     const int hand=fo3anim::FindBone(fp,"Bip01 R Hand"),weapon=fo3anim::FindBone(fp,"Weapon");
     const int muzzleNode=fo3anim::FindBone(nodes,"ProjectileNode");
@@ -61,7 +68,7 @@ struct Asset {
       }
       if(count){for(float&v:palm)v/=count;support=fo3anim::Point(inverse,palm);hasSupport=true;}
     }
-    firstPerson=std::move(fp);valid=true;return true;
+    aimLocals=std::move(p.local);firstPerson=std::move(fp);valid=true;return true;
   }
   bool Reload(const std::vector<uint8_t>& bytes) {
     fo3anim::Clip animation;if(!fo3anim::DecodeClip(bytes,animation))return false;
@@ -107,6 +114,20 @@ struct Asset {
       if(d.animation==6)return ReloadFamily::DetachableRifle;
     }
     return ReloadFamily::RequiresAudit;
+  }
+  bool ButtonReload(const Definition& d,bool manual,bool supported)const {
+    if(!d.Firearm())return false;
+    if(!manual)return true;
+    if(!d.LongGun())return false;
+    const auto family=ReloadInteraction(d);
+    return supported||(family!=ReloadFamily::Carton&&
+                       !(family==ReloadFamily::DetachableRifle&&hasMagazineGrip));
+  }
+  float ReloadClipSeconds()const {
+    const auto& c=reloadAnimation;
+    if(c.tracks.empty()||!(c.frequency>0)||!(c.stop>c.start))return 0;
+    const float seconds=(c.stop-c.start)/c.frequency;
+    return std::isfinite(seconds)?seconds:0.f;
   }
   bool Descendant(uint32_t block,int parent)const {
     if(parent<0||block>=blocks.size())return false;

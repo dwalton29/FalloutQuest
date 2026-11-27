@@ -37,10 +37,60 @@ void Synthetic() {
   assert(m.MeshPart(0)==fo3weapon::Part::Body);
   fo3weapon::Definition d;d.animation=6;
   assert(fo3weapon::AimPath(d)=="meshes/characters/_1stperson/2haaim.kf");
-  d.animation=9;assert(fo3weapon::AimPath(d).empty());
+  d.animation=8;assert(fo3weapon::AimPath(d)=="meshes/characters/_1stperson/2hhaim.kf");
+  d.animation=9;assert(fo3weapon::AimPath(d)=="meshes/characters/_1stperson/2hlaim.kf");
+  d.animation=10;assert(fo3weapon::AimPath(d).empty());
+}
+void TwoHandAssets(const std::string& root){
+  const auto fp=Read(root+"/skeleton.nif");
+  fo3anim::Skeleton avatar;
+  assert(fo3anim::DecodeSkeleton(Read(root+"/avatar.nif"),avatar));
+  struct Sample {const char* model;uint8_t animation,reload;const char* group;const char* grip;};
+  for(const Sample& sample:std::initializer_list<Sample>{
+      {"huntingrifle",5,0,"2hr",""},{"assaultrifle",6,0,"2ha",""},
+      {"combatshotgun",5,3,"2hr","2hrhandgrip3_combatshotgun.kf"},
+      {"laserrifle",7,1,"2hr",""},{"bbgun01",5,4,"2hr","2hrhandgrip2_bbgun.kf"},
+      {"minigun",8,4,"2hh",""}}){
+    fo3weapon::Definition d;d.valid=true;d.ammo=d.clip=d.ammoUse=d.pellets=1;
+    d.animation=sample.animation;d.reload=sample.reload;
+    if(d.reload==4&&d.animation==5)d.attackAnimation=32;
+    const auto model=Read(root+"/"+sample.model+".nif");
+    const auto prefix=root+"/"+sample.group;
+    const auto aim=Read(prefix+"aim.kf");
+    fo3weapon::Asset asset;
+    const auto grip=*sample.grip?Read(root+"/"+sample.grip):std::vector<uint8_t>{};
+    assert(asset.Decode(model,fp,aim,false,grip)&&asset.hasSupport);
+    if(!grip.empty()){
+      fo3weapon::Asset generic;
+      assert(generic.Decode(model,fp,aim));
+      fo3weapon::GripFingers shape;
+      shape.Bind(asset.firstPerson,avatar);
+      assert(shape.joints.size()>=15);
+      shape.Sample(avatar,generic.aimLocals);
+      const auto base=shape.joints;
+      shape.Sample(avatar,asset.aimLocals);
+      size_t changed=0;
+      for(size_t j=0;j<base.size();++j)if(base[j].delta!=shape.joints[j].delta)++changed;
+      assert(changed>=3);
+    }
+    asset.Reload(Read(prefix+"reload"+char('a'+d.reload)+".kf"));
+    assert(asset.ReloadClipSeconds()>0&&asset.ButtonReload(d,true,true)&&asset.ButtonReload(d,false,false));
+    bool manual=asset.ReloadInteraction(d)==fo3weapon::ReloadFamily::Carton||
+      (asset.ReloadInteraction(d)==fo3weapon::ReloadFamily::DetachableRifle&&asset.hasMagazineGrip);
+    assert(asset.ButtonReload(d,true,false)!=manual);
+    const int hand=fo3anim::FindBone(asset.firstPerson,"Bip01 L Hand");
+    const int weapon=fo3anim::FindBone(asset.firstPerson,"Weapon");
+    fo3anim::Pose moving;
+    assert(fo3anim::Sample(asset.firstPerson,asset.reloadAnimation,asset.ReloadClipSeconds()*.5f,moving));
+    fo3anim::Matrix inverse;
+    assert(fo3anim::Inverse(moving.global.at(weapon),inverse));
+    assert(fo3anim::Multiply(inverse,moving.global.at(hand))!=asset.weaponToLeft);
+    std::cout<<sample.model<<" support and reload ("<<asset.ReloadClipSeconds()<<" s) passed\n";
+  }
 }
 int main(int argc, char **argv) {
   Synthetic();
+  if(argc==3&&std::string(argv[1])=="--two-hand"){TwoHandAssets(argv[2]);return 0;}
   if(argc==3&&std::string(argv[1])=="--bb-bat"){
     const std::string root=argv[2];
     const auto fp=Read(root+"/skeleton.nif");
