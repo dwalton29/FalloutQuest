@@ -32,8 +32,10 @@ void compile(const std::string& k, const Player& player, const ResultScript& s,
     std::vector<fo3dialogue::Command> commands;
     std::string error;
     if (!fo3dialogue::CompileResult(d, s, commands, error, owner, scriptId)) {
-        row(k, "compile", "rejected");
-        row(k, "compiler_error", error);
+        const bool needsOwner = !owner && (error.rfind("local assignment requires a script owner:", 0) == 0 ||
+                                            error == "implicit command requires a script owner");
+        row(k, "compile", needsOwner ? "needs_owner" : "rejected");
+        row(k, needsOwner ? "context_required" : "compiler_error", error);
         // The compiler stops at its first error. Recover other explicit unknown-command
         // diagnostics without interpreting isolated lines as valid control flow.
         std::istringstream source(s.source);

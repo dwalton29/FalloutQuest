@@ -38,7 +38,7 @@ uint64_t VariableKey(const fo3pipdata::Definitions& d,uint32_t owner,uint32_t in
   if(capture&&!capture->AddIndexedVariable(owner,script,index,base,quest,slot->second))return 0;
   return (uint64_t(owner)<<32)|index;
 }
-uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,CommandFormCapture* capture) {
+uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,CommandFormCapture* capture,bool* integer) {
   auto key=name;for(auto& c:key)c=char(std::tolower((unsigned char)c));
   auto dot=key.find('.');if(dot==std::string::npos)return 0;
   auto owner=d.formNames.find(key.substr(0,dot));if(owner==d.formNames.end())return 0;
@@ -51,6 +51,7 @@ uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,Co
   if(!script){const auto object=d.objectReferenceScripts.find(owner->second);if(object!=d.objectReferenceScripts.end()){script=object->second.first;base=object->second.second;}}
   auto s=d.scripts.find(script);if(s==d.scripts.end())return 0;
   for(auto& v:s->second.variables){auto n=v.second;for(auto& c:n)c=char(std::tolower((unsigned char)c));if(n==key.substr(dot+1)){
+    if(integer)fo3script::DeclaredLocalIndex(d,script,n,false,integer);
     if(capture&&!capture->AddVariable(owner->second,script,v.first,base,q!=d.quests.end(),key,dot))return 0;
     return(uint64_t(owner->second)<<32)|v.first;
   }}

@@ -576,6 +576,55 @@ static void ReferenceLocalBranches(){
   body.source="set Listener to 0";
   assert(restored.ExecuteDialogueResult(body,error,20)&&!restored.Snapshot().pipboy.referenceVariables.count(key));
 }
+static void LinkedReferenceOrders(){
+  auto c=Catalog();
+  constexpr uint32_t first=0xfa000001,second=0xfa000002;
+  c.references[first].flags=c.references[second].flags=0x800;
+  for(const auto id:{first,second}){
+    c.references[id].base=30;c.actorPlacements[id].base=30;c.actorPlacements[id].cell=77;
+    c.pipboy.targets[id]=c.actorPlacements[id];
+  }
+  c.weapons.actors[30].health=80;c.pipboy.cellWorlds[77]=0;
+  c.pipboy.targets[first].linkedReference=second;
+  c.pipboy.targets[20].linkedReference=first;
+  c.pipboy.formNames["firstref"]=first;
+  auto& script=c.pipboy.scripts[101];
+  script.variables={{1,"Target"},{2,"Copy"},{3,"Counter"},{4,"Elapsed"}};
+  script.source="scn Q\nref Target;temporary\nref Copy\nfloat Elapsed\nBegin GameMode\nshort Counter\nEnd";
+  fo3player::Player p(c);std::string error;
+  auto execute=[&](const std::string& source){
+    fo3pipdata::ResultScript body;body.source=source;
+    auto plan=p.PrepareDialogueTransaction(body,{},error,20);
+    return plan&&p.CommitScriptTransaction(*plan);
+  };
+  const auto slot=[](uint32_t index){return (uint64_t(20)<<32)|index;};
+  const auto disabled=[&](uint32_t id){bool result=false;assert(p.ReferenceDisabled(id,result,error));return result;};
+  assert(execute("if 1\nset Target to GetLinkedRef\nelse\nset Target to 0\nendif\nset Copy to Target\nCopy.Enable"));
+  assert(!disabled(first)&&disabled(second));
+  assert(p.Snapshot().pipboy.referenceVariables.at(slot(2))==first);
+  const auto path="/tmp/fq-linked-orders-"+std::to_string(getpid());
+  assert(p.Save(path,error)&&p.Restore(path,error));unlink(path.c_str());
+  assert(execute("set Copy to Copy.GetLinkedRef\nCopy.Enable\nTarget.Disable"));
+  assert(disabled(first)&&!disabled(second));
+  assert(p.Snapshot().pipboy.referenceVariables.at(slot(2))==second);
+  const auto revision=p.Revision();
+  assert(!execute("Target.Enable\nset Copy to 0\nCopy.Disable"));
+  assert(p.Revision()==revision&&disabled(first)&&!disabled(second));
+  assert(p.Snapshot().pipboy.referenceVariables.at(slot(2))==second);
+  assert(execute("set Target to 0\nset Copy to Target"));
+  assert(p.Snapshot().pipboy.referenceVariables.empty());
+  assert(execute("short Counter\nset Counter to -2.75\nset Elapsed to 2.75"));
+  assert(p.Snapshot().pipboy.dialogueVariables.at(slot(3))==-2);
+  assert(execute("set ExampleQuest.Counter to 1.9 + Counter"));
+  assert(p.Snapshot().pipboy.dialogueVariables.at(slot(3))==0&&p.Snapshot().pipboy.dialogueVariables.at(slot(4))==2.75f);
+  assert(!execute("short Undeclared\nset Undeclared to 8"));
+  p.RegisterOriginalActors();
+  assert(execute("set Target to firstref\nset Copy to Target.GetLinkedRef\nTarget.Enable\nTarget.SetAV Variable01 4\nTarget.StartCombat Copy"));
+  float actorValue=0;
+  assert(p.ActorVariable(first,0,actorValue)&&actorValue==4&&p.Snapshot().actors.at(first).hostile==second);
+  assert(p.ActorVariable(second,0,actorValue)&&actorValue==0);
+}
+
 static void ResultBytecodeBranches(){
   auto catalog=Catalog();
   catalog.globals[400]=0;catalog.pipboy.formNames["testglobal"]=400;
@@ -936,7 +985,7 @@ static void CompiledProgramsRemainLive() {
 }
 int main(int argc,char** argv){
   ResultBytecodeBranches();
-  ReferenceLocalBranches();
+  ReferenceLocalBranches();LinkedReferenceOrders();
   AdditionalQuestPoints();
   CompiledProgramsRemainLive();
   UnknownStageInAuthoredEvent();

@@ -36,9 +36,8 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
   unsigned conditionalDepth=0;
   if(scriptId){const auto sc=d.scripts.find(scriptId);if(sc!=d.scripts.end()){
     std::istringstream source(lower(sc->second.source));std::string decl;
-    while(std::getline(source,decl)){std::istringstream row(decl);std::string op,name;row>>op>>name;
+    while(std::getline(source,decl)){std::istringstream row(decl.substr(0,decl.find(';')));std::string op,name;row>>op>>name;
       if(op=="ref"||op=="reference")referenceDeclarations.insert(name);
-      if(op=="begin")break;
     }
   }}
   auto form=[&](std::string n){
@@ -75,8 +74,26 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     if(!op.empty()&&op.back()=='.'){std::string verb;if(!(in>>verb)){error="missing reference command";return false;}op+=verb;}
     const auto receiverDot=op.find('.');
     const auto commandName=receiverDot==std::string::npos?op:op.substr(receiverDot+1);
+    auto bindReference=[&](const std::string& name,uint64_t& slot,uint32_t& id){
+      slot=referenceKey(name);
+      if(!slot)id=form(name);
+      return slot||id;
+    };
+    const bool implicitReceiver=receiverDot==std::string::npos||receiverDot==0;
+    auto bindReceiver=[&](){
+      if(implicitReceiver){cmd.form=owner;return owner!=0;}
+      return bindReference(op.substr(0,receiverDot),cmd.receiverLocal,cmd.form);
+    };
+    if(scriptId&&(op=="float"||fo3script::IntegerDeclaration(op))){
+      bool integer=false;
+      if(!(in>>a)||(in>>extra)||!fo3script::DeclaredLocalIndex(d,scriptId,a,false,&integer)||
+         integer!=fo3script::IntegerDeclaration(op)){error="invalid numeric local declaration";return false;}
+      continue;
+    }
     if(op=="ref"||op=="reference"){
-      if(!referencePreamble||!(in>>a)||(in>>extra)||!referenceDeclarations.insert(a).second){error="invalid reference local declaration";return false;}
+      if(!(in>>a)||(in>>extra)){error="invalid reference local declaration";return false;}
+      if(scriptId&&fo3script::DeclaredLocalIndex(d,scriptId,a,true))continue;
+      if(!referencePreamble||!referenceDeclarations.insert(a).second){error="invalid reference local declaration";return false;}
       continue;
     }
     if(op=="set"){
@@ -90,9 +107,19 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
           const bool query=value=="getself"||value=="getactionref"||value=="getlinkedref";
           if(key){
             cmd.type=CommandType::SetReference;cmd.variable=key;
-            if(query)cmd.expression=value;
-            else if(value!="0"&&!(cmd.form=form(value))){if(!conditionalDepth){error="unresolved reference assignment: "+value;return false;}
-              cmd.type=CommandType::Unavailable;cmd.expression=line;}
+            const auto dot=value.find('.');
+            if(query){cmd.expression=value;cmd.form=owner;}
+            else if(dot!=std::string::npos&&value.substr(dot+1)=="getlinkedref"){
+              cmd.expression="getlinkedref";
+              const auto subject=value.substr(0,dot);
+              bindReference(subject,cmd.targetLocal,cmd.form);
+            }else if(value!="0"){
+              bindReference(value,cmd.targetLocal,cmd.form);
+            }
+            if(!query&&value!="0"&&!cmd.form&&!cmd.targetLocal){
+              if(!conditionalDepth){error="unresolved reference assignment: "+value;return false;}
+              cmd.type=CommandType::Unavailable;cmd.expression=line;
+            }
             out.push_back(cmd);
             if(conditionalDepth||!query){referenceLocals.erase(target);continue;}
           }
@@ -101,6 +128,7 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
           if((!key||!conditionalDepth)&&value=="getlinkedref"){
             const auto placed=d.targets.find(owner);
             if(placed!=d.targets.end()){referenceLocals[target]={placed->second.linkedReference,value};continue;}
+            if(key){referenceLocals.erase(target);continue;}
           }
         }
         if(!conditionalDepth){error="unsupported reference assignment";return false;}
@@ -187,9 +215,15 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     }
     else if(op=="set") {
       if(!(in>>a>>b)||b!="to"){error="invalid assignment: "+line;return false;}
-      std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a,forms);
-      if(!cmd.variable)cmd.variable=CaptureNumericLocalKey(d,owner,scriptId,a,forms);
-      if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
+      std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a,forms,&cmd.integerAssignment);
+      if(!cmd.variable)cmd.variable=CaptureNumericLocalKey(d,owner,scriptId,a,forms,&cmd.integerAssignment);
+      if(!cmd.variable){
+        if(!owner&&fo3script::DeclaredLocalIndex(d,scriptId,a,false)){
+          error="local assignment requires a script owner: "+a;return false;
+        }
+        cmd.form=form(a);cmd.type=CommandType::Global;
+        if(!cmd.form){error="unresolved assignment: "+a;return false;}
+      }
     } else if(op=="return")cmd.type=CommandType::Return;
     else if(op=="look"||op=="stoplook"||op=="addscriptpackage"||op=="removescriptpackage"||
         (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="look"||op.substr(op.find('.')+1)=="stoplook"||op.substr(op.find('.')+1)=="addscriptpackage"||op.substr(op.find('.')+1)=="removescriptpackage"))){
@@ -251,13 +285,7 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
         if(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid resurrection animation flag";return false;}
       }else in.clear();
     } else if(commandName=="setcombatstyle"||commandName=="setcs"||commandName=="setplayerteammate"){
-      if(receiverDot==std::string::npos)cmd.form=owner;
-      else{
-        const auto name=op.substr(0,receiverDot);
-        cmd.receiverLocal=referenceKey(name);
-        if(!cmd.receiverLocal)cmd.form=form(name);
-      }
-      if(!cmd.form&&!cmd.receiverLocal){error="unresolved actor for "+commandName;return false;}
+      if(!bindReceiver()){error="unresolved actor for "+commandName;return false;}
       if(commandName=="setplayerteammate"){
         cmd.type=CommandType::SetPlayerTeammate;
         if(!(in>>a)){error="missing teammate flag";return false;}
@@ -265,8 +293,7 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       }else{
         cmd.type=CommandType::SetCombatStyle;
         if(in>>a){
-          cmd.targetLocal=referenceKey(a);
-          if(!cmd.targetLocal&&!(cmd.index=form(a))){error="unresolved combat style";return false;}
+          if(!bindReference(a,cmd.targetLocal,cmd.index)){error="unresolved combat style";return false;}
         }else in.clear();
       }
     } else if(commandName=="setunconscious"||commandName=="setghost"){
@@ -298,18 +325,19 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       if(!(in>>b)||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||std::abs(cmd.value)>1000000){
         error="invalid player miscellaneous statistic increment";return false;
       }
-    } else if(op=="setav"||(op.size()>6&&op.substr(op.size()-6)==".setav")){
-      cmd.type=CommandType::SetActorValue;cmd.form=op=="setav"?owner:form(op.substr(0,op.size()-6));
+    } else if(commandName=="setav"||commandName=="setactorvalue"){
+      cmd.type=CommandType::SetActorValue;
+      if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"unresolved actor value receiver";return false;}
       if(!(in>>a>>b)){error="missing actor value";return false;}
       const auto av=fo3av::ID(a);
       if(fo3av::AIMax(av)>=0){
         cmd.type=CommandType::SetActorAIValue;cmd.index=av;
         if(!number(b,cmd.value))cmd.expression=b;
-        if(!cmd.form||std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>fo3av::AIMax(av)){
+        if(std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>fo3av::AIMax(av)){
           error="invalid AI actor value";return false;}
       }else{
       if(a.size()!=10||a.substr(0,8)!="variable"||a[8]<'0'||a[8]>'1'||a[9]<'0'||a[9]>'9'||!number(b,cmd.value)){error="unsupported actor value";return false;}
-      cmd.index=uint32_t((a[8]-'0')*10+a[9]-'0');if(cmd.index<1||cmd.index>10||!cmd.form){error="invalid variable actor value";return false;}--cmd.index;
+      cmd.index=uint32_t((a[8]-'0')*10+a[9]-'0');if(cmd.index<1||cmd.index>10){error="invalid variable actor value";return false;}--cmd.index;
       }
     } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="completeallobjectives"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
       if(!(in>>a)||(cmd.form=form(a))==0){error="unresolved form: "+line;return false;}
@@ -405,14 +433,9 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       if(!(in>>a)){error="missing XP/achievement integer";return false;}
       if(!number(a,cmd.value)&&cmd.type==CommandType::RewardXP)cmd.expression=a;
       else if(!number(a,cmd.value)||cmd.value<0||double(cmd.value)>2147483647.0||std::floor(cmd.value)!=cmd.value){error="invalid XP/achievement integer";return false;}
-    } else if(op=="disable"||op=="enable"||
-        (op.size()>8&&op.compare(op.size()-8,8,".disable")==0)||
-        (op.size()>7&&op.compare(op.size()-7,7,".enable")==0)) {
-      const auto dot=op.find('.');
-      const auto verb=dot==std::string::npos?op:op.substr(dot+1);
-      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
-      cmd.type=verb=="enable"?CommandType::Enable:CommandType::Disable;
-      if(!cmd.form){error="missing Enable/Disable reference";return false;}
+    } else if(commandName=="disable"||commandName=="enable"){
+      cmd.type=commandName=="enable"?CommandType::Enable:CommandType::Disable;
+      if(!bindReceiver()){error=implicitReceiver?"implicit command requires a script owner":"missing Enable/Disable reference";return false;}
       if(in>>a){float fade=0;if(!number(a,fade)||(fade!=0&&fade!=1)){error="invalid Enable/Disable fade flag";return false;}}
       else in.clear();
       // Only the resident workflow may publish world changes.
@@ -427,12 +450,11 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       cmd.type=CommandType::TalkingActivator;const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved talking activator";return false;}
       if(in>>a){cmd.index=form(a);if(!cmd.index){error="unresolved talking actor";return false;}}else in.clear();
-    } else if(op=="startcombat"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="startcombat")) {
+    } else if(commandName=="startcombat"){
       cmd.type=CommandType::StartCombat;
-      const auto dot=op.find('.');
-      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
-      if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){
-        error="StartCombat requires a caller and target actor";return false;
+      if(!(in>>a)||!bindReference(a,cmd.targetLocal,cmd.index)||!bindReceiver()){
+        error=implicitReceiver&&!owner&&(cmd.index||cmd.targetLocal)?"implicit command requires a script owner":
+            "StartCombat requires a caller and target actor";return false;
       }
     } else if(op=="stopcombat"||op=="scaonactor"||op=="stopcombatalarmonactor"||
         (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="stopcombat"||op.substr(op.find('.')+1)=="scaonactor"||op.substr(op.find('.')+1)=="stopcombatalarmonactor"))) {
@@ -446,10 +468,9 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
           if(!cmd.variable){error="unresolved StopCombat target";return false;}
         }else in.clear();
       }
-    } else if(op=="evp"||op=="evaluatepackage"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="evp"||op.substr(op.find('.')+1)=="evaluatepackage"))) {
-      cmd.type=CommandType::EvaluatePackage;const auto dot=op.find('.');
-      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
-      if(!cmd.form){error="unresolved EVP reference";return false;}
+    } else if(commandName=="evp"||commandName=="evaluatepackage"){
+      cmd.type=CommandType::EvaluatePackage;
+      if(!bindReceiver()){error="unresolved EVP reference";return false;}
     } else if(op=="playidle"||(op.size()>9&&op.substr(op.size()-9)==".playidle")){
       cmd.type=CommandType::PlayIdle;cmd.form=op=="playidle"?owner:form(op.substr(0,op.size()-9));
       if(!(in>>a)){error="missing PlayIdle animation";return false;}
@@ -457,10 +478,9 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
       cmd.index=form(a);
       const auto model=d.idleModels.find(cmd.index);
       if(!cmd.form||model==d.idleModels.end()||model->second.empty()){error="unsupported PlayIdle actor or animation";return false;}
-    } else if(op=="playgroup"||(op.size()>10&&op.substr(op.size()-10)==".playgroup")){
+    } else if(commandName=="playgroup"){
       cmd.type=CommandType::PlayGroup;
-      cmd.form=op=="playgroup"?owner:form(op.substr(0,op.size()-10));
-      if(!cmd.form||!(in>>a)){error="invalid PlayGroup receiver/group";return false;}
+      if(!bindReceiver()||!(in>>a)){error="invalid PlayGroup receiver/group";return false;}
       cmd.expression=a;cmd.index=0;
       if(in>>b){float flags=0;if(!number(b,flags)||flags<0||flags>5||std::floor(flags)!=flags){error="invalid PlayGroup flags";return false;}cmd.index=uint32_t(flags);}
       in.clear();
@@ -491,14 +511,10 @@ bool CompileSourceResult(const fo3pipdata::Definitions& d,const fo3pipdata::Resu
     } else if(op=="imod"||op=="applyimagespacemodifier"){
       cmd.type=CommandType::ImageModifier;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}
-    } else if(op=="activate"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="activate")) {
-      cmd.type=CommandType::DefaultActivate;const auto dot=op.find('.');if(dot==std::string::npos)cmd.form=owner;
-      else{
-        const auto receiver=op.substr(0,dot);cmd.receiverLocal=referenceKey(receiver);
-        if(!cmd.receiverLocal)cmd.form=form(receiver);
-      }
-      if(!cmd.form&&!cmd.receiverLocal){error="Activate requires a reference owner";return false;}
-      if(in>>a){cmd.targetLocal=referenceKey(a);if(!cmd.targetLocal)cmd.index=form(a);if(!cmd.targetLocal&&!cmd.index){error="unresolved Activate actor";return false;}
+    } else if(commandName=="activate"){
+      cmd.type=CommandType::DefaultActivate;
+      if(!bindReceiver()){error="Activate requires a reference owner";return false;}
+      if(in>>a){if(!bindReference(a,cmd.targetLocal,cmd.index)){error="unresolved Activate actor";return false;}
         if(in>>b){if(b!="0"&&b!="1"){error="invalid Activate event flag";return false;}cmd.variable=b=="1";}
       }
       in.clear();

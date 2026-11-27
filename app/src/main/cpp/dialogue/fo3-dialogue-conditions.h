@@ -21,5 +21,5 @@ bool Compare(float,float,uint8_t);
 bool DeadCount(const fo3player::Player&,uint32_t base,float& value,std::string& error);
 bool Conditions(const std::vector<fo3pipdata::Condition>&,const Context&,std::string&);
 uint64_t VariableKey(const fo3pipdata::Definitions&,uint32_t owner,uint32_t index,bool quest,CommandFormCapture* capture=nullptr);
-uint64_t VariableKey(const fo3pipdata::Definitions&,const std::string& name,CommandFormCapture* capture=nullptr);
+uint64_t VariableKey(const fo3pipdata::Definitions&,const std::string& name,CommandFormCapture* capture=nullptr,bool* integer=nullptr);
 }

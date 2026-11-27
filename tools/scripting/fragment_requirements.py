@@ -335,7 +335,9 @@ def diagnostic(message, aliases):
     return re.sub(r'\b\d+\b', '#', message)[:120] or 'unspecified'
 
 
-def prepare_evidence(target, aliases, observations):
+def prepare_evidence(target, aliases, observations, owner=None):
+    owner = target.get('owner', owner)
+    context = {diagnostic(s, aliases) for s in target.pop('context_required', ())}
     for field in ('compiler_error', 'line_diagnostic', 'deferred_error', 'preview_error'):
         if field not in target:
             continue
@@ -344,8 +346,15 @@ def prepare_evidence(target, aliases, observations):
         for reason in clean:
             # A rejected stage preview may originate in another item or nested
             # script. Keep it as context, never charge it as a direct missing command.
-            if field != 'preview_error':
+            if field == 'preview_error':
+                continue
+            cause = reason.rsplit('/', 1)[-1]
+            if owner == 0 and cause in ('implicit command requires a script owner', 'local assignment requires a script owner'):
+                context.add(cause)
+            else:
                 observations.add(reason)
+    if context:
+        target['context_required'] = sorted(context)
     if 'expression' in target:
         evaluations = set()
         for raw in target.pop('expression'):
@@ -361,7 +370,7 @@ def prepare_evidence(target, aliases, observations):
     if 'bound_form' in target:
         target['bound_forms'] = sorted(map(int, target.pop('bound_form')))
     for block in target.get('blocks', {}).values():
-        prepare_evidence(block, aliases, observations)
+        prepare_evidence(block, aliases, observations, owner)
 
 
 def scoped_conditions(kind, slot, gates, parent):
@@ -466,13 +475,14 @@ def summarize(rows):
     counts = {name: Counter() for name in ('record_types', 'compilation', 'preview', 'observed_gaps',
                                            'commands', 'expression_calls', 'events', 'conditions', 'unmapped_operands',
                                            'preview_rejections', 'reference_kinds', 'bound_expression_calls', 'handler_diagnostics',
-                                           'condition_evaluated', 'operand_coverage')}
+                                           'condition_evaluated', 'operand_coverage', 'probe_context_requirements')}
     for row in rows:
         root = row['runtime']
         units = list(root.get('blocks', {}).values()) or [root]
         for field, dest in [('compile', 'compilation'), ('preview', 'preview')]:
             states = {unit.get(field, 'unprobed') for unit in units}
             counts[dest][next(iter(states)) if len(states) == 1 else 'mixed_event_blocks'] += 1
+        counts['probe_context_requirements'].update({r for unit in units for r in unit.get('context_required', [])})
         counts['record_types'][row['id'].split(':')[0]] += 1
         for name in ('commands', 'expression_calls', 'observed_gaps', 'unmapped_operands'):
             counts[name].update(set(row[name]))

@@ -641,6 +641,43 @@ static void DialogueProvenance(){
     assert(large.PrepareDialogueInfoTransaction(800,801,Phase::End,error));
   }
 }
+static void OriginalLinkedReferenceOrders(fo3player::Player& player,const char* master){
+  const auto& d=player.Definitions().pipboy;
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  std::string error;std::atomic<bool> cancelled{false};fo3script::ScriptMasterMatch proof;
+  auto local=[&](uint32_t owner,const char* name){
+    const auto script=d.objectReferenceScripts.at(owner).first;
+    const auto key=fo3script::DeclaredLocalKey(d,owner,script,name,true);
+    assert(key);return key;
+  };
+  // The planetarium trigger also sets variables on the projector. All effects
+  // belong to the same event transaction that reveals its XLKR-linked actor.
+  const uint32_t trigger=0x99771;
+  const auto mutant=d.formNames.at("mq02planetariummutant01ref");
+  assert(d.targets.at(trigger).linkedReference==mutant);
+  bool disabled=false;assert(player.ReferenceDisabled(mutant,disabled,error)&&disabled);
+  auto plan=player.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",fo3player::PlayerRef,error,capture);
+  assert(plan&&plan->HasReferenceChanges());
+  assert(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),proof,cancelled,error));
+  assert(plan->CandidateState()->pipboy.referenceVariables.at(local(trigger,"target"))==mutant);
+  assert(plan->CandidateState()->referenceEnabled.at(mutant));
+  assert(player.CommitScriptTransaction(*plan));
+  assert(player.ReferenceDisabled(mutant,disabled,error)&&!disabled);
+  assert(player.RollbackScriptTransaction(*plan)&&player.ReferenceDisabled(mutant,disabled,error)&&disabled);
+  assert(!player.Snapshot().pipboy.referenceVariables.count(local(trigger,"target")));
+
+  const auto controller=d.formNames.at("mq11vertibirdlandingcontroltriggerref");
+  const auto aircraft=d.targets.at(controller).linkedReference;
+  const auto marker=d.targets.at(aircraft).linkedReference;
+  assert(aircraft&&marker&&aircraft!=marker);
+  auto init=player.PrepareReferenceEventTransaction(controller,"GameMode",0,error,capture);
+  assert(init&&fo3script::MatchScriptProgramsToMaster(master,init->ExecutedScripts(),proof,cancelled,error));
+  assert(player.CommitScriptTransaction(*init));
+  assert(player.Snapshot().pipboy.referenceVariables.at(local(controller,"linkedref"))==aircraft);
+  assert(player.Snapshot().pipboy.referenceVariables.at(local(controller,"vertibirdlinkedref"))==marker);
+  std::cout<<"Original planetarium trigger revealed its linked actor; Jefferson controller resolved two consecutive links\n";
+}
+
 static void OriginalProvenance(const char* path){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
@@ -795,6 +832,7 @@ static void OriginalProvenance(const char* path){
   assert(fusePlayer.CommitScriptTransaction(*fuse));
   assert(fusePlayer.ItemCount(fuseItem->second)==0&&
       fusePlayer.ReferenceDisabled(fuseToggleRef,disabled,error)&&!disabled);
+  OriginalLinkedReferenceOrders(fusePlayer,path);
   std::cout<<"Original MQ05 fuse-box OnActivate stages enabled XMarker and removes ten authored fuses atomically on host\n";
 }
 struct ScriptExchangeAdapter {

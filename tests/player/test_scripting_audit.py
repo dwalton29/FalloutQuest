@@ -82,6 +82,17 @@ class FragmentRequirementTests(unittest.TestCase):
         self.assertEqual(gaps, {'unsupported command form/Repair'})
         self.assertEqual(evidence['blocks']['16']['preview_error'], ['unsupported command form/Foo'])
 
+    def test_missing_owner_is_probe_context(self):
+        from fragment_requirements import prepare_evidence
+        evidence = {'owner': 0, 'blocks': {
+            '7': {'compile': 'needs_owner', 'context_required': {'local assignment requires a script owner: target'}},
+            '11': {'deferred_error': {'StartCombat player (implicit command requires a script owner)'}}}}
+        gaps = set()
+        prepare_evidence(evidence, {'startcombat': 'StartCombat'}, gaps)
+        self.assertEqual(evidence['blocks']['11']['context_required'], ['implicit command requires a script owner'])
+        self.assertEqual(gaps, set())
+        self.assertEqual(evidence['blocks']['7']['context_required'], ['local assignment requires a script owner'])
+
     def test_form_value_and_custom_message_substitutions(self):
         from fragment_requirements import Dependencies
         scan = Dependencies({0x11b9: {'name': 'ShowWarning', 'parameters': [{'type_id': 0}]}},

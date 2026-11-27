@@ -631,7 +631,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
   std::vector<std::pair<uint32_t,uint32_t>> deathEvents;
   std::vector<std::pair<uint32_t,RagdollPush>> pushes;
   const auto resolve=[&](uint64_t slot,uint32_t fallback){
-    if(!slot)return fallback;
+    if(!slot)return fallback==fo3dialogue::ActionReference?scriptActivator_:fallback;
     const auto found=state_.pipboy.referenceVariables.find(slot);
     return found==state_.pipboy.referenceVariables.end()?0u:found->second;
   };
@@ -652,6 +652,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::EndIf){gates.pop_back();continue;}
     if(!active)continue;
     if(c.type==C::Return)break;
+    const auto receiver=[&](){return resolve(c.receiverLocal,c.form);};
     bool ok=true;
     switch(c.type) {
     case C::PlayerSex:ok=SetPlayerSex(c.index==2?!PlayerFemale():c.index==1);break;
@@ -723,14 +724,14 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       ok=ResurrectActor(c.form);break;
     case C::SetCombatStyle:{
       const auto style=resolve(c.targetLocal,c.index);
-      ok=(!c.targetLocal||style)&&SetActorCombatStyle(resolve(c.receiverLocal,c.form),style);
+      ok=(!c.targetLocal||style)&&SetActorCombatStyle(receiver(),style);
       break;
     }
     case C::SetPlayerTeammate:
       value=c.value;
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=std::isfinite(value)&&double(value)>=INT32_MIN&&double(value)<=INT32_MAX&&
-          SetPlayerTeammate(resolve(c.receiverLocal,c.form),int32_t(value)!=0);
+          SetPlayerTeammate(receiver(),int32_t(value)!=0);
       break;
     case C::SetGhost:ok=SetActorGhost(c.form,c.value!=0);break;
     case C::SetUnconscious:ok=SetActorUnconscious(c.form,c.value!=0);break;
@@ -754,7 +755,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::SetActorAIValue:
       value=c.value;
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
-      if(ok)ok=std::isfinite(value)&&std::floor(value)==value&&value>=0&&value<=fo3av::AIMax(c.index)&&SetActorAIValue(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,value);
+      if(ok)ok=std::isfinite(value)&&std::floor(value)==value&&value>=0&&value<=fo3av::AIMax(c.index)&&SetActorAIValue(receiver(),c.index,value);
       break;
     case C::SetAlert:ok=SetActorAlert(c.form,c.value!=0);break;
     case C::UseWeapon:{
@@ -772,16 +773,17 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
     case C::FactionMembership:ok=SetActorFactionRank(c.form,c.index,int(c.value),c.variable!=0);break;
     case C::SetEssential:ok=SetEssential(c.form,c.value!=0);break;
-    case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
+    case C::SetActorValue:ok=SetActorVariable(receiver(),c.index,c.value);break;
     case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;action.flags=c.value!=0;ok=QueueScriptAction(std::move(action));}break;}
     case C::ScriptPackage:ok=ScriptPackage(c.form==fo3dialogue::ActionReference?scriptActivator_:c.form,c.index,c.value!=0);break;
     case C::StartConversation:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,true);break;
     case C::SetReference:{
-      uint32_t form=c.form;
+      uint32_t form=resolve(c.targetLocal,c.form);
       if(c.expression=="getself")form=owner;
       else if(c.expression=="getactionref")form=scriptActivator_;
       else if(c.expression=="getlinkedref"){
-        const auto ref=catalog_->pipboy.targets.find(owner);
+        if(!form){error="GetLinkedRef receiver is unset";return false;}
+        const auto ref=catalog_->pipboy.targets.find(form);
         form=ref==catalog_->pipboy.targets.end()?0:ref->second.linkedReference;
       }
       auto& locals=state_.pipboy.referenceVariables;
@@ -806,6 +808,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     }
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok&&c.integerAssignment){
+        value=std::trunc(value);
+        ok=std::isfinite(value)&&double(value)>=INT32_MIN&&double(value)<=INT32_MAX;
+      }
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
       break;
     case C::EnableControls:ok=SetPlayerControls(127,true);break;
@@ -899,17 +905,18 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::CompleteAllObjectives:ok=CompleteAllObjectives(c.form);break;
     case C::SetCellFullName:ok=SetCellFullName(c.form,c.index);break;
     case C::AddAchievement:ok=AddAchievement(uint32_t(c.value));break;
-    case C::Disable:ok=StageReferenceEnable(c.form,false,error);break;
-    case C::Enable:ok=StageReferenceEnable(c.form,true,error);break;
+    case C::Disable:case C::Enable:
+      ok=StageReferenceEnable(receiver(),c.type==C::Enable,error);break;
     case C::TalkingActivator:ok=SetTalkingActivatorActor(c.form,c.index);break;
     case C::StartCombat:{
+      const auto caller=receiver(),target=resolve(c.targetLocal,c.index);
       bool callerDisabled=true,targetDisabled=false;
-      ok=c.form!=c.index&&catalog_->actorPlacements.count(c.form)&&
-         (c.index==PlayerRef||catalog_->actorPlacements.count(c.index))&&
-         ActorHealth(c.form)>0&&ActorHealth(c.index)>0&&
-         ReferenceDisabled(c.form,callerDisabled,error)&&!callerDisabled&&
-         (c.index==PlayerRef||(ReferenceDisabled(c.index,targetDisabled,error)&&!targetDisabled))&&
-         SetActorHostile(c.form,c.index);
+      ok=caller!=target&&catalog_->actorPlacements.count(caller)&&
+         (target==PlayerRef||catalog_->actorPlacements.count(target))&&
+         ActorHealth(caller)>0&&ActorHealth(target)>0&&
+         ReferenceDisabled(caller,callerDisabled,error)&&!callerDisabled&&
+         (target==PlayerRef||(ReferenceDisabled(target,targetDisabled,error)&&!targetDisabled))&&
+         SetActorHostile(caller,target);
       break;
     }
     case C::StopCombat:{
@@ -918,7 +925,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(c.variable&&actor!=state_.actors.end()&&actor->second.hostile&&actor->second.hostile!=c.variable)break;
       ok=StopActorCombat(reference,c.index!=0);break;
     }
-    case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
+    case C::EvaluatePackage:ok=ReevaluatePackage(receiver());break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=QueueScriptMessage(c.form,value,!c.expression.empty(),owner);
@@ -931,19 +938,19 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     case C::Unavailable:error="unsupported executed command: "+c.expression;return false;
     case C::DefaultActivate:{
-      const auto receiver=resolve(c.receiverLocal,c.form);
+      const auto subject=receiver();
       const auto activator=resolve(c.targetLocal,c.index?c.index:scriptActivator_);
-      if(!receiver||(c.targetLocal&&!activator)){error="Activate reference is unset";return false;}
-      if(requestsTalk&&!c.variable&&receiver==owner&&activator==scriptActivator_){
+      if(!subject||(c.targetLocal&&!activator)){error="Activate reference is unset";return false;}
+      if(requestsTalk&&!c.variable&&subject==owner&&activator==scriptActivator_){
         *requestsTalk=true;break;
       }
-      if(!c.variable){ok=QueueScriptDefaultActivate(receiver,activator);break;}
+      if(!c.variable){ok=QueueScriptDefaultActivate(subject,activator);break;}
       if(scriptActivationDepth_>=8){error="nested activation depth exceeded";return false;}
       if(activator!=PlayerRef&&!catalog_->actorPlacements.count(activator)){error="activation actor unavailable";return false;}
-      bool disabled=true;if(!ReferenceDisabled(receiver,disabled,error)||disabled){ok=false;break;}
-      if(!HasReferenceEvent(receiver,"OnActivate"))break; // No event is a native no-op with flag 1.
+      bool disabled=true;if(!ReferenceDisabled(subject,disabled,error)||disabled){ok=false;break;}
+      if(!HasReferenceEvent(subject,"OnActivate"))break; // No event is a native no-op with flag 1.
       struct ActivationScope {unsigned& depth;ActivationScope(unsigned& d):depth(d){++depth;}~ActivationScope(){--depth;}} scope(scriptActivationDepth_);
-      ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(receiver).base),"OnActivate",receiver,activator,error);break;
+      ok=RunSourceEventDirect(catalog_->eventBaseScripts.at(catalog_->references.at(subject).base),"OnActivate",subject,activator,error);break;
     }
     case C::PlayIdle:{
       fo3script::Action action;action.kind=fo3script::ActionKind::PlayIdle;action.reference=c.form;action.form=c.index;
@@ -961,7 +968,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       }
       break;
     }
-    case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
+    case C::PlayGroup:ok=QueueScriptPlayGroup(receiver(),c.expression,c.index);break;
     case C::NoActivationSound:ok=SetNoActivationSound(c.form);break;
     case C::ScreenBlood:{fo3script::Action action;action.kind=fo3script::ActionKind::ScreenBlood;action.flags=uint32_t(c.value);ok=QueueScriptAction(std::move(action));break;}
     case C::RemoveImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::RemoveImageModifier;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}

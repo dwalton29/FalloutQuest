@@ -40,8 +40,7 @@ template<class Locals> inline bool UnambiguousScriptLocals(const Locals& locals)
   return std::adjacent_find(names.begin(),names.end())==names.end();
 }
 // After charging and name-uniqueness validation, bind recognized declarations
-// in the same pre-Begin/comment scope used by NumericLocalKey. Extra decoded
-// slots are preserved; this does not enable reference-local execution.
+// against the original slot table. GECK also permits declarations inside events.
 template<class Locals> inline bool ConsistentScriptLocalDeclarations(
     const std::string& source,const Locals& locals,
     std::vector<std::pair<std::string,unsigned>>* kinds=nullptr) {
@@ -49,19 +48,25 @@ template<class Locals> inline bool ConsistentScriptLocalDeclarations(
   std::vector<std::pair<std::string,unsigned>> names;names.reserve(locals.size());
   for(const auto& local:locals)names.emplace_back(Lower(local.second),0);
   std::sort(names.begin(),names.end(),[](const auto& a,const auto& b){return a.first<b.first;});
-  std::istringstream lines(source);std::string line;
+  std::istringstream lines(source);std::string line;bool preamble=true;
   while(std::getline(lines,line)){
     const auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
     std::istringstream words(line);std::string op,name;if(!(words>>op))continue;
-    op=Lower(op);if(op=="begin")break;
+    op=Lower(op);if(op=="begin"){preamble=false;continue;}
     const unsigned kind=(op=="ref"||op=="reference")?2u:
-      (op=="short"||op=="int"||op=="long"||op=="float")?1u:0u;
+      (IntegerDeclaration(op)||op=="float")?1u:0u;
     if(!kind)continue;
     if(!(words>>name))return false;
     name=Lower(name);
     auto slot=std::lower_bound(names.begin(),names.end(),name,
       [](const auto& entry,const std::string& value){return entry.first<value;});
-    if(slot==names.end()||slot->first!=name||(slot->second&&slot->second!=kind))return false;
+    if(slot==names.end()||slot->first!=name){
+      // A declaration in another event without a compiled slot cannot bind a
+      // local. The command compiler diagnoses it when that event is prepared.
+      if(preamble)return false;
+      continue;
+    }
+    if(slot->second&&slot->second!=kind)return false;
     slot->second=kind;
   }
   if(kinds)*kinds=std::move(names);

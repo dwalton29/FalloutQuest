@@ -6,10 +6,12 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace fo3script {
+inline bool IntegerDeclaration(const std::string& op){return op=="short"||op=="int"||op=="long";}
 struct EventBlock {
   std::string event;
   std::string filter;
@@ -119,27 +121,35 @@ inline EventProgram ParseEvents(const fo3pipdata::Script& script) {
 
 // Reference locals retain the full FormID. Only a matching SCPT declaration
 // and variable-table entry may address a slot on the current owner.
-inline uint64_t DeclaredLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
-                                 uint32_t scriptId,const std::string& token,bool reference){
-  if(!owner||!scriptId||token.find('.')!=std::string::npos)return 0;
+inline std::optional<uint32_t> DeclaredLocalIndex(const fo3pipdata::Definitions& d,uint32_t scriptId,
+                                   const std::string& token,bool reference,bool* integer=nullptr){
+  if(!scriptId||token.find('.')!=std::string::npos)return std::nullopt;
   const auto def=d.scripts.find(scriptId);
-  if(def==d.scripts.end()||def->second.source.empty())return 0;
+  if(def==d.scripts.end()||def->second.source.empty())return std::nullopt;
   const auto name=Lower(token);
   const auto slot=std::find_if(def->second.variables.begin(),def->second.variables.end(),
       [&](const auto& entry){return Lower(entry.second)==name;});
-  if(slot==def->second.variables.end())return 0;
+  if(slot==def->second.variables.end())return std::nullopt;
   std::istringstream source(def->second.source);std::string line;
   while(std::getline(source,line)){
     std::istringstream words(Lower(line.substr(0,line.find(';'))));
     std::string op,var;if(!(words>>op))continue;
-    if(op=="begin")break;
-    const bool type=reference?(op=="ref"||op=="reference"):(op=="short"||op=="int"||op=="long"||op=="float");
-    if(type&&words>>var&&var==name)return (uint64_t(owner)<<32)|slot->first;
+    const bool type=reference?(op=="ref"||op=="reference"):(IntegerDeclaration(op)||op=="float");
+    if(type&&words>>var&&var==name){
+      if(integer)*integer=IntegerDeclaration(op);
+      return slot->first;
+    }
   }
-  return 0;
+  return std::nullopt;
+}
+inline uint64_t DeclaredLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
+                                 uint32_t scriptId,const std::string& token,bool reference,bool* integer=nullptr){
+  if(!owner)return 0;
+  const auto index=DeclaredLocalIndex(d,scriptId,token,reference,integer);
+  return index?(uint64_t(owner)<<32)|*index:0;
 }
 inline uint64_t NumericLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
-                                uint32_t scriptId,const std::string& token){
-  return DeclaredLocalKey(d,owner,scriptId,token,false);
+                                uint32_t scriptId,const std::string& token,bool* integer=nullptr){
+  return DeclaredLocalKey(d,owner,scriptId,token,false,integer);
 }
 } // namespace fo3script

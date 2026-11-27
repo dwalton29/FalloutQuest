@@ -3,7 +3,7 @@
 namespace fo3dialogue {
 inline constexpr uint32_t ActionReference = UINT32_MAX;
 enum class CommandType { StopCombat, PipboyReset, RadioRefresh, IgnoreCrime, PlayerScale, PlayerAge, PlayerToddler, AutoObjectives, KillUpdates, PlayMovie, AppearanceMenu, DeferredAppearance, SpecialBook, AutoSave, RemoveAllItems, EquipItem, UnequipItem, RadioOff, PlayerSex, PlayerNameMenu, CharacterGeneration, LocationLoadScreens, NoActivationSound, ScreenBlood, RemoveImageModifier, Variable, Global, If, ElseIf, Else, EndIf, StopQuest, EnableControls, StartQuest, Stage, CompleteQuest, ObjectiveDisplay, ObjectiveComplete, AddItem, AddTopic, ShowMessage, PlaySound, RemoveItem, SetQuestObject, RewardKarma, EvaluatePackage, Lock, Unlock, ShowBarterMenu, ModDisposition, CompleteAllObjectives, RewardXP, SetCellFullName, AddAchievement, Disable, Enable, ShowMap, DoorState, TerminalBack, PlayGroup, ImageModifier, DefaultActivate, FastTravel, Return, SetActorValue, Kill, ResetHealth, SetActorAIValue, SetQuestDelay, FactionRelation, SetEssential, MoveTo, SayTo, Unavailable, AddNote, Look, ScriptPackage, ActorValueDamage, PlayerControls, Restrain, StartConversation, FactionMembership, TalkingActivator, PlayerTagSkill, TagSkills, StartCombat, PlaySound3D, BroadcastState, RadioConversation, ChangeSpell, ModifyActorValue, ModifyMiscStat, SetAlert, UseWeapon, AddPerk, SetReference, PlayIdle, TuneRadio, PlaceExplosion, DamageObject, Dispel, Resurrect, SetUnconscious, LastExteriorDoor, SetGhost, PushActorAway, PlayMagicShader, StopMagicShader, SetCombatStyle, SetPlayerTeammate };
-struct Command {CommandType type;uint32_t form=0,index=0;uint64_t variable=0;float value=0;std::string expression;std::array<float,3> offset{};bool noTargetLook=false;uint64_t targetLocal=0,receiverLocal=0;};
+struct Command {CommandType type;uint32_t form=0,index=0;uint64_t variable=0;float value=0;std::string expression;std::array<float,3> offset{};bool noTargetLook=false,integerAssignment=false;uint64_t targetLocal=0,receiverLocal=0;};
 // Shared bounded form-name sink for command compilation and expression preflight.
 struct CommandFormCapture {
   std::vector<std::pair<uint32_t,std::string>> bindings;
@@ -53,8 +53,8 @@ struct CommandFormCapture {
 // The underlying local resolver is also used without evidence by other event
 // consumers. Keep the bounded optional sink here to avoid a player/event cycle.
 inline uint64_t CaptureNumericLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
-    uint32_t script,const std::string& token,CommandFormCapture* capture){
-  const auto key=fo3script::NumericLocalKey(d,owner,script,token);
+    uint32_t script,const std::string& token,CommandFormCapture* capture,bool* integer=nullptr){
+  const auto key=fo3script::NumericLocalKey(d,owner,script,token,integer);
   if(key&&capture&&!capture->AddLocal(uint32_t(key),fo3script::Lower(token)))return 0;
   return key;
 }
